@@ -4,8 +4,7 @@ import logger from '../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
 
-const PYTHON_TTS_URL =
-  process.env.AI_SERVICE_HTTP || 'http://localhost:4000';
+const PYTHON_TTS_URL = 'https://technova-hub-voice-backend-python.onrender.com';
 
 class TTSBatchService {
   /**
@@ -75,7 +74,7 @@ class TTSBatchService {
       )}`;
 
       let uploadResult;
-      
+
       // Try Cloudinary first, fallback to local storage
       if (isCloudinaryConfigured()) {
         try {

@@ -10,8 +10,8 @@ export default {
   MONGODB_URI: process.env.MONGODB_URI || 'mongodb://localhost:27017/voice_automation',
 
   // Python AI Service
-  AI_SERVICE_URL: process.env.AI_SERVICE_URL || 'ws://localhost:4000',
-  AI_SERVICE_HTTP: process.env.AI_SERVICE_HTTP || 'http://localhost:4000',
+  AI_SERVICE_URL: process.env.AI_SERVICE_URL || 'wss://technova-hub-voice-backend-python.onrender.com',
+  AI_SERVICE_HTTP: process.env.AI_SERVICE_HTTP || 'https://technova-hub-voice-backend-python.onrender.com',
 
   // Twilio
 //   TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
@@ -29,7 +29,7 @@ export default {
   JWT_EXPIRE: process.env.JWT_EXPIRE || '7d',
 
   // Base URL (for webhooks)
-  BASE_URL: process.env.BASE_URL || 'http://localhost:3000',
+  /*BASE_URL: process.env.BASE_URL || 'http://localhost:3000',*/
 
   // Telephony Provider (twilio or exotel)
   TELEPHONY_PROVIDER: process.env.TELEPHONY_PROVIDER || 'twilio',

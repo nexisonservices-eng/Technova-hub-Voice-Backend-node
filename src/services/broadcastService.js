@@ -118,7 +118,7 @@ class BroadcastService {
     try {
       // Call Python TTS service
       const ttsResponse = await axios.post(
-        'http://localhost:4000/tts/broadcast',
+        'https://technova-hub-voice-backend-python.onrender.com/tts/broadcast',
         {
           text: message.text,
           voice: voice.voiceId,
