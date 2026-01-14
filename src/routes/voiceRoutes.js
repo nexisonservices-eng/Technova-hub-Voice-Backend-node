@@ -1,6 +1,6 @@
 // routes/voiceRoutes.js
 import express from 'express';
-import CallController from "../controllers/VoiceController.js";
+import CallController from "../controllers/voiceController.js";
 import { authenticate } from '../middleware/auth.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 
