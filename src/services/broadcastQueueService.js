@@ -4,7 +4,7 @@ import OptOut from '../models/OptOut.js';
 
 import twilioVoiceService from './twilioVoiceService.js';
 import logger from '../utils/logger.js';
-import { emitBroadcastUpdate, emitCallUpdate } from "../sockets/unifiedSocket.js";
+import { emitBroadcastUpdate, emitCallUpdate, emitBroadcastListUpdate } from "../sockets/unifiedSocket.js";
 
 class BroadcastQueueService {
   constructor() {
@@ -63,9 +63,11 @@ class BroadcastQueueService {
         return;
       }
 
-      // Transition to in_progress
-      if (broadcast.status === 'queued') {
+      // Transition to in_progress (Handle both 'queued' and stuck 'draft')
+      if (broadcast.status === 'queued' || broadcast.status === 'draft') {
+        logger.info(`Broadcast ${broadcastId} transitioning from ${broadcast.status} to in_progress`);
         await broadcast.updateStatus('in_progress');
+        emitBroadcastListUpdate();
       }
 
       // Count active calls
@@ -98,7 +100,9 @@ class BroadcastQueueService {
 
         if (pendingCalls === 0) {
           logger.info(`Broadcast ${broadcastId} completed`);
+          logger.info(`Broadcast ${broadcastId} completed`);
           await broadcast.updateStatus('completed');
+          emitBroadcastListUpdate();
           this.stopBroadcast(broadcastId);
         }
 
@@ -181,7 +185,7 @@ class BroadcastQueueService {
           call.status = 'failed';
           await call.save();
           await broadcast.incrementStat('failed');
-          
+
           // 🔥 EMIT: Call failed due to DND
           emitCallUpdate(broadcast._id.toString(), {
             callId: call._id,
@@ -197,7 +201,7 @@ class BroadcastQueueService {
       if (await this._isOptedOut(call.contact.phone)) {
         await call.markOptedOut();
         await broadcast.incrementStat('opted_out');
-        
+
         // 🔥 EMIT: Call opted out
         emitCallUpdate(broadcast._id.toString(), {
           callId: call._id,

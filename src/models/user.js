@@ -41,7 +41,7 @@ const userSchema = new mongoose.Schema(
       },
       voice: {
         type: String,
-        default: 'en-US-AriaNeural'
+        default: 'en-GB-SoniaNeural' // British English Female (Supported: Tamil & British English only)
       },
       notifications: {
         type: Boolean,

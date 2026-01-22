@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import axios from 'axios';
+import { deleteFromCloudinary } from "../utils/cloudinaryUtils.js";
 import cloudinary from "../utils/cloudinaryUtils.js";
 
 import Broadcast from '../models/Broadcast.js';
@@ -69,11 +70,14 @@ class BroadcastService {
       const { audioAssets, personalizedMessages } = await this.generateAllAudio(broadcast);
 
       broadcast.audioAssets = audioAssets;
+      // Update status to queued so queue processor picks it up correctly
+      broadcast.status = 'queued';
       await broadcast.save();
 
       // PHASE 2: Create call documents with audio URLs
       logger.info('Step 2: Creating call documents...');
-      await this._createBroadcastCalls(broadcast, audioAssets, personalizedMessages);
+      // USE broadcast.audioAssets to get the Mongoose IDs
+      await this._createBroadcastCalls(broadcast, broadcast.audioAssets, personalizedMessages);
 
       // PHASE 3: Start queue processor
       logger.info('Step 3: Starting call queue...');
@@ -280,13 +284,33 @@ class BroadcastService {
       broadcastQueueService.stopBroadcast(broadcastId);
     }
 
+    // 🗑️ Delete Cloudinary Assets
+    if (broadcast.audioAssets && broadcast.audioAssets.length > 0) {
+      logger.info(`Deleting ${broadcast.audioAssets.length} audio assets for broadcast ${broadcastId}`);
+
+      const folder = process.env.CLOUDINARY_BROADCAST_AUDIO_FOLDER || 'broadcast-audio';
+
+      for (const asset of broadcast.audioAssets) {
+        if (asset.uniqueKey) {
+          try {
+            // Cloudinary requires folder/public_id to delete
+            const publicId = `${folder}/${asset.uniqueKey}`;
+            await deleteFromCloudinary(publicId);
+            logger.info(`Deleted audio asset: ${publicId}`);
+          } catch (err) {
+            logger.warn(`Failed to delete Cloudinary asset ${asset.uniqueKey}:`, err.message);
+          }
+        }
+      }
+    }
+
     // Delete all associated calls
     await BroadcastCall.deleteMany({ broadcast: broadcastId });
 
     // Delete broadcast
     await Broadcast.findByIdAndDelete(broadcastId);
 
-    logger.info(`Broadcast ${broadcastId} deleted`);
+    logger.info(`Broadcast ${broadcastId} fully deleted (DB + Cloudinary)`);
 
     await this._broadcastStatsUpdate();
     emitBroadcastListUpdate();
