@@ -1,3 +1,4 @@
+import 'dotenv/config'; // Load environment variables from .env
 import http from 'http';
 import { Server } from 'socket.io';
 import app from "./src/app.js";
@@ -6,21 +7,23 @@ import { initializeSocketIO, shutdownSocketIO } from "./src/sockets/unifiedSocke
 import { connectDB } from "./src/config/db.js";
 import logger from "./src/utils/logger.js";
 
-// Connect to MongoDB
+// ===== STARTUP SEQUENCE =====
+logger.info('🚀 Starting Technovo Voice Backend...');
+
+// 1. Connect to MongoDB
+logger.info('📡 Connecting to MongoDB...');
 await connectDB();
+logger.info('✅ MongoDB connected');
 
-// ⚠️ Check for valid BASE_URL (Critical for Twilio Webhooks)
-if (!process.env.BASE_URL || process.env.BASE_URL.includes('localhost')) {
-  logger.warn('╔════════════════════════════════════════════════════════════╗');
-  logger.warn('║ CRITICAL WARNING: BASE_URL is missing or uses localhost!   ║');
-  logger.warn('║ Twilio webhooks (Error 11200) WILL FAIL.                   ║');
-  logger.warn('║ USE NGROK OR PUBLIC URL: e.g. https://xyz.ngrok-free.app   ║');
-  logger.warn('╚════════════════════════════════════════════════════════════╝');
-}
+// 2. Initialize Twilio (lazy initialization - will log when first used)
+logger.info('📞 Initializing Twilio Service...');
 
+// 3. Create HTTP Server
+logger.info('🌐 Creating HTTP Server...');
 const server = http.createServer(app);
 
-// Initialize unified Socket.IO for all WebSocket needs
+// 4. Initialize Socket.IO
+logger.info('🔌 Initializing Socket.IO...');
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -33,6 +36,19 @@ const io = new Server(server, {
 });
 
 initializeSocketIO(io);
+logger.info('✅ Socket.IO ready');
+
+// 5. Start Health Check
+logger.info('🏥 Starting Health Check...');
+
+// ⚠️ Check for valid BASE_URL (Critical for Twilio Webhooks)
+if (!process.env.BASE_URL || process.env.BASE_URL.includes('localhost')) {
+  logger.warn('╔════════════════════════════════════════════════════════════╗');
+  logger.warn('║ CRITICAL WARNING: BASE_URL is missing or uses localhost!   ║');
+  logger.warn('║ Twilio webhooks (Error 11200) WILL FAIL.                   ║');
+  logger.warn('║ USE NGROK OR PUBLIC URL: e.g. https://xyz.ngrok-free.app   ║');
+  logger.warn('╚════════════════════════════════════════════════════════════╝');
+}
 
 // Graceful shutdown function
 const shutdown = async () => {
@@ -57,8 +73,12 @@ process.on('SIGTERM', shutdown);  // Docker / PM2
 
 // Start server with port error handling
 server.listen(process.env.PORT || 3000, () => {
-  logger.info(`🚀 Server running on port ${process.env.PORT || 3000}`);
-  logger.info(`📡 Socket.IO ready for connections`);
+  const port = process.env.PORT || 3000;
+  logger.info(`🌐 Server running on port ${port}`);
+  logger.info(`📡 Health check available at: http://localhost:${port}/health`);
+  logger.info(`� Socket.IO ready for connections`);
+  logger.info(`📞 Twilio service initialized (lazy)`);
+  logger.info('==============================');
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     logger.error(`❌ Port ${process.env.PORT || 3000} already in use`);

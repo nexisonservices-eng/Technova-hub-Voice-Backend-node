@@ -65,11 +65,28 @@ class BroadcastService {
 
       logger.info(`Starting broadcast: ${broadcastId}`);
 
-      // PHASE 1: Pre-generate ALL audio
-      logger.info('Step 1: Generating TTS for all messages...');
-      const { audioAssets, personalizedMessages } = await this.generateAllAudio(broadcast);
+      // PHASE 1: Generate single shared audio for all contacts
+      logger.info('Step 1: Generating TTS for shared message...');
+      
+      // Create single audio message for all contacts
+      const singleMessage = {
+        text: broadcast.messageTemplate,
+        uniqueKey: crypto.createHash('md5').update(broadcast.messageTemplate).digest('hex')
+      };
 
-      broadcast.audioAssets = audioAssets;
+      logger.info(`Generating TTS for single message to ${broadcast.contacts.length} contacts`);
+
+      // Generate single TTS audio
+      const audioAssets = await this.generateSingleAudio(singleMessage, broadcast.voice);
+
+      const audioAssetsArray = [audioAssets];
+      const personalizedMessages = broadcast.contacts.map(contact => ({
+        text: broadcast.messageTemplate,
+        uniqueKey: singleMessage.uniqueKey,
+        contact: contact
+      }));
+
+      broadcast.audioAssets = audioAssetsArray;
       // Update status to queued so queue processor picks it up correctly
       broadcast.status = 'queued';
       await broadcast.save();
@@ -94,35 +111,14 @@ class BroadcastService {
     }
   }
 
-  async generateAllAudio(broadcast) {
-    const { messageTemplate, contacts, voice } = broadcast;
-
-    // Create single audio message for all contacts
-    const singleMessage = {
-      text: messageTemplate,
-      uniqueKey: crypto.createHash('md5').update(messageTemplate).digest('hex')
-    };
-
-    logger.info(`Generating TTS for single message to ${contacts.length} contacts`);
-
-    // Generate single TTS audio
-    const audioAssets = await this.generateSingleAudio(singleMessage, voice);
-
-    return {
-      audioAssets: [audioAssets],
-      personalizedMessages: contacts.map(contact => ({
-        text: messageTemplate,
-        uniqueKey: singleMessage.uniqueKey,
-        contact: contact
-      }))
-    };
-  }
-
+  
   async generateSingleAudio(message, voice) {
     try {
       // Call Python TTS service
-      const ttsResponse = await axios.post(
-        'https://technova-hub-voice-backend-python.onrender.com/tts/broadcast',
+      // const ttsResponse = await axios.post(
+      //   'https://technova-hub-voice-backend-python.onrender.com/tts/broadcast',
+         const ttsResponse = await axios.post(
+        'http://localhost:4000/tts/broadcast',
         {
           text: message.text,
           voice: voice.voiceId,

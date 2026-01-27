@@ -5,7 +5,8 @@ import logger from "./utils/logger.js";
 import VoiceRoutes from "./routes/voiceRoutes.js";
 import BroadcastRoutes from "./routes/broadcastRoutes.js";
 import AIRoutes from "./routes/aiRoutes.js";
-import HealthRoutes from "./routes/healthRoutes.js";
+import OptimizedHealthRoutes from "./routes/optimizedHealthRoutes.js";
+import InboundRoutes from "./routes/inboundRoutes.js";
 
 const app = express();
 
@@ -20,7 +21,9 @@ app.use('/voice', VoiceRoutes);
 app.use('/broadcast', BroadcastRoutes);
 app.use('/webhook/broadcast', BroadcastRoutes); // Add webhook prefix for Twilio callbacks
 app.use('/ai', AIRoutes);
-app.use('/health', HealthRoutes);
+app.use('/health', OptimizedHealthRoutes);
+app.use('/webhook', InboundRoutes); // Inbound call webhooks
+app.use('/inbound', InboundRoutes); // Management endpoints
 
 // Health check
 app.get('/', (req, res) => {

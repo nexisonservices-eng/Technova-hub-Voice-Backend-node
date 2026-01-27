@@ -1,15 +1,26 @@
 import twilio from 'twilio';
-import axios from 'axios';  
+import axios from 'axios';
 import logger from '../utils/logger.js';
 
 class TelephonyService {
   constructor() {
-    this.client = twilio(
-      process.env.TWILIO_ACCOUNT_SID,
-      process.env.TWILIO_AUTH_TOKEN
-    );
+    this.client = null;
+  }
 
-    logger.info('✓ Twilio Telephony Service Initialized');
+  getClient() {
+    if (!this.client) {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const token = process.env.TWILIO_AUTH_TOKEN;
+
+      if (!sid || !token) {
+        throw new Error('Twilio credentials are missing');
+      }
+
+      this.client = twilio(sid, token);
+      logger.info('✓ Twilio Telephony Service Initialized');
+    }
+
+    return this.client;
   }
 
   /* =========================
@@ -43,11 +54,12 @@ class TelephonyService {
   ========================== */
   async makeCall(to, from = null, webhookUrl) {
     try {
-      const call = await this.client.calls.create({
+      const client = this.getClient();
+      const call = await client.calls.create({
         to,
         from: from || process.env.TWILIO_PHONE_NUMBER,
-        url: webhookUrl,
-        statusCallback: `${process.env.BASE_URL}/webhook/call/status`,
+        url: webhookUrl || `${process.env.BASE_URL}/webhook/incoming`,
+        statusCallback: `${process.env.BASE_URL}/webhook/status`,
         statusCallbackEvent: [
           'initiated',
           'ringing',
@@ -71,11 +83,51 @@ class TelephonyService {
   }
 
   /* =========================
+     Initiate Outbound Call with Enhanced Routing
+  ========================== */
+  async initiateOutboundCall(phoneNumber, scenario = null) {
+    try {
+      const client = this.getClient();
+      const webhookUrl = `${process.env.BASE_URL}/webhook/incoming`;
+      
+      const call = await client.calls.create({
+        to: phoneNumber,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        url: webhookUrl,
+        statusCallback: `${process.env.BASE_URL}/webhook/status`,
+        statusCallbackEvent: [
+          'initiated',
+          'ringing',
+          'answered',
+          'completed'
+        ],
+        record: process.env.RECORD_CALLS === 'true' ? 'record-from-answer' : false,
+        recordingStatusCallback: `${process.env.BASE_URL}/webhook/recording`
+      });
+
+      logger.info(`📞 Outbound call initiated: ${call.sid} to ${phoneNumber}`);
+
+      return {
+        success: true,
+        callSid: call.sid,
+        status: call.status,
+        phoneNumber,
+        scenario,
+        provider: 'twilio'
+      };
+    } catch (error) {
+      logger.error('❌ Outbound call failed', error);
+      throw error;
+    }
+  }
+
+  /* =========================
      End Call
   ========================== */
   async endCall(callSid) {
     try {
-      await this.client.calls(callSid).update({
+      const client = this.getClient();
+      await client.calls(callSid).update({
         status: 'completed'
       });
 
@@ -92,7 +144,8 @@ class TelephonyService {
   ========================== */
   async getCallDetails(callSid) {
     try {
-      const call = await this.client.calls(callSid).fetch();
+      const client = this.getClient();
+      const call = await client.calls(callSid).fetch();
 
       return {
         callSid: call.sid,
@@ -114,7 +167,8 @@ class TelephonyService {
   ========================== */
   async startRecording(callSid) {
     try {
-      const recording = await this.client
+      const client = this.getClient();
+      const recording = await client
         .calls(callSid)
         .recordings.create();
 

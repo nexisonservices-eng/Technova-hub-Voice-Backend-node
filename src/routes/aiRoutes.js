@@ -6,22 +6,6 @@ import logger from '../utils/logger.js';
 const router = express.Router();
 
 /**
- * 🌐 Public AI service health check
- */
-router.get('/health', async (req, res) => {
-    try {
-        const health = await AIBridgeService.healthCheck();
-        res.json(health);
-    } catch (error) {
-        logger.error('AI health check error:', error);
-        res.status(500).json({
-            status: 'unhealthy',
-            error: error.message
-        });
-    }
-});
-
-/**
  * 🌐 Test AI service
  */
 router.post('/test', async (req, res) => {

@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 
 export const authenticate = (req, res, next) => {
   // --- DEV MODE BYPASS ---
-  // req.user = { id: 'dev-user', role: 'admin' };
+  // req.user = { id: 'dev-user', role: ' admin' };
   // req.user = { id: '507f1f77bcf86cd799439011', _id: '507f1f77bcf86cd799439011', role: 'admin' };
   // return next();
 

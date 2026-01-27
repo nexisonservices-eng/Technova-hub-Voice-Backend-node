@@ -38,7 +38,8 @@ class CallController {
   }
 
   /**
-   * 📥 Handle inbound call webhook (Twilio-verified)
+   * 📥 Handle inbound call webhook (LEGACY - for backward compatibility)
+   * New enhanced inbound calls are handled by InboundCallController
    */
   async handleInboundCall(req, res) {
     try {
@@ -48,7 +49,7 @@ class CallController {
         return res.status(400).send('Invalid inbound call data');
       }
 
-      logger.info(`📞 Incoming call: ${CallSid} from ${From}`);
+      logger.info(`📞 Legacy inbound call: ${CallSid} from ${From}`);
 
       await callStateService.createCall({
         callSid: CallSid,

@@ -3,12 +3,26 @@ import logger from '../utils/logger.js';
 
 const { twiml: { VoiceResponse } } = twilio;
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
-
 class TwilioVoiceService {
+  constructor() {
+    this.client = null;
+  }
+
+  getClient() {
+    if (!this.client) {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const token = process.env.TWILIO_AUTH_TOKEN;
+
+      if (!sid || !token) {
+        throw new Error('Twilio credentials are missing');
+      }
+
+      this.client = twilio(sid, token);
+      logger.info('✓ Twilio Voice Service Initialized');
+    }
+
+    return this.client;
+  }
 
   /**
    * ==========================================
@@ -29,6 +43,7 @@ class TwilioVoiceService {
       `&disclaimer=${encodeURIComponent(disclaimerText || '')}`;
 
     try {
+      const client = this.getClient();
       const call = await client.calls.create({
         to,
         from: process.env.TWILIO_PHONE_NUMBER,
@@ -80,24 +95,21 @@ class TwilioVoiceService {
    */
   async handleAnsweringMachine(callSid) {
     try {
+      const client = this.getClient();
       await client.calls(callSid).update({
         twiml: `
           <Response>
             <Say voice="alice">
-              This is an automated call. Please call us back.
+              Hello, this is an automated message. We'll call back later.
             </Say>
-            <Hangup/>
           </Response>
         `
       });
 
-      logger.info('🤖 Answering machine handled', { callSid });
-
+      logger.info('📞 Answering machine detected, left message', { callSid });
     } catch (error) {
-      logger.error('❌ Failed to handle answering machine', {
-        callSid,
-        error: error.message
-      });
+      logger.error('❌ Failed to handle answering machine', error);
+      throw error;
     }
   }
 
@@ -108,6 +120,7 @@ class TwilioVoiceService {
    */
   async endCall(callSid) {
     try {
+      const client = this.getClient();
       await client.calls(callSid).update({
         status: 'completed'
       });
@@ -130,6 +143,7 @@ class TwilioVoiceService {
    */
   async getCallDetails(callSid) {
     try {
+      const client = this.getClient();
       const call = await client.calls(callSid).fetch();
 
       return {

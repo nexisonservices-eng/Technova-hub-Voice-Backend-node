@@ -210,14 +210,11 @@ class AIBridgeService extends EventEmitter {
   /* ======================
      Health & Test (HTTP)
   ======================= */
-  static async healthCheck() {
+    static async checkHealth() {
     try {
-      const res = await axios.get(`${process.env.AI_SERVICE_HTTP || 'http://localhost:4000'}/health`, {
-        timeout: 5_000
-      });
-      return res.data;
+      const res = await axios.get(`${process.env.AI_SERVICE_HTTP || 'http://localhost:4000'}/health`, { timeout: 3000 });
+      return { status: 'ok', data: res.data };
     } catch (err) {
-      logger.error('AI service health check failed', err.message);
       return { status: 'unhealthy', error: err.message };
     }
   }
