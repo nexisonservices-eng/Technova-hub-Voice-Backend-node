@@ -1,13 +1,12 @@
 import crypto from 'crypto';
 import axios from 'axios';
-import { deleteFromCloudinary } from "../utils/cloudinaryUtils.js";
-import cloudinary from "../utils/cloudinaryUtils.js";
-
+import cloudinary, { deleteFromCloudinary } from "../utils/cloudinaryUtils.js";
+import logger from '../utils/logger.js';
 import Broadcast from '../models/Broadcast.js';
 import BroadcastCall from '../models/BroadcastCall.js';
-import ttsBatchService from "../services/ttsBatchService.js";
+import ttsBatchService from "./ttsBatchService.js";
 import broadcastQueueService from './broadcastQueueService.js';
-import logger from '../utils/logger.js';
+import aiAssistantService from './aiAssistantService.js';
 import { emitStatsUpdate, emitBroadcastListUpdate, emitCallsCreated } from '../sockets/unifiedSocket.js';
 
 class BroadcastService {
@@ -67,7 +66,7 @@ class BroadcastService {
 
       // PHASE 1: Generate single shared audio for all contacts
       logger.info('Step 1: Generating TTS for shared message...');
-      
+
       // Create single audio message for all contacts
       const singleMessage = {
         text: broadcast.messageTemplate,
@@ -111,18 +110,19 @@ class BroadcastService {
     }
   }
 
-  
+
   async generateSingleAudio(message, voice) {
     try {
       // Call Python TTS service
+      const aiServiceUrl = process.env.AI_SERVICE_HTTP || 'http://localhost:4000';
+
       const ttsResponse = await axios.post(
-        'https://technova-hub-voice-backend-python-jzxq.onrender.com/tts/broadcast',
-        //  const ttsResponse = await axios.post(
-        // 'http://localhost:4000/tts/broadcast',
+        `${aiServiceUrl}/tts/broadcast`,
         {
           text: message.text,
           voice: voice.voiceId,
-          provider: voice.provider
+          provider: voice.provider,
+          language: voice.language
         },
         {
           responseType: 'arraybuffer',

@@ -1,22 +1,22 @@
-// routes/voiceRoutes.js
+// routes/VoiceRoutes.js
 import express from 'express';
-import CallController from "../controllers/voiceController.js";
+import CallController from '../controllers/voiceController.js';
 import { authenticate } from '../middleware/auth.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 
 const router = express.Router();
 
-// 🔒 Protected routes (JWT required)
-router.post('/call/outbound', authenticate, CallController.startOutboundCall.bind(CallController));
-router.get('/calls/active', authenticate, CallController.getActiveCalls.bind(CallController));
+// 🔒 Protected routes
+router.post('/call/outbound', authenticate, CallController.startOutboundCall);
+router.get('/calls/active', authenticate, CallController.getActiveCalls);
 
-// 🌐 Public Twilio webhook (secured via Twilio signature)
-router.post('/call/incoming', verifyTwilioRequest, CallController.handleInboundCall.bind(CallController));
+// 🌐 Twilio webhook
+router.post('/call/incoming', verifyTwilioRequest, CallController.handleInboundCall);
 
-// 🔒 Get call details by CallSid (JWT required)
-router.get('/call/:callSid', authenticate, CallController.getCallDetails.bind(CallController));
+// 🔒 Call details
+router.get('/call/:callSid', authenticate, CallController.getCallDetails);
 
-// 📊 Stats endpoint (for compatibility - mounted at /voice but accessed via /api)
-router.get('/stats', authenticate, CallController.getCallStats.bind(CallController));
+// 📊 Stats
+router.get('/stats', authenticate, CallController.getCallStats);
 
 export default router;

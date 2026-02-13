@@ -39,31 +39,43 @@ class TwilioWebhooks {
    */
   async getBroadcastTwiML(req, res) {
     try {
-      const { audioUrl, disclaimer } = req.query;
+      const { audioUrl, disclaimer, messageText, voice, language } = req.query;
 
       // 🔥 CRITICAL FIX: Set proper headers for Twilio
       res.setHeader('Content-Type', 'text/xml');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Access-Control-Allow-Origin', '*');
 
-      if (!audioUrl) {
-        logger.error('Missing audioUrl in TwiML request');
+      // 🔥 CRITICAL FIX: Support both audio URL and text-to-speech
+      let audioSection = '';
+      
+      if (audioUrl && audioUrl !== 'null') {
+        // Use pre-recorded audio
+        try {
+          const audioOk = await isAudioReachable(audioUrl);
+          if (!audioOk) {
+            logger.warn('Audio URL verification failed (might still work for Twilio)', { audioUrl });
+          }
+        } catch (checkErr) {
+          logger.warn('Audio check skipped due to error', { error: checkErr.message });
+        }
+        
+        audioSection = `<Play>${audioUrl}</Play>`;
+        logger.info('Using pre-recorded audio for broadcast');
+      } else if (messageText) {
+        // Use text-to-speech fallback
+        const voiceConfig = voice || 'alice';
+        const langConfig = language || 'en-IN';
+        audioSection = `<Say voice="${voiceConfig}" language="${langConfig}">${messageText}</Say>`;
+        logger.info('Using text-to-speech fallback for broadcast');
+      } else {
+        logger.error('Missing both audioUrl and messageText in TwiML request');
         const errorTwiML = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="alice">Invalid broadcast configuration</Say>
   <Hangup/>
 </Response>`;
         return res.send(errorTwiML);
-      }
-
-      // 🔥 CRITICAL FIX: Non-blocking audio validation
-      try {
-        const audioOk = await isAudioReachable(audioUrl);
-        if (!audioOk) {
-          logger.warn('Audio URL verification failed (might still work for Twilio)', { audioUrl });
-        }
-      } catch (checkErr) {
-        logger.warn('Audio check skipped due to error', { error: checkErr.message });
       }
 
       // 🔥 CRITICAL FIX: Proper TwiML with valid structure
@@ -82,7 +94,7 @@ class TwilioWebhooks {
     </Say>
   </Gather>
 
-  <Play>${audioUrl}</Play>
+  ${audioSection}
 
   <Hangup/>
 </Response>`;

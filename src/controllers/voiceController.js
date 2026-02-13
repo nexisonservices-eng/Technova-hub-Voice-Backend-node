@@ -1,19 +1,16 @@
-// controllers/callController.js
+// controllers/voiceController.js
 import telephonyService from '../services/telephonyService.js';
 import callStateService from '../services/callStateService.js';
 import logger from '../utils/logger.js';
-import Call from "../models/call.js";
+import Call from '../models/call.js';
 
 class CallController {
-  /**
-   * 📤 Start an outbound call (JWT-protected)
-   */
   async startOutboundCall(req, res) {
     try {
       const { phoneNumber, scenario } = req.body;
 
       if (!phoneNumber) {
-        return res.status(400).json({ message: "Phone number is required" });
+        return res.status(400).json({ message: 'Phone number is required' });
       }
 
       const result = await telephonyService.initiateOutboundCall(phoneNumber, scenario);
@@ -28,55 +25,29 @@ class CallController {
 
       res.status(200).json({
         success: true,
-        message: "Outbound call initiated",
+        message: 'Outbound call initiated',
         data: result
       });
     } catch (error) {
       logger.error('Outbound call error:', error);
-      res.status(500).json({ message: "Outbound call failed", error: error.message });
+      res.status(500).json({ message: 'Outbound call failed', error: error.message });
     }
   }
 
-  /**
-   * 📥 Handle inbound call webhook (LEGACY - for backward compatibility)
-   * New enhanced inbound calls are handled by InboundCallController
-   */
   async handleInboundCall(req, res) {
     try {
-      const { CallSid, From } = req.body;
-
-      if (!CallSid || !From) {
-        return res.status(400).send('Invalid inbound call data');
-      }
-
-      logger.info(`📞 Legacy inbound call: ${CallSid} from ${From}`);
-
-      await callStateService.createCall({
-        callSid: CallSid,
-        phoneNumber: From,
-        direction: 'inbound',
-        provider: telephonyService.provider
-      });
-
-      const websocketUrl = `wss://${req.get('host')}/media/${CallSid}`;
-
-      const twiml = telephonyService.generateIncomingTwiML(
-        websocketUrl,
-        'Hello! Connecting you to our AI assistant.'
-      );
-
       res.type('text/xml');
-      res.send(twiml);
+      res.send(`
+        <Response>
+          <Say voice="alice">Your call has been received. Please hold.</Say>
+        </Response>
+      `);
     } catch (error) {
       logger.error('Inbound call error:', error);
-      const twiml = `<Response><Say>Sorry, there was an error processing your call.</Say></Response>`;
-      res.type('text/xml').status(500).send(twiml);
+      res.status(500).send('Inbound call failed');
     }
   }
 
-  /**
-   * 📄 Get call details by CallSid
-   */
   async getCallDetails(req, res) {
     try {
       const { callSid } = req.params;
@@ -93,9 +64,6 @@ class CallController {
     }
   }
 
-  /**
-   * 📋 Get all active calls
-   */
   async getActiveCalls(req, res) {
     try {
       const activeCalls = await Call.find({
@@ -116,37 +84,24 @@ class CallController {
     }
   }
 
-  /**
-   * 📊 Get call statistics
-   */
   async getCallStats(req, res) {
     try {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      const calls = await Call.find({
-        createdAt: { $gte: today }
-      });
+      const calls = await Call.find({ createdAt: { $gte: today } });
 
-      const totalCalls = calls.length;
-      const completedCalls = calls.filter(c => c.status === 'completed');
-      const avgDuration = completedCalls.length > 0
-        ? Math.round(completedCalls.reduce((sum, c) => sum + (c.duration || 0), 0) / completedCalls.length)
-        : 0;
-      const successRate = totalCalls > 0
-        ? Math.round((completedCalls.length / totalCalls) * 100)
-        : 0;
+      const completed = calls.filter(c => c.status === 'completed');
 
       res.json({
         success: true,
-        totalCalls,
-        avgDuration,
-        successRate,
-        breakdown: {
-          completed: completedCalls.length,
-          inProgress: calls.filter(c => ['initiated', 'ringing', 'in-progress'].includes(c.status)).length,
-          failed: calls.filter(c => c.status === 'failed').length,
-        }
+        totalCalls: calls.length,
+        avgDuration: completed.length
+          ? Math.round(completed.reduce((s, c) => s + (c.duration || 0), 0) / completed.length)
+          : 0,
+        successRate: calls.length
+          ? Math.round((completed.length / calls.length) * 100)
+          : 0
       });
     } catch (error) {
       logger.error('Get call stats error:', error);

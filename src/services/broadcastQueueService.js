@@ -1,9 +1,8 @@
+import logger from '../utils/logger.js';
 import Broadcast from '../models/Broadcast.js';
 import BroadcastCall from '../models/BroadcastCall.js';
-import OptOut from '../models/OptOut.js';
-
 import twilioVoiceService from './twilioVoiceService.js';
-import logger from '../utils/logger.js';
+import aiAssistantService from './aiAssistantService.js';
 import { emitBroadcastUpdate, emitCallUpdate, emitBroadcastListUpdate } from "../sockets/unifiedSocket.js";
 
 class BroadcastQueueService {
@@ -216,6 +215,9 @@ class BroadcastQueueService {
         await twilioVoiceService.makeVoiceBroadcastCall({
           to: call.contact.phone,
           audioUrl: call.personalizedMessage.audioUrl,
+          messageText: call.personalizedMessage.text,
+          voice: broadcast.voice.voiceId,
+          language: broadcast.voice.language,
           disclaimerText:
             broadcast.config.compliance.disclaimerText,
           callbackUrl: `${process.env.BASE_URL}/webhook/broadcast/${call._id}/status`
@@ -263,19 +265,65 @@ class BroadcastQueueService {
   }
 
   /**
-   * Check DND registry
+   * Determine if AI fallback should be triggered
    */
-  async _checkDND(phoneNumber) {
-    // TODO: integrate DND provider
-    return 'allowed';
+  async _shouldTriggerAIFallback(call, broadcast, error) {
+    try {
+      // Check if AI service is available
+      const healthCheck = await aiAssistantService.constructor.checkHealth?.();
+      if (healthCheck?.status !== 'ok') {
+        return false;
+      }
+
+      // Check broadcast configuration for AI fallback
+      if (!broadcast.config.enableAIFallback) {
+        return false;
+      }
+
+      // Check failure reasons that should trigger AI
+      const aiFallbackReasons = [
+        'no-answer',
+        'busy',
+        'failed',
+        'timeout'
+      ];
+
+      const failureReason = error.code || error.message || '';
+      const shouldFallback = aiFallbackReasons.some(reason => 
+        failureReason.toLowerCase().includes(reason)
+      );
+
+      // Check attempt count (don't fallback on first attempt)
+      if (call.attempts < 1) {
+        return false;
+      }
+
+      // Check if AI fallback hasn't been used yet
+      if (call.providerData?.aiFallback?.triggered) {
+        return false;
+      }
+
+      return shouldFallback;
+    } catch (error) {
+      logger.error('Error checking AI fallback conditions:', error);
+      return false;
+    }
   }
 
   /**
    * Check opt-out list
    */
   async _isOptedOut(phoneNumber) {
-    const exists = await OptOut.exists({ phone: phoneNumber });
-    return !!exists;
+    // TODO: Implement opt-out check
+    return false;
+  }
+
+  /**
+   * Check if number is on DND registry
+   */
+  async _checkDND(phoneNumber) {
+    // TODO: Implement DND registry check
+    return 'allowed';
   }
 
   /**

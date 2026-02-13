@@ -2,13 +2,14 @@ import 'dotenv/config'; // Load environment variables from .env
 import http from 'http';
 import { Server } from 'socket.io';
 import app from "./src/app.js";
-import { initializeSocketIO, shutdownSocketIO } from "./src/sockets/unifiedSocket.js";
+import { initializeSocketIO, shutdownSocketIO } from './src/sockets/unifiedSocket.js';
+import workflowRoutes from './src/routes/workflowRoutes.js';
 
 import { connectDB } from "./src/config/db.js";
 import logger from "./src/utils/logger.js";
 
 // ===== STARTUP SEQUENCE =====
-logger.info('🚀 Starting Technovo Voice Backend...');
+logger.info(' Starting Technovo Voice Backend...');
 
 // 1. Connect to MongoDB
 logger.info('📡 Connecting to MongoDB...');
@@ -72,16 +73,16 @@ process.on('SIGINT', shutdown);   // CTRL+C
 process.on('SIGTERM', shutdown);  // Docker / PM2
 
 // Start server with port error handling
-server.listen(process.env.PORT || 3000, () => {
-  const port = process.env.PORT || 3000;
+server.listen(process.env.PORT || 5000, () => {
+  const port = process.env.PORT || 5000;
   logger.info(`🌐 Server running on port ${port}`);
   logger.info(`📡 Health check available at: http://localhost:${port}/health`);
-  logger.info(`� Socket.IO ready for connections`);
+  logger.info(`🔌 Socket.IO ready for connections`);
   logger.info(`📞 Twilio service initialized (lazy)`);
   logger.info('==============================');
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    logger.error(`❌ Port ${process.env.PORT || 3000} already in use`);
+    logger.error(`❌ Port ${process.env.PORT || 5000} already in use`);
     process.exit(1); // Exit so nodemon can restart
   } else {
     throw err;

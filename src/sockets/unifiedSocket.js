@@ -1,6 +1,10 @@
 import logger from '../utils/logger.js';
 import callStateService from '../services/callStateService.js';
 import AIBridgeService from '../services/aiBridgeService.js';
+import ttsJobQueue from '../services/ttsJobQueue.js';
+import { setupIVRWorkflowHandlers } from './ivrWorkflowSocket.js';
+import IVRWorkflowEngine from '../services/ivrWorkflowEngine.js';
+import InboundCallController, { setSocketIO } from '../controllers/inboundCallController.js';
 
 let io;
 let initialized = false;
@@ -20,9 +24,213 @@ export function initializeSocketIO(socketIo) {
 
   cleanupInterval = setInterval(cleanupStaleConnections, CONNECTION_CLEANUP_INTERVAL);
 
+  // Setup IVR Workflow handlers
+  setupIVRWorkflowHandlers(io);
+
+  // Initialize TTS job queue with Socket.IO
+  ttsJobQueue.setSocketIO(io);
+  logger.info('🔌 TTS Job Queue connected to Socket.IO');
+
+  // Initialize InboundCallController with Socket.IO for IVR events
+  setSocketIO(io);
+  logger.info('🔌 InboundCallController connected to Socket.IO');
+
   io.on('connection', (socket) => {
     logger.info(`✅ Socket.io client connected: ${socket.id}`);
     activeConnections.set(socket.id, { connectedAt: Date.now(), socket });
+
+    // IVR Workflow Execution listener
+    socket.on('ivr_workflow_execution', async (data) => {
+      const { callSid, workflowId, userInput } = data;
+
+      try {
+        const result = await IVRWorkflowEngine.executeStep(workflowId, userInput, callSid);
+
+        emitIVRWorkflowUpdate(callSid, {
+          workflowId,
+          currentNode: result.currentNode,
+          nextAction: result.action,
+          response: result.response
+        });
+
+      } catch (error) {
+        emitIVRWorkflowError(callSid, {
+          workflowId,
+          error: error.message
+        });
+      }
+    });
+
+    // Real-time stats request handler
+    socket.on('request_ivr_stats', async () => {
+      try {
+        const stats = await IVRWorkflowEngine.emitWorkflowStats();
+        logger.info('📊 Sent IVR stats on request');
+      } catch (error) {
+        logger.error('Failed to send IVR stats:', error);
+      }
+    });
+
+    // IVR Configuration Analytics handlers
+    socket.on('request_ivr_analytics', async () => {
+      try {
+        // Get IVR configuration analytics
+        const { default: Workflow } = await import('../models/Workflow.js');
+        
+        const totalConfigs = await Workflow.countDocuments({ status: 'active' });
+        const configsByType = await Workflow.aggregate([
+          { $match: { status: 'active' } },
+          { $group: { _id: '$config.type', count: { $sum: 1 } } },
+          { $sort: { count: -1 } }
+        ]);
+        
+        const ivrAnalytics = {
+          totalConfigurations: totalConfigs,
+          configurationsByType: configsByType,
+          averageNodesPerConfig: 0,
+          mostUsedNodeType: 'menu',
+          lastUpdated: new Date()
+        };
+
+        socket.emit('ivr_analytics_update', ivrAnalytics);
+        logger.info('📊 Sent IVR configuration analytics');
+      } catch (error) {
+        logger.error('Failed to send IVR analytics:', error);
+        socket.emit('ivr_analytics_error', { error: error.message });
+      }
+    });
+
+    socket.on('request_ivr_performance_metrics', async () => {
+      try {
+        const { default: ExecutionLog } = await import('../models/ExecutionLog.js');
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+
+        const performanceMetrics = await ExecutionLog.aggregate([
+          {
+            $match: {
+              startTime: { $gte: today, $lt: tomorrow }
+            }
+          },
+          {
+            $group: {
+              _id: '$workflowId',
+              totalExecutions: { $sum: 1 },
+              successfulExecutions: {
+                $sum: {
+                  $cond: { if: { $eq: ['$status', 'completed'] }, then: 1, else: 0 }
+                }
+              },
+              averageDuration: { $avg: '$duration' },
+              totalErrors: {
+                $sum: {
+                  $cond: { if: { $eq: ['$status', 'failed'] }, then: 1, else: 0 }
+                }
+              }
+            }
+          },
+          {
+            $sort: { totalExecutions: -1 }
+          },
+          {
+            $limit: 10
+          }
+        ]);
+
+        const ivrPerformance = {
+          topWorkflows: performanceMetrics,
+          totalExecutionsToday: performanceMetrics.reduce((sum, item) => sum + item.totalExecutions, 0),
+          averageSuccessRate: performanceMetrics.length > 0 ? 
+            Math.round((performanceMetrics.reduce((sum, item) => sum + item.successfulExecutions, 0) / 
+                     performanceMetrics.reduce((sum, item) => sum + item.totalExecutions, 0)) * 100) : 0,
+          averageDuration: performanceMetrics.length > 0 ? 
+            Math.round(performanceMetrics.reduce((sum, item) => sum + item.averageDuration, 0) / performanceMetrics.length) : 0,
+          timestamp: new Date()
+        };
+
+        socket.emit('ivr_performance_update', ivrPerformance);
+        logger.info('📊 Sent IVR performance metrics');
+      } catch (error) {
+        logger.error('Failed to send IVR performance metrics:', error);
+        socket.emit('ivr_performance_error', { error: error.message });
+      }
+    });
+
+    // IVR Menus Request listener - send current IVR list
+    socket.on('request_ivr_menus', async (data) => {
+      try {
+        const { default: Workflow } = await import('../models/Workflow.js');
+        
+        // Production-level query - only valid IVR workflows
+        const ivrWorkflows = await Workflow.findActive({
+          promptKey: { $exists: true, $ne: null },
+          displayName: { $exists: true, $ne: null }
+        })
+        .select('_id promptKey displayName nodes edges config status tags createdAt updatedAt')
+        .sort({ updatedAt: -1 });
+
+        console.log(`� Retrieved ${ivrWorkflows.length} active IVR workflows`);
+
+        // Format for frontend
+        const formattedWorkflows = ivrWorkflows.map(workflow => {
+          const greetingNode = workflow.nodes.find(node => node.type === 'greeting');
+          const inputNodes = workflow.nodes.filter(node => node.type === 'input');
+          
+          return {
+            _id: workflow._id,
+            promptKey: workflow.promptKey,
+            displayName: workflow.displayName,
+            greeting: {
+              text: greetingNode?.data?.text || 'Welcome',
+              voice: workflow.config.voiceId,
+              language: workflow.config.language
+            },
+            menuOptions: inputNodes.map(node => ({
+              digit: node.data?.digit || '1',
+              label: node.data?.label || 'Option',
+              action: node.data?.action || 'transfer',
+              destination: node.data?.destination || ''
+            })),
+            settings: {
+              timeout: workflow.config.timeout,
+              maxAttempts: workflow.config.maxAttempts,
+              invalidInputMessage: workflow.config.invalidInputMessage
+            },
+            workflowConfig: {
+              nodes: workflow.nodes,
+              edges: workflow.edges,
+              settings: workflow.config
+            },
+            status: workflow.status,
+            tags: workflow.tags,
+            nodeCount: workflow.nodeCount,
+            edgeCount: workflow.edgeCount,
+            isComplete: workflow.isComplete,
+            createdAt: workflow.createdAt,
+            updatedAt: workflow.updatedAt
+          };
+        });
+
+        // Send IVR workflows list to requesting client
+        socket.emit('ivr_menus_list', {
+          menus: formattedWorkflows,
+          timestamp: new Date().toISOString(),
+          count: formattedWorkflows.length
+        });
+
+        logger.info(`📡 Sent IVR menus list to client ${socket.id}: ${formattedWorkflows.length} menus`);
+
+      } catch (error) {
+        logger.error(`Error sending IVR menus to client ${socket.id}:`, error);
+        socket.emit('ivr_menus_error', {
+          error: error.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
 
     socket.on('error', (error) => {
       logger.error(`❌ Socket error for ${socket.id}:`, error);
@@ -107,6 +315,95 @@ export function initializeSocketIO(socketIo) {
         }
       }
     });
+
+    // Workflow update listener
+    socket.on('workflow_update', async (data) => {
+      try {
+        const { workflowId, workflowData } = data;
+        console.log(`📡 Received workflow update from client ${socket.id}:`, {
+          workflowId,
+          nodeCount: workflowData.nodes?.length || 0
+        });
+
+        // Update workflow in database
+        const { default: Workflow } = await import('../models/Workflow.js');
+        
+        const updateResult = await Workflow.findByIdAndUpdate(
+          workflowId,
+          {
+            $set: {
+              nodes: workflowData.nodes || [],
+              edges: workflowData.edges || [],
+              config: workflowData.settings || {},
+              updatedAt: new Date()
+            }
+          },
+          { new: true }
+        );
+
+        if (updateResult) {
+          console.log(`✅ Workflow ${workflowId} updated successfully`);
+
+          // Broadcast updated workflow to all connected clients using io instance
+          const updatedWorkflow = await Workflow.findById(workflowId);
+          if (updatedWorkflow) {
+            const formattedWorkflow = {
+              _id: updatedWorkflow._id,
+              promptKey: updatedWorkflow.promptKey,
+              displayName: updatedWorkflow.displayName,
+              greeting: {
+                text: updatedWorkflow.nodes?.find(n => n.type === 'greeting')?.data?.text || 'Welcome',
+                voice: updatedWorkflow.config?.voiceId || 'en-GB-SoniaNeural',
+                language: updatedWorkflow.config?.language || 'en-GB'
+              },
+              menuOptions: updatedWorkflow.nodes?.filter(n => n.type === 'input').map(n => ({
+                digit: n.data?.digit || '1',
+                label: n.data?.label || 'Option',
+                action: n.data?.action || 'transfer',
+                destination: n.data?.destination || ''
+              })),
+              settings: {
+                timeout: updatedWorkflow.config?.timeout || 10,
+                maxAttempts: updatedWorkflow.config?.maxAttempts || 3,
+                invalidInputMessage: updatedWorkflow.config?.invalidInputMessage || 'Invalid selection. Please try again.'
+              },
+              workflowConfig: {
+                nodes: updatedWorkflow.nodes || [],
+                edges: updatedWorkflow.edges || [],
+                settings: updatedWorkflow.config || {}
+              },
+              status: updatedWorkflow.status || 'draft',
+              tags: updatedWorkflow.tags || [],
+              nodeCount: updatedWorkflow.nodeCount,
+              edgeCount: updatedWorkflow.edgeCount,
+              isComplete: updatedWorkflow.isComplete,
+              createdAt: updatedWorkflow.createdAt,
+              updatedAt: updatedWorkflow.updatedAt
+            };
+
+            // Broadcast to all connected clients using io instance
+            io.emit('workflow_updated', {
+              workflowId: workflowId,
+              workflowData: formattedWorkflow,
+              timestamp: new Date().toISOString()
+            });
+
+            logger.info(`📡 Broadcasted workflow update to all clients for workflow ${workflowId}`);
+          }
+        } else {
+          logger.error(`❌ Failed to update workflow ${workflowId}: Workflow not found`);
+        }
+      } catch (error) {
+        logger.error(`❌ Error handling workflow update from client ${socket.id}:`, error);
+        
+        // Send error back to the requesting client using their socket
+        socket.emit('workflow_error', {
+          workflowId,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
   });
 
   logger.info('✅ Unified Socket.IO server initialized');
@@ -184,7 +481,71 @@ export function emitHealthUpdate(health) {
   io.emit('health_update', health);
 }
 
-// 🔹 Graceful shutdown (EADDRINUSE fix)
+// 🔹 Inbound call emit helpers
+export function emitInboundCallUpdate(callData) {
+  if (!io) return;
+  io.emit('inbound_call_update', {
+    timestamp: new Date(),
+    ...callData
+  });
+}
+
+export function emitQueueUpdate(queueData) {
+  if (!io) return;
+  io.emit('queue_update', {
+    timestamp: new Date(),
+    ...queueData
+  });
+}
+
+export function emitIVRUpdate(callSid, ivrData) {
+  if (!io) return;
+  io.emit('ivr_update', {
+    callSid,
+    timestamp: new Date(),
+    ...ivrData
+  });
+}
+
+export function emitCallbackUpdate(callbackData) {
+  if (!io) return;
+  io.emit('callback_update', {
+    timestamp: new Date(),
+    ...callbackData
+  });
+}
+
+// 🔹 IVR Workflow emit helpers
+export function emitIVRWorkflowUpdate(callSid, data) {
+  if (!io) return;
+  io.emit('ivr_workflow_update', {
+    callSid,
+    timestamp: new Date(),
+    ...data
+  });
+}
+
+export function emitIVRWorkflowError(callSid, data) {
+  if (!io) return;
+  io.emit('ivr_workflow_error', {
+    callSid,
+    timestamp: new Date(),
+    ...data
+  });
+}
+
+export function emitIVRWorkflowStats(stats) {
+  if (!io) return;
+  io.emit('ivr_workflow_stats', {
+    timestamp: new Date(),
+    ...stats
+  });
+}
+
+export function getSocketIO() {
+  return io;
+}
+
 export function shutdownSocketIO() {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);

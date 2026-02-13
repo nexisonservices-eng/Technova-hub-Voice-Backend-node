@@ -84,8 +84,17 @@ const callSchema = new mongoose.Schema(
       code: String,
       message: String
     },
+    routing: {
+      type: String,
+      enum: ['default', 'ivr', 'sales', 'tech', 'billing', 'ai', 'voicemail', 'callback'],
+      default: 'default'
+    },
     tags: [String],
-    notes: String
+    notes: String,
+    deletedAt: {
+      type: Date,
+      default: null
+    }
   },
   {
     timestamps: true
@@ -100,6 +109,8 @@ callSchema.index({ user: 1, createdAt: -1 });
 callSchema.index({ phoneNumber: 1 });
 callSchema.index({ status: 1 });
 callSchema.index({ direction: 1 });
+callSchema.index({ createdAt: -1, status: 1, direction: 1 }); // Compound index for filtering
+callSchema.index({ deletedAt: 1 }); // For soft delete queries
 
 /* ======================
    Instance Methods

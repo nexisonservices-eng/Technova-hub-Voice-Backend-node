@@ -119,5 +119,25 @@ export function isCloudinaryConfigured() {
   return isConfigured;
 }
 
+// 🗑️ Delete file from Cloudinary by public_id
+const deleteFile = (publicId) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.destroy(publicId, {
+      resource_type: 'video', // Use 'video' for audio files
+    }, (error, result) => {
+      if (error) {
+        logger.error('Cloudinary delete error:', error);
+        reject(error);
+      } else {
+        logger.info('Cloudinary delete success:', result);
+        resolve(result);
+      }
+    });
+  });
+};
 
-export default cloudinary;
+// Export all functions
+export default {
+  ...cloudinary,
+  deleteFile
+};

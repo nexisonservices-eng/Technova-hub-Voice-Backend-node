@@ -3,6 +3,32 @@ import Broadcast from '../models/Broadcast.js';
 import BroadcastCall from '../models/BroadcastCall.js';
 import { validateTemplate } from '../utils/messagePersonalizer.js';
 import logger from '../utils/logger.js';
+import mongoose from 'mongoose';
+
+/**
+ * Helper function to extract user ID from request
+ */
+const extractUserId = (req) => {
+  // Try different possible user ID fields from JWT token
+  const userId = req.user?._id || req.user?.id || req.user?.sub || req.user?.userId;
+  
+  if (userId) {
+    // If it's already a valid ObjectId, return it
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      return userId;
+    }
+    // If it's a string, try to convert to ObjectId
+    try {
+      return new mongoose.Types.ObjectId(userId);
+    } catch (error) {
+      logger.warn('Invalid user ID format, using fallback:', userId);
+    }
+  }
+  
+  // Fallback for development/testing
+  logger.warn('No valid user ID found, using system fallback');
+  return new mongoose.Types.ObjectId(); // Generate a valid ObjectId for testing
+};
 
 class BroadcastController {
   /**
@@ -54,7 +80,7 @@ class BroadcastController {
           maxRetries,
           compliance
         },
-        req.user._id
+        extractUserId(req)
       );
 
       // Start broadcast asynchronously
@@ -194,7 +220,7 @@ class BroadcastController {
     try {
       const { status, page = 1, limit = 20 } = req.query;
 
-      const query = { createdBy: req.user._id };
+      const query = { createdBy: extractUserId(req) };
       if (status) {
         query.status = status;
       }

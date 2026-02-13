@@ -30,17 +30,27 @@ class TwilioVoiceService {
    * ==========================================
    */
   async makeVoiceBroadcastCall(params) {
-    const { to, audioUrl, disclaimerText, callbackUrl } = params;
+    const { to, audioUrl, disclaimerText, callbackUrl, messageText, voice, language } = params;
 
-    if (!to || !audioUrl) {
-      throw new Error('Missing required params: to or audioUrl');
+    if (!to) {
+      throw new Error('Missing required param: to');
     }
 
-    // ✅ ALWAYS use webhook-based TwiML (no inline TwiML)
-    const twimlUrl =
-      `${process.env.BASE_URL}/webhook/broadcast/twiml` +
-      `?audioUrl=${encodeURIComponent(audioUrl)}` +
-      `&disclaimer=${encodeURIComponent(disclaimerText || '')}`;
+    // Build TwiML URL with support for both audio and TTS
+    const twimlParams = new URLSearchParams();
+    twimlParams.append('disclaimer', disclaimerText || '');
+    
+    if (audioUrl && audioUrl !== 'null') {
+      twimlParams.append('audioUrl', audioUrl);
+    }
+    
+    if (messageText) {
+      twimlParams.append('messageText', messageText);
+      twimlParams.append('voice', voice || 'alice');
+      twimlParams.append('language', language || 'en-IN');
+    }
+
+    const twimlUrl = `${process.env.BASE_URL}/webhook/broadcast/twiml?${twimlParams.toString()}`;
 
     try {
       const client = this.getClient();
@@ -69,7 +79,9 @@ class TwilioVoiceService {
 
       logger.info('📞 Broadcast call started', {
         sid: call.sid,
-        to
+        to,
+        hasAudioUrl: !!audioUrl,
+        hasMessageText: !!messageText
       });
 
       return {
