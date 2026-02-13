@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import logger from "./utils/logger.js";
-import VoiceRoutes from "./routes/VoiceRoutes.js";
+import voiceRoutes from "./routes/VoiceRoutes.js";
 import BroadcastRoutes from "./routes/broadcastRoutes.js";
 import AIRoutes from "./routes/aiRoutes.js";
 import OptimizedHealthRoutes from "./routes/optimizedHealthRoutes.js";
@@ -31,7 +31,7 @@ app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Routes
-app.use('/voice', VoiceRoutes);
+app.use('/voice', voiceRoutes);
 app.use('/broadcast', BroadcastRoutes);
 app.use('/webhook/broadcast', BroadcastRoutes); // Add webhook prefix for Twilio callbacks
 app.use('/ai', AIRoutes);
