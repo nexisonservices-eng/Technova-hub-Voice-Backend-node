@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import logger from "./utils/logger.js";
-import voiceRoutes from "./routes/VoiceRoutes.js";
+import voiceRoutes from "./routes/voiceRoutes.js";
 import BroadcastRoutes from "./routes/broadcastRoutes.js";
 import AIRoutes from "./routes/aiRoutes.js";
 import OptimizedHealthRoutes from "./routes/optimizedHealthRoutes.js";
