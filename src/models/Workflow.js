@@ -174,18 +174,28 @@ WorkflowSchema.methods.duplicate = function (newPromptKey, newDisplayName) {
 
 // Pre-save middleware
 WorkflowSchema.pre('save', function (next) {
-  if (this.isModified('nodes') && this.nodes.length > 0) {
-    // Auto-validate workflow structure when nodes are modified
+  // Only validate entry node requirement when activating the workflow
+  // Allow draft workflows to be saved without entry nodes for flexibility
+  if (this.isModified('status') && this.status === 'active' && this.nodes.length > 0) {
+    // Auto-validate workflow structure when activating
     // Supporting both legacy 'greeting' and new 'audio' node types
     const hasEntryNode = this.nodes.some(node => node.type === 'greeting' || node.type === 'audio');
 
     if (!hasEntryNode) {
-      const nextErr = new Error('Workflow must have at least one greeting or audio node');
+      const nextErr = new Error('Workflow must have at least one greeting or audio node to be activated');
       return next(nextErr);
     }
   }
+  
+  // Log node modifications for debugging
+  if (this.isModified('nodes')) {
+    const entryNodes = this.nodes.filter(node => node.type === 'greeting' || node.type === 'audio');
+    console.log(`📝 Workflow ${this.promptKey} nodes modified: ${this.nodes.length} total, ${entryNodes.length} entry nodes`);
+  }
+  
   next();
 });
+
 
 // Post-save middleware for logging
 WorkflowSchema.post('save', function (doc) {

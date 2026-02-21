@@ -17,6 +17,63 @@ class WorkflowAudioService {
     this.processingQueue = new Map(); // Prevent duplicate requests
   }
 
+  normalizeServiceUrl(url = '') {
+    return String(url).trim().replace(/\/+$/, '');
+  }
+
+  getTtsServiceUrls() {
+    const candidates = [
+      process.env.AI_SERVICE_HTTP,
+      process.env.PYTHON_TTS_URL,
+      process.env.PYTHON_TTS_SERVICE_URL,
+      PYTHON_TTS_URL
+    ]
+      .map((url) => this.normalizeServiceUrl(url))
+      .filter(Boolean);
+
+    return [...new Set(candidates)];
+  }
+
+  async postTtsWithFailover(payload) {
+    const urls = this.getTtsServiceUrls();
+    const failures = [];
+
+    for (const serviceUrl of urls) {
+      try {
+        logger.info(`Trying TTS endpoint: ${serviceUrl}/tts/broadcast`);
+        const response = await axios.post(
+          `${serviceUrl}/tts/broadcast`,
+          payload,
+          {
+            responseType: 'arraybuffer',
+            timeout: 30000
+          }
+        );
+        return response;
+      } catch (error) {
+        failures.push({
+          url: serviceUrl,
+          code: error.code,
+          message: error.message
+        });
+
+        logger.warn(`TTS endpoint failed: ${serviceUrl}`, {
+          code: error.code,
+          message: error.message
+        });
+      }
+    }
+
+    const summary = failures
+      .map((f) => `${f.url} [${f.code || 'ERR'}: ${f.message}]`)
+      .join(' | ');
+
+    const ttsError = new Error(`All TTS endpoints failed. ${summary}`);
+    ttsError.code = 'TTS_ENDPOINTS_UNAVAILABLE';
+    ttsError.failures = failures;
+    throw ttsError;
+  }
+
   getLanguageFromVoice(voiceId = '') {
     // Expected format: en-GB-SoniaNeural, ta-IN-PallaviNeural, etc.
     const parts = String(voiceId).split('-');
@@ -50,22 +107,12 @@ class WorkflowAudioService {
         language: language
       };
 
-      // Call Python TTS service (exact same as broadcastService)
-      const aiServiceUrl = process.env.AI_SERVICE_HTTP || 'http://localhost:4000';
-
-      const ttsResponse = await axios.post(
-        `${aiServiceUrl}/tts/broadcast`,
-        {
-          text: message.text,
-          voice: voice.voiceId,
-          provider: voice.provider,
-          language: voice.language
-        },
-        {
-          responseType: 'arraybuffer',
-          timeout: 30000
-        }
-      );
+      const ttsResponse = await this.postTtsWithFailover({
+        text: message.text,
+        voice: voice.voiceId,
+        provider: voice.provider,
+        language: voice.language
+      });
 
       // Upload to Cloudinary (exact same as broadcastService)
       const audioBuffer = Buffer.from(ttsResponse.data);

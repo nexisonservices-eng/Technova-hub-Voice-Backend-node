@@ -325,7 +325,7 @@ router.post('/generate-audio', [
     }
 
     // Generate audio for all nodes
-    const { updatedWorkflow } = await pythonTTSService.populateWorkflowAudio(workflow, forceRegenerate, workflowId);
+    const updatedWorkflow = await pythonTTSService.populateWorkflowAudio(workflow, forceRegenerate, workflowId);
 
     res.json({
       success: true,
@@ -380,6 +380,7 @@ router.get('/:workflowId', async (req, res) => {
         promptKey: workflow.promptKey,
         displayName: workflow.displayName,
         status: workflow.status,
+        ttsStatus: workflow.ttsStatus,
         nodes: nodes,
         edges: edges,
         config: workflow.config || {},
@@ -394,6 +395,73 @@ router.get('/:workflowId', async (req, res) => {
     });
   }
 });
+
+/**
+ * GET /api/workflow/:workflowId/refresh
+ * Get fresh workflow data with latest audio URLs (after TTS completion)
+ */
+router.get('/:workflowId/refresh', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+
+    const workflow = await Workflow.findById(workflowId);
+    if (!workflow) {
+      return res.status(404).json({
+        success: false,
+        error: 'Workflow not found'
+      });
+    }
+
+    // Extract nodes and edges from workflow
+    const nodes = workflow.nodes || [];
+    const edges = workflow.edges || [];
+
+    // Check which nodes have audio URLs
+    const nodesWithAudio = nodes.filter(n => n.data?.audioUrl || n.audioUrl).map(n => ({
+      id: n.id,
+      type: n.type,
+      audioUrl: n.data?.audioUrl || n.audioUrl,
+      audioAssetId: n.data?.audioAssetId || n.audioAssetId
+    }));
+
+    const nodesWithoutAudio = nodes.filter(n => !(n.data?.audioUrl || n.audioUrl)).map(n => ({
+      id: n.id,
+      type: n.type,
+      hasText: !!(n.data?.text || n.data?.message || n.data?.messageText || n.data?.prompt)
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        _id: workflow._id,
+        promptKey: workflow.promptKey,
+        displayName: workflow.displayName,
+        status: workflow.status,
+        ttsStatus: workflow.ttsStatus,
+        nodes: nodes,
+        edges: edges,
+        config: workflow.config || {},
+        tags: workflow.tags || [],
+        audioStatus: {
+          totalNodes: nodes.length,
+          nodesWithAudio: nodesWithAudio.length,
+          nodesWithoutAudio: nodesWithoutAudio.length,
+          audioReady: nodesWithAudio.length > 0,
+          allAudioReady: nodesWithoutAudio.length === 0,
+          audioUrls: nodesWithAudio,
+          pendingNodes: nodesWithoutAudio
+        }
+      }
+    });
+  } catch (error) {
+    logger.error('Error refreshing workflow:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to refresh workflow'
+    });
+  }
+});
+
 
 /**
  * PUT /api/workflow/:workflowId
@@ -446,6 +514,10 @@ router.put('/:workflowId', [
       settings: req.body.settings || req.body.config || {}
     });
 
+    // Get the TTS job ID if one was created
+    const ttsJobId = updateResult.ttsJobId || null;
+    const nodesNeedingAudio = updateResult.nodesNeedingAudio || [];
+
     // Emit socket event for real-time frontend updates
     const io = getSocketIO();
     if (io) {
@@ -460,7 +532,8 @@ router.put('/:workflowId', [
           config: updateResult.config,
           status: updateResult.status,
           tags: updateResult.tags,
-          updatedAt: updateResult.updatedAt
+          updatedAt: updateResult.updatedAt,
+          ttsStatus: nodesNeedingAudio.length > 0 ? 'processing' : 'completed'
         },
         timestamp: new Date().toISOString()
       });
@@ -472,11 +545,16 @@ router.put('/:workflowId', [
       data: {
         workflow: updateResult,
         audioProcessing: {
-          status: 'queued', // Engine handles queueing
-          nodesToProcess: nodes.length
+          status: nodesNeedingAudio.length > 0 ? 'queued' : 'completed',
+          nodesToProcess: nodesNeedingAudio.length,
+          jobId: ttsJobId,
+          message: nodesNeedingAudio.length > 0 
+            ? 'Audio generation is in progress. Use the jobId to track status or listen for Socket.IO events.'
+            : 'All audio already generated.'
         }
       }
     });
+
   } catch (error) {
     console.error('❌ PUT /api/workflow/:id - Error updating workflow:', {
       message: error.message,
@@ -495,7 +573,7 @@ router.put('/:workflowId', [
 
 /**
  * GET /api/workflow/:workflowId/tts-status/:jobId
- * Get TTS job status
+ * Get TTS job status with detailed error information
  */
 router.get('/:workflowId/tts-status/:jobId', async (req, res) => {
   try {
@@ -516,18 +594,54 @@ router.get('/:workflowId/tts-status/:jobId', async (req, res) => {
       });
     }
 
+    // Get fresh workflow data to show current audio URLs
+    const workflow = await Workflow.findById(workflowId);
+    const nodesWithAudio = [];
+    const nodesWithoutAudio = [];
+    
+    if (workflow && workflow.nodes) {
+      for (const node of workflow.nodes) {
+        const hasAudio = !!(node.data?.audioUrl || node.audioUrl);
+        const nodeInfo = {
+          id: node.id,
+          type: node.type,
+          hasAudio: hasAudio,
+          audioUrl: node.data?.audioUrl || node.audioUrl || null
+        };
+        
+        if (hasAudio) {
+          nodesWithAudio.push(nodeInfo);
+        } else {
+          nodesWithoutAudio.push(nodeInfo);
+        }
+      }
+    }
+
     res.json({
       success: true,
       data: {
         jobId: job.id,
         status: job.status,
-        progress: (job.processedNodes / job.totalNodes) * 100,
+        progress: job.progress || 0,
         processedNodes: job.processedNodes,
         totalNodes: job.totalNodes,
-        errors: job.errors,
+        remainingNodes: job.remainingNodes || 0,
+        duration: job.duration || 0,
+        errors: job.errors || [],
+        error: job.error || null,
+        retries: job.retries || 0,
         createdAt: job.createdAt,
-        startedAt: job.startedAt,
-        completedAt: job.completedAt
+        startedAt: job.startTime,
+        completedAt: job.endTime,
+        // Current workflow audio status
+        workflowAudioStatus: {
+          totalNodes: workflow?.nodes?.length || 0,
+          nodesWithAudio: nodesWithAudio.length,
+          nodesWithoutAudio: nodesWithoutAudio.length,
+          audioReady: nodesWithAudio.length > 0,
+          allAudioReady: nodesWithoutAudio.length === 0,
+          nodes: nodesWithAudio
+        }
       }
     });
   } catch (error) {
@@ -538,6 +652,74 @@ router.get('/:workflowId/tts-status/:jobId', async (req, res) => {
     });
   }
 });
+
+
+/**
+ * POST /api/workflow/:workflowId/tts-retry/:jobId
+ * Retry a failed TTS job
+ */
+router.post('/:workflowId/tts-retry/:jobId', async (req, res) => {
+  try {
+    const { workflowId, jobId } = req.params;
+
+    const job = ttsJobQueue.getJobStatus(jobId);
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        error: 'Job not found'
+      });
+    }
+
+    if (job.workflowId !== workflowId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Job does not belong to this workflow'
+      });
+    }
+
+    // Retry the job
+    const newJobId = await ttsJobQueue.retryJob(jobId);
+
+    res.json({
+      success: true,
+      data: {
+        message: 'TTS job retry initiated',
+        oldJobId: jobId,
+        newJobId: newJobId,
+        status: 'pending',
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    logger.error('Error retrying TTS job:', error);
+    res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to retry job'
+    });
+  }
+});
+
+/**
+ * GET /api/workflow/tts-queue-stats
+ * Get TTS queue statistics (admin endpoint)
+ */
+router.get('/tts-queue-stats', async (req, res) => {
+  try {
+    const stats = ttsJobQueue.getQueueStats();
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    logger.error('Error getting TTS queue stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get queue statistics'
+    });
+  }
+});
+
 
 /**
  * PUT /api/workflow/:workflowId/status
@@ -624,9 +806,47 @@ router.get('/:workflowId/status', async (req, res) => {
 });
 
 /**
+ * DELETE /api/workflow/:workflowId
+ * Delete workflow and all associated audio files
+ */
+router.delete('/:workflowId', async (req, res) => {
+  try {
+    const { workflowId } = req.params;
+
+    // Use ivrWorkflowEngine to delete workflow and clean up audio files
+    const result = await ivrWorkflowEngine.deleteWorkflow(workflowId);
+
+    res.json({
+      success: true,
+      data: {
+        workflowId,
+        deleted: true,
+        deletedNodes: result.deletedNodes,
+        message: `Workflow ${workflowId} and ${result.deletedNodes} associated audio files deleted successfully`
+      }
+    });
+  } catch (error) {
+    logger.error('Error deleting workflow:', error);
+    
+    if (error.message === 'Workflow not found') {
+      return res.status(404).json({
+        success: false,
+        error: 'Workflow not found'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to delete workflow'
+    });
+  }
+});
+
+/**
  * POST /ivr/workflow/:workflowId
  * Execute a workflow node and return TwiML
  */
+
 router.post('/workflow/:workflowId', async (req, res) => {
   try {
     const { workflowId } = req.params;

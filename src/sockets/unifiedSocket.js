@@ -2,6 +2,7 @@ import logger from '../utils/logger.js';
 import callStateService from '../services/callStateService.js';
 import AIBridgeService from '../services/aiBridgeService.js';
 import ttsJobQueue from '../services/ttsJobQueue.js';
+import analyticsController from '../controllers/analyticsController.js';
 import { setupIVRWorkflowHandlers } from './ivrWorkflowSocket.js';
 import IVRWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import InboundCallController, { setSocketIO } from '../controllers/inboundCallController.js';
@@ -12,6 +13,8 @@ let cleanupInterval = null;
 
 const activeConnections = new Map();
 const CONNECTION_CLEANUP_INTERVAL = 30000; // 30s
+const ANALYTICS_ROOM = 'analytics_room';
+const CALLS_ROOM = 'calls_room';
 
 export function initializeSocketIO(socketIo) {
   if (initialized) {
@@ -38,6 +41,41 @@ export function initializeSocketIO(socketIo) {
   io.on('connection', (socket) => {
     logger.info(`✅ Socket.io client connected: ${socket.id}`);
     activeConnections.set(socket.id, { connectedAt: Date.now(), socket });
+
+    socket.on('join_analytics_room', async (payload = {}) => {
+      try {
+        socket.join(ANALYTICS_ROOM);
+        logger.info(`Socket ${socket.id} joined ${ANALYTICS_ROOM}`);
+        await analyticsController.emitAnalyticsSnapshotToSocket(socket, payload);
+      } catch (error) {
+        logger.error(`Failed analytics room join for ${socket.id}:`, error);
+        socket.emit('analytics_error', { error: error.message });
+      }
+    });
+
+    socket.on('leave_analytics_room', () => {
+      socket.leave(ANALYTICS_ROOM);
+      logger.info(`Socket ${socket.id} left ${ANALYTICS_ROOM}`);
+    });
+
+    socket.on('request_call_analytics', async (payload = {}) => {
+      try {
+        await analyticsController.emitAnalyticsSnapshotToSocket(socket, payload);
+      } catch (error) {
+        logger.error(`Failed call analytics request for ${socket.id}:`, error);
+        socket.emit('analytics_error', { error: error.message });
+      }
+    });
+
+    socket.on('subscribe_calls', () => {
+      socket.join(CALLS_ROOM);
+      logger.info(`Socket ${socket.id} joined ${CALLS_ROOM}`);
+    });
+
+    socket.on('unsubscribe_calls', () => {
+      socket.leave(CALLS_ROOM);
+      logger.info(`Socket ${socket.id} left ${CALLS_ROOM}`);
+    });
 
     // IVR Workflow Execution listener
     socket.on('ivr_workflow_execution', async (data) => {
@@ -172,7 +210,7 @@ export function initializeSocketIO(socketIo) {
         .select('_id promptKey displayName nodes edges config status tags createdAt updatedAt')
         .sort({ updatedAt: -1 });
 
-        console.log(`� Retrieved ${ivrWorkflows.length} active IVR workflows`);
+        logger.info(`Retrieved ${ivrWorkflows.length} active IVR workflows`);
 
         // Format for frontend
         const formattedWorkflows = ivrWorkflows.map(workflow => {
@@ -318,11 +356,12 @@ export function initializeSocketIO(socketIo) {
 
     // Workflow update listener
     socket.on('workflow_update', async (data) => {
+      const workflowId = data?.workflowId;
       try {
-        const { workflowId, workflowData } = data;
-        console.log(`📡 Received workflow update from client ${socket.id}:`, {
+        const { workflowData } = data;
+        logger.info(`Received workflow update from client ${socket.id}`, {
           workflowId,
-          nodeCount: workflowData.nodes?.length || 0
+          nodeCount: workflowData?.nodes?.length || 0
         });
 
         // Update workflow in database
@@ -342,7 +381,7 @@ export function initializeSocketIO(socketIo) {
         );
 
         if (updateResult) {
-          console.log(`✅ Workflow ${workflowId} updated successfully`);
+          logger.info(`Workflow ${workflowId} updated successfully`);
 
           // Broadcast updated workflow to all connected clients using io instance
           const updatedWorkflow = await Workflow.findById(workflowId);
@@ -394,7 +433,7 @@ export function initializeSocketIO(socketIo) {
           logger.error(`❌ Failed to update workflow ${workflowId}: Workflow not found`);
         }
       } catch (error) {
-        logger.error(`❌ Error handling workflow update from client ${socket.id}:`, error);
+        logger.error(`Error handling workflow update from client ${socket.id}:`, error);
         
         // Send error back to the requesting client using their socket
         socket.emit('workflow_error', {
@@ -438,6 +477,11 @@ export function emitBroadcastUpdate(broadcastId, data) {
 export function emitCallUpdate(broadcastId, callData) {
   if (!io) return;
   io.to(`broadcast:${broadcastId}`).emit('call_update', {
+    broadcastId,
+    timestamp: new Date(),
+    ...callData
+  });
+  io.emit('outbound_call_update', {
     broadcastId,
     timestamp: new Date(),
     ...callData
@@ -488,11 +532,19 @@ export function emitInboundCallUpdate(callData) {
     timestamp: new Date(),
     ...callData
   });
+  io.emit('inbound_data_updated', {
+    timestamp: new Date(),
+    ...callData
+  });
 }
 
 export function emitQueueUpdate(queueData) {
   if (!io) return;
   io.emit('queue_update', {
+    timestamp: new Date(),
+    ...queueData
+  });
+  io.emit('queue_status_updated', {
     timestamp: new Date(),
     ...queueData
   });
@@ -546,7 +598,68 @@ export function getSocketIO() {
   return io;
 }
 
+export function getIO() {
+  return io;
+}
+
+// 🔹 Call Details emit helpers
+export function emitCallDetailsUpdate(callId, callData) {
+  if (!io) return;
+  io.emit('call_details_update', {
+    callId,
+    timestamp: new Date(),
+    ...callData
+  });
+  io.emit('call_updated', {
+    callId,
+    timestamp: new Date(),
+    ...callData
+  });
+}
+
+export function emitInboundCallDetailsUpdate(callId, callData) {
+  if (!io) return;
+  io.emit('inbound_call_details_update', {
+    callId,
+    timestamp: new Date(),
+    ...callData
+  });
+}
+
+export function emitIVRCallDetailsUpdate(callId, callData) {
+  if (!io) return;
+  io.emit('ivr_call_details_update', {
+    callId,
+    timestamp: new Date(),
+    ...callData
+  });
+}
+
+export function emitOutboundCallDetailsUpdate(callId, callData) {
+  if (!io) return;
+  io.emit('outbound_call_details_update', {
+    callId,
+    timestamp: new Date(),
+    ...callData
+  });
+}
+
+export function emitCallListUpdate(callType, callsData) {
+  if (!io) return;
+  io.emit('call_list_update', {
+    callType,
+    timestamp: new Date(),
+    ...callsData
+  });
+  io.emit('call_updated', {
+    callType,
+    timestamp: new Date(),
+    ...callsData
+  });
+}
+
 export function shutdownSocketIO() {
+
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
@@ -560,3 +673,4 @@ export function shutdownSocketIO() {
     logger.info('🛑 Socket.IO shut down cleanly');
   }
 }
+

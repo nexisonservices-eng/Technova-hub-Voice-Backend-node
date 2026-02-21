@@ -59,7 +59,7 @@ class PythonTTSService {
     return crypto.createHash('sha256').update(text).digest('hex');
   }
 
-  async getAvailableVoices() {
+  async getAvailableVoices(language = null) {
     try {
       const response = await axios.get(`${this.pythonServiceUrl}/tts/voices`);
       logger.info('ðŸ” Available voices from Python service:', response.data);
@@ -75,7 +75,19 @@ class PythonTTSService {
         return this.allowedVoices; // Use allowed voices as fallback
       }
       
-      return voices;
+      if (!language) {
+        return voices;
+      }
+
+      return voices.filter((voice) => {
+        if (typeof voice === 'string') {
+          return voice.startsWith(language);
+        }
+
+        const locale = voice?.Locale || voice?.locale || '';
+        const shortName = voice?.ShortName || voice?.shortName || '';
+        return locale.startsWith(language) || shortName.startsWith(language);
+      });
     } catch (error) {
       logger.error('âŒ Failed to get available voices:', error.message);
       return this.allowedVoices;
@@ -173,6 +185,32 @@ class PythonTTSService {
     }
   }
 
+  async checkPythonServiceHealth() {
+    try {
+      const response = await axios.get(`${this.pythonServiceUrl}/health`, { timeout: 10000 });
+      return {
+        healthy: true,
+        serviceUrl: this.pythonServiceUrl,
+        data: response.data
+      };
+    } catch (error) {
+      return {
+        healthy: false,
+        serviceUrl: this.pythonServiceUrl,
+        error: error.message
+      };
+    }
+  }
+
+  async generateAudio(text, language = 'en-GB', voiceOverride) {
+    const voice = voiceOverride || this.languageMappings[language]?.voice || 'en-GB-SoniaNeural';
+    const requiredLanguage = this.VOICE_LANGUAGE[voice] || language || 'en-GB';
+    const audioBuffer = await this.generateSpeech(text, requiredLanguage, voice);
+    const publicId = `adhoc_${Date.now()}`;
+    const upload = await this.uploadToCloudinary(audioBuffer, publicId, requiredLanguage);
+    return upload.audioUrl;
+  }
+
   async uploadToCloudinary(buffer, publicId, language) {
     return new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
@@ -223,6 +261,61 @@ class PythonTTSService {
     throw error;
   }
 }
+
+  async generateAudioForAllLanguages(promptKey, text, forceRegenerate = false) {
+    const results = {};
+    const languages = Object.keys(this.languageMappings);
+
+    for (const language of languages) {
+      try {
+        const audioData = await this.getAudioForPrompt(
+          promptKey,
+          text,
+          language,
+          undefined,
+          undefined,
+          { id: `${promptKey}_${language}`, type: 'prompt', data: { promptKey } }
+        );
+
+        results[language] = {
+          success: true,
+          audioUrl: audioData.audioUrl,
+          publicId: audioData.publicId
+        };
+      } catch (error) {
+        results[language] = {
+          success: false,
+          error: error.message
+        };
+      }
+    }
+
+    return results;
+  }
+
+  async deleteAudio(promptKey, language) {
+    const candidateIds = [
+      `${promptKey}_${language}`,
+      `ivr-audio/${promptKey}_${language}`
+    ];
+
+    const results = [];
+    for (const id of candidateIds) {
+      try {
+        const result = await cloudinary.uploader.destroy(id, { resource_type: 'video' });
+        results.push({ id, result: result?.result || 'unknown' });
+      } catch (error) {
+        results.push({ id, error: error.message });
+      }
+    }
+
+    return {
+      success: true,
+      promptKey,
+      language,
+      results
+    };
+  }
 
   /**
    * ðŸ”¥ MAIN FIXED METHOD
@@ -486,10 +579,12 @@ class PythonTTSService {
   }
 
   getSupportedLanguages() {
-    return Object.keys(this.languageMappings).map(code => ({
-      code,
-      voice: this.languageMappings[code].voice
-    }));
+    return {
+      'en-GB': { name: 'English (United Kingdom)', voice: this.languageMappings['en-GB'].voice },
+      'en-US': { name: 'English (United States)', voice: this.languageMappings['en-US'].voice },
+      'ta-IN': { name: 'Tamil (India)', voice: this.languageMappings['ta-IN'].voice },
+      'hi-IN': { name: 'Hindi (India)', voice: this.languageMappings['hi-IN'].voice }
+    };
   }
 }
 

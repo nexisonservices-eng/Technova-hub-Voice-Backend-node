@@ -108,6 +108,33 @@ class CallController {
       res.status(500).json({ error: error.message });
     }
   }
+
+  async endCall(req, res) {
+    try {
+      const { callSid } = req.params;
+
+      if (!callSid) {
+        return res.status(400).json({ success: false, message: 'Call SID is required' });
+      }
+
+      await telephonyService.endCall(callSid);
+      await callStateService.endCall(callSid);
+
+      await Call.updateOne(
+        { callSid },
+        { $set: { status: 'completed', endTime: new Date() } }
+      );
+
+      res.json({
+        success: true,
+        message: 'Call ended successfully',
+        data: { callSid }
+      });
+    } catch (error) {
+      logger.error('End call error:', error);
+      res.status(500).json({ success: false, message: 'Failed to end call', error: error.message });
+    }
+  }
 }
 
 export default new CallController();

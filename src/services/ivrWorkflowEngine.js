@@ -1,10 +1,12 @@
-﻿import Workflow from '../models/Workflow.js';
+﻿﻿import Workflow from '../models/Workflow.js';
 import ExecutionLog from '../models/ExecutionLog.js';
 import logger from '../utils/logger.js';
 import twilio from 'twilio';
 import EventEmitter from 'events';
 import ivrExecutionEngine from './ivrExecutionEngine.js';
 import { emitIVRWorkflowUpdate, emitIVRWorkflowError, emitIVRWorkflowStats } from '../sockets/unifiedSocket.js';
+import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
+
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -66,7 +68,7 @@ class IVRWorkflowEngine extends EventEmitter {
             this.activeExecutions.set(callSid, executionState);
 
             this.emit('execution:started', { callSid, workflowId });
-            
+
             // Emit real-time analytics
             emitIVRWorkflowUpdate(callSid, {
                 event: 'execution_started',
@@ -76,10 +78,10 @@ class IVRWorkflowEngine extends EventEmitter {
                 destinationNumber,
                 timestamp: new Date()
             });
-            
+
             // Update overall stats
             this.emitWorkflowStats();
-            
+
             logger.info(`✅ Execution started: ${callSid} for workflow ${workflowId}`);
 
             return executionLog;
@@ -164,7 +166,7 @@ class IVRWorkflowEngine extends EventEmitter {
         }
 
         this.emit('node:visited', { callSid, nodeId, nodeType });
-        
+
         // Emit real-time node analytics
         emitIVRWorkflowUpdate(callSid, {
             event: 'node_visited',
@@ -242,7 +244,7 @@ class IVRWorkflowEngine extends EventEmitter {
             this.activeExecutions.delete(callSid);
 
             this.emit('execution:ended', { callSid, reason });
-            
+
             // Emit real-time completion analytics
             emitIVRWorkflowUpdate(callSid, {
                 event: 'execution_ended',
@@ -252,10 +254,10 @@ class IVRWorkflowEngine extends EventEmitter {
                 loopIterations: state.loopIterations,
                 timestamp: new Date()
             });
-            
+
             // Update overall stats
             this.emitWorkflowStats();
-            
+
             logger.info(`🏁 Execution ended: ${callSid} (reason: ${reason})`);
         } catch (error) {
             logger.error('Failed to end execution:', error);
@@ -275,7 +277,7 @@ class IVRWorkflowEngine extends EventEmitter {
                 nodeTypeDistribution: await this.getNodeTypeDistribution(),
                 timestamp: new Date()
             };
-            
+
             emitIVRWorkflowStats(stats);
         } catch (error) {
             logger.error('Failed to emit workflow stats:', error);
@@ -291,11 +293,11 @@ class IVRWorkflowEngine extends EventEmitter {
             today.setHours(0, 0, 0, 0);
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
-            
+
             const count = await ExecutionLog.countDocuments({
                 startTime: { $gte: today, $lt: tomorrow }
             });
-            
+
             return count;
         } catch (error) {
             logger.error('Error getting today execution count:', error);
@@ -312,7 +314,7 @@ class IVRWorkflowEngine extends EventEmitter {
             today.setHours(0, 0, 0, 0);
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
-            
+
             const result = await ExecutionLog.aggregate([
                 {
                     $match: {
@@ -327,7 +329,7 @@ class IVRWorkflowEngine extends EventEmitter {
                     }
                 }
             ]);
-            
+
             return result.length > 0 ? Math.round(result[0].avgDuration / 1000) : 0; // Convert to seconds
         } catch (error) {
             logger.error('Error getting average execution time:', error);
@@ -344,18 +346,18 @@ class IVRWorkflowEngine extends EventEmitter {
             today.setHours(0, 0, 0, 0);
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
-            
+
             const total = await ExecutionLog.countDocuments({
                 startTime: { $gte: today, $lt: tomorrow }
             });
-            
+
             if (total === 0) return 0;
-            
+
             const completed = await ExecutionLog.countDocuments({
                 startTime: { $gte: today, $lt: tomorrow },
                 status: 'completed'
             });
-            
+
             return Math.round((completed / total) * 100);
         } catch (error) {
             logger.error('Error getting success rate:', error);
@@ -372,7 +374,7 @@ class IVRWorkflowEngine extends EventEmitter {
             today.setHours(0, 0, 0, 0);
             const tomorrow = new Date(today);
             tomorrow.setDate(tomorrow.getDate() + 1);
-            
+
             const result = await ExecutionLog.aggregate([
                 {
                     $match: {
@@ -387,12 +389,12 @@ class IVRWorkflowEngine extends EventEmitter {
                     }
                 }
             ]);
-            
+
             const distribution = {};
             result.forEach(item => {
                 distribution[item._id] = item.count;
             });
-            
+
             return distribution;
         } catch (error) {
             logger.error('Error getting node type distribution:', error);
@@ -487,7 +489,7 @@ class IVRWorkflowEngine extends EventEmitter {
 
         } catch (error) {
             logger.error('Error generating TwiML:', error);
-            
+
             // Emit real-time error analytics
             if (callSid) {
                 emitIVRWorkflowError(callSid, {
@@ -645,8 +647,67 @@ class IVRWorkflowEngine extends EventEmitter {
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) throw new Error('Workflow not found');
 
+            // Get existing nodes to compare text changes
+            const existingNodes = workflow.nodes || [];
+            const existingNodeMap = new Map(existingNodes.map(n => [n.id, n]));
+
+            // Track nodes that need old audio deleted
+            const nodesToDeleteAudio = [];
+
             // Update configuration fields
-            if (workflowData.nodes) workflow.nodes = workflowData.nodes;
+            if (workflowData.nodes) {
+                // Check for text changes and clear audio URLs for changed nodes
+                workflowData.nodes = workflowData.nodes.map(node => {
+                    const existingNode = existingNodeMap.get(node.id);
+                    if (existingNode) {
+                        const oldText = existingNode.data?.messageText || existingNode.data?.text || existingNode.data?.message || '';
+                        const newText = node.data?.messageText || node.data?.text || node.data?.message || '';
+
+                        // If text changed, clear the audio URL to force regeneration
+                        if (oldText !== newText && newText.trim()) {
+                            logger.info(`📝 Text changed for node ${node.id}, clearing old audio URL`);
+
+                            // Track old audio for deletion
+                            const oldAudioUrl = existingNode.data?.audioUrl || existingNode.audioUrl;
+                            const oldAudioAssetId = existingNode.data?.audioAssetId || existingNode.audioAssetId;
+                            if (oldAudioUrl || oldAudioAssetId) {
+                                nodesToDeleteAudio.push({
+                                    nodeId: node.id,
+                                    audioUrl: oldAudioUrl,
+                                    audioAssetId: oldAudioAssetId
+                                });
+                            }
+
+                            // Clear audio URL to force regeneration
+                            node.data = {
+                                ...node.data,
+                                audioUrl: null,
+                                audioAssetId: null
+                            };
+                        }
+                    }
+                    return node;
+                });
+
+                workflow.nodes = workflowData.nodes;
+            }
+
+            // Delete old Cloudinary audio files asynchronously (don't block save)
+            if (nodesToDeleteAudio.length > 0) {
+                logger.info(`🗑️ Deleting ${nodesToDeleteAudio.length} old audio files from Cloudinary`);
+                nodesToDeleteAudio.forEach(async ({ nodeId, audioAssetId }) => {
+                    try {
+                        if (audioAssetId) {
+                            await deleteFromCloudinary(audioAssetId);
+                            logger.info(`✅ Deleted old audio for node ${nodeId}: ${audioAssetId}`);
+                        }
+                    } catch (deleteError) {
+                        logger.warn(`⚠️ Failed to delete old audio for node ${nodeId}:`, deleteError.message);
+                        // Don't fail the save if deletion fails
+                    }
+                });
+            }
+
             if (workflowData.edges) workflow.edges = workflowData.edges;
             if (workflowData.settings) {
                 workflow.config = {
@@ -660,26 +721,44 @@ class IVRWorkflowEngine extends EventEmitter {
             workflow.ttsStatus = 'completed';
 
             // Enqueue background TTS job for nodes that need audio
+            let ttsJobId = null;
+
+            // Debug logging to trace node processing
+            logger.info(`🔍 Checking ${workflow.nodes.length} nodes for audio generation needs`);
+            workflow.nodes.forEach((node, idx) => {
+                const data = node.data || {};
+                const hasText = !!(data.text || data.message || data.prompt || data.messageText);
+                const hasAudio = !!data.audioUrl;
+                const isSupportedType = ['message', 'menu', 'prompt', 'greeting', 'audio'].includes(node.type);
+                logger.info(`🔍 Node ${idx}: id=${node.id}, type=${node.type}, hasText=${hasText}, hasAudio=${hasAudio}, isSupportedType=${isSupportedType}`);
+                logger.info(`🔍 Node ${idx} data fields: ${Object.keys(data).join(', ')}`);
+            });
+
             const nodesNeedingAudio = workflow.nodes.filter(node => {
                 const nodeTypes = ['message', 'menu', 'prompt', 'greeting', 'audio'];
                 const data = node.data || {};
                 // Check if node type supports TTS, has text, AND doesn't already have audio
                 // This makes the process idempotent - hitting save twice won't regenerate existing audio
-                return nodeTypes.includes(node.type) &&
+                const needsAudio = nodeTypes.includes(node.type) &&
                     (data.text || data.message || data.prompt || data.messageText) &&
                     !data.audioUrl;
+                if (needsAudio) {
+                    logger.info(`✅ Node ${node.id} needs audio generation`);
+                }
+                return needsAudio;
             });
 
             if (nodesNeedingAudio.length > 0) {
+
                 try {
                     const ttsJobQueue = (await import('./ttsJobQueue.js')).default;
                     // ✅ Fire-and-forget background job (Fixes 30s timeout)
                     // The job queue handles processing asynchronously
-                    await ttsJobQueue.addJob(workflowId, nodesNeedingAudio, false);
+                    ttsJobId = await ttsJobQueue.addJob(workflowId, nodesNeedingAudio, false);
 
                     // Set status to pending since job is queued
                     workflow.ttsStatus = 'pending';
-                    logger.info(`✅ Queued background TTS job for ${nodesNeedingAudio.length} nodes in workflow ${workflowId}`);
+                    logger.info(`✅ Queued background TTS job ${ttsJobId} for ${nodesNeedingAudio.length} nodes in workflow ${workflowId}`);
                 } catch (queueError) {
                     logger.error(`❌ Failed to queue TTS job for workflow ${workflowId}:`, queueError);
                     workflow.ttsStatus = 'failed';
@@ -689,12 +768,19 @@ class IVRWorkflowEngine extends EventEmitter {
 
             await workflow.save();
 
-            return workflow;
+            // Return workflow with TTS job info for tracking
+            return {
+                ...workflow.toObject(),
+                ttsJobId,
+                nodesNeedingAudio
+            };
         } catch (error) {
             logger.error(`❌ Error in updateWorkflow for ${workflowId}:`, error);
             throw error;
         }
     }
+
+
 
     async addNode(workflowId, node, position) {
         try {
@@ -812,16 +898,113 @@ class IVRWorkflowEngine extends EventEmitter {
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) throw new Error('Workflow not found');
 
+            // Find the node being deleted to get its audio
+            const nodeToDelete = workflow.nodes.find(n => n.id === nodeId);
+
+            // Delete Cloudinary audio file if exists
+            if (nodeToDelete) {
+                // Check all possible locations for audio asset ID
+                let audioAssetId = nodeToDelete.data?.audioAssetId ||
+                    nodeToDelete.audioAssetId ||
+                    nodeToDelete.data?.audioUrl ||
+                    nodeToDelete.audioUrl;
+
+                // If we have an audio URL but no asset ID, extract it from the URL
+                if (!audioAssetId && (nodeToDelete.data?.audioUrl || nodeToDelete.audioUrl)) {
+                    const audioUrl = nodeToDelete.data?.audioUrl || nodeToDelete.audioUrl;
+                    // Extract public_id from Cloudinary URL
+                    // URL format: https://res.cloudinary.com/.../video/upload/v.../public_id.mp3
+                    const match = audioUrl.match(/\/video\/upload\/v\d+\/(.+)\.mp3$/);
+                    if (match) {
+                        audioAssetId = match[1];
+                        logger.info(`🔍 Extracted audioAssetId from URL for node ${nodeId}: ${audioAssetId}`);
+                    }
+                }
+
+                if (audioAssetId) {
+                    try {
+                        await deleteFromCloudinary(audioAssetId);
+                        logger.info(`🗑️ Deleted Cloudinary audio for deleted node ${nodeId}: ${audioAssetId}`);
+                    } catch (deleteError) {
+                        logger.warn(`⚠️ Failed to delete Cloudinary audio for node ${nodeId}:`, deleteError.message);
+                        // Don't fail the delete if Cloudinary deletion fails
+                    }
+                } else {
+                    logger.info(`ℹ️ No audio found to delete for node ${nodeId}`);
+                }
+            }
+
             workflow.nodes = workflow.nodes.filter(n => n.id !== nodeId);
             workflow.edges = workflow.edges.filter(e => e.source !== nodeId && e.target !== nodeId);
 
             await workflow.save();
+            logger.info(`✅ Deleted node ${nodeId} from workflow ${workflowId}`);
             return workflow;
         } catch (error) {
             logger.error('Error deleting node:', error);
             throw error;
         }
     }
+
+
+    /**
+     * Delete entire workflow and all associated audio files
+     */
+    async deleteWorkflow(workflowId) {
+        try {
+            const workflow = await Workflow.findById(workflowId);
+            if (!workflow) throw new Error('Workflow not found');
+
+            logger.info(`🗑️ Deleting workflow ${workflowId} and all associated audio files`);
+
+            // Delete all Cloudinary audio files for this workflow
+            const nodesWithAudio = workflow.nodes?.filter(n =>
+                n.data?.audioAssetId || n.audioAssetId || n.data?.audioUrl || n.audioUrl
+            ) || [];
+
+            if (nodesWithAudio.length > 0) {
+                logger.info(`🗑️ Found ${nodesWithAudio.length} nodes with audio to delete`);
+
+                for (const node of nodesWithAudio) {
+                    // Check all possible locations for audio asset ID
+                    let audioAssetId = node.data?.audioAssetId ||
+                        node.audioAssetId;
+
+                    // If no asset ID but have URL, extract from URL
+                    if (!audioAssetId && (node.data?.audioUrl || node.audioUrl)) {
+                        const audioUrl = node.data?.audioUrl || node.audioUrl;
+                        // Extract public_id from Cloudinary URL
+                        const match = audioUrl.match(/\/video\/upload\/v\d+\/(.+)\.mp3$/);
+                        if (match) {
+                            audioAssetId = match[1];
+                            logger.info(`🔍 Extracted audioAssetId from URL for node ${node.id}: ${audioAssetId}`);
+                        }
+                    }
+
+                    if (audioAssetId) {
+                        try {
+                            await deleteFromCloudinary(audioAssetId);
+                            logger.info(`✅ Deleted Cloudinary audio for node ${node.id}: ${audioAssetId}`);
+                        } catch (deleteError) {
+                            logger.warn(`⚠️ Failed to delete Cloudinary audio for node ${node.id}:`, deleteError.message);
+                            // Continue deleting other files even if one fails
+                        }
+                    }
+                }
+            }
+
+            // Delete the workflow from database
+            await Workflow.findByIdAndDelete(workflowId);
+
+            logger.info(`✅ Successfully deleted workflow ${workflowId} and all associated audio`);
+            return { success: true, deletedNodes: nodesWithAudio.length };
+        } catch (error) {
+            logger.error(`❌ Error deleting workflow ${workflowId}:`, error);
+            throw error;
+        }
+    }
+
+
 
     /**
      * Validate workflow graph (structural + execution safety)
@@ -971,4 +1154,3 @@ class IVRWorkflowEngine extends EventEmitter {
 }
 
 export default new IVRWorkflowEngine();
-

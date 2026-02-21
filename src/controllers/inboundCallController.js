@@ -1,4 +1,4 @@
-import twilio from 'twilio';
+﻿import twilio from 'twilio';
 import inboundCallService from '../services/inboundCallService.js';
 import callStateService from '../services/callStateService.js';
 import callbackService from '../services/callbackService.js';
@@ -7,6 +7,7 @@ import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import logger from '../utils/logger.js';
 import crypto from 'crypto';
 import Call from '../models/call.js';
+import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 
 // Import Socket.IO instance for real-time events
@@ -66,7 +67,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“¥ Handle inbound call with enhanced routing
+   * Ã°Å¸â€œÂ¥ Handle inbound call with enhanced routing
    */
   async handleInboundCall(req, res) {
     try {
@@ -76,7 +77,7 @@ class InboundCallController {
         return res.status(400).send('Invalid inbound call data');
       }
 
-      logger.info(`ðŸ“ž Enhanced inbound call processing: ${CallSid} from ${From}`);
+      logger.info(`Ã°Å¸â€œÅ¾ Enhanced inbound call processing: ${CallSid} from ${From}`);
 
       // Process through enhanced inbound service
       const result = await inboundCallService.processIncomingCall({
@@ -118,7 +119,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸŽ›ï¸ Handle IVR menu selection
+   * Ã°Å¸Å½â€ºÃ¯Â¸Â Handle IVR menu selection
    */
   async handleIVRSelection(req, res) {
     try {
@@ -154,7 +155,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Handle call status updates from Twilio
+   * Ã°Å¸â€œÅ¾ Handle call status updates from Twilio
    */
   async handleCallStatus(req, res) {
     try {
@@ -200,7 +201,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“¬ Handle voicemail recording
+   * Ã°Å¸â€œÂ¬ Handle voicemail recording
    */
   async handleVoicemail(req, res) {
     try {
@@ -236,7 +237,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Handle callback request
+   * Ã°Å¸â€œÅ¾ Handle callback request
    */
   async handleCallbackOption(req, res) {
     try {
@@ -289,7 +290,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“± Handle callback number collection
+   * Ã°Å¸â€œÂ± Handle callback number collection
    */
   async handleCallbackNumber(req, res) {
     try {
@@ -327,7 +328,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“… Handle booking input
+   * Ã°Å¸â€œâ€¦ Handle booking input
    */
   async handleBookingInput(req, res) {
     try {
@@ -352,7 +353,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“Š Get queue status (for dashboard)
+   * Ã°Å¸â€œÅ  Get queue status (for dashboard)
    */
   async getQueueStatus(req, res) {
     try {
@@ -373,7 +374,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ˆ Get inbound call analytics
+   * Ã°Å¸â€œË† Get inbound call analytics
    */
   async getInboundAnalytics(req, res) {
     try {
@@ -517,7 +518,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“¥ Export inbound analytics data
+   * Ã°Å¸â€œÂ¥ Export inbound analytics data
    */
   async exportAnalytics(req, res) {
     try {
@@ -584,7 +585,7 @@ class InboundCallController {
   }
 
   /**
-   * 🎛️ Update IVR configuration
+   * ðŸŽ›ï¸ Update IVR configuration
    */
   async updateIVRConfig(req, res) {
     try {
@@ -765,14 +766,14 @@ class InboundCallController {
       // Check if menu already exists by multiple identifiers
       let menu = null;
 
-      logger.info('ðŸ” DEBUG: Searching for menu with menuName:', menuName);
+      logger.info('Ã°Å¸â€Â DEBUG: Searching for menu with menuName:', menuName);
 
       // Try to find by ObjectId first (if menuName looks like a valid ObjectId)
       if (menuName && menuName.length === 24 && /^[0-9a-fA-F]{24}$/.test(menuName)) {
         try {
           const { ObjectId } = await import('mongodb');
           menu = await Workflow.findOne({ _id: new ObjectId(menuName) });
-          logger.info('ðŸ” DEBUG: Found by ObjectId:', menu?._id);
+          logger.info('Ã°Å¸â€Â DEBUG: Found by ObjectId:', menu?._id);
         } catch (err) {
           // Invalid ObjectId, continue with other searches
         }
@@ -786,10 +787,10 @@ class InboundCallController {
             { displayName: menuName }
           ]
         });
-        logger.info('ðŸ” DEBUG: Found by promptKey/displayName:', menu?._id, 'promptKey:', menu?.promptKey, 'displayName:', menu?.displayName);
+        logger.info('Ã°Å¸â€Â DEBUG: Found by promptKey/displayName:', menu?._id, 'promptKey:', menu?.promptKey, 'displayName:', menu?.displayName);
       }
 
-      logger.info('ðŸ” DEBUG: Final menu result:', menu ? 'EXISTING - WILL UPDATE' : 'NOT FOUND - WILL CREATE');
+      logger.info('Ã°Å¸â€Â DEBUG: Final menu result:', menu ? 'EXISTING - WILL UPDATE' : 'NOT FOUND - WILL CREATE');
 
       // Track whether this is a create or update operation
       const wasExistingMenu = !!menu;
@@ -817,20 +818,43 @@ class InboundCallController {
         if (audioNode) {
           // Audio node takes precedence
           greetingText = audioNode.data.mode === 'tts' ? audioNode.data.messageText : null;
-          logger.info(`ðŸ”§ Using audio node for workflow ${menuName}: "${greetingText}"`);
+          logger.info(`Ã°Å¸â€Â§ Using audio node for workflow ${menuName}: "${greetingText}"`);
         } else if (greetingNode) {
           // Fallback to greeting node for backward compatibility
           greetingText = greetingNode.data.text || 'Welcome to our service!';
-          logger.info(`ðŸ”§ Using greeting node for workflow ${menuName}: "${greetingText}"`);
+          logger.info(`Ã°Å¸â€Â§ Using greeting node for workflow ${menuName}: "${greetingText}"`);
         } else {
           // No greeting or audio node found
           greetingText = 'Welcome to our service!';
-          logger.info(`ðŸ”§ Using default greeting for workflow ${menuName}: "${greetingText}"`);
+          logger.info(`Ã°Å¸â€Â§ Using default greeting for workflow ${menuName}: "${greetingText}"`);
         }
       }
 
-      // Generate TTS audio if we have greeting text
-      if (greetingText && greetingText.trim()) {
+      // Reuse existing greeting audio when text is unchanged
+      if (menu && greetingText && greetingText.trim()) {
+        const greetingTextHash = crypto.createHash('sha256').update(greetingText).digest('hex');
+        const existingAudioFile = (menu.audioFiles || []).find(
+          (file) => file.textHash === greetingTextHash && file.audioUrl
+        );
+
+        if (existingAudioFile) {
+          audioData = {
+            audioUrl: existingAudioFile.audioUrl,
+            audioAssetId: existingAudioFile.audioAssetId,
+            duration: existingAudioFile.duration,
+            fromCache: true
+          };
+          logger.info(`ðŸ” Reusing existing greeting audio for menu ${menuName} (text hash match)`);
+        }
+      }
+
+      // Generate TTS audio if we have greeting text and no reusable audio
+      let ttsSuccess = false;
+      let ttsError = null;
+      
+      if (audioData?.audioUrl) {
+        ttsSuccess = true;
+      } else if (greetingText && greetingText.trim()) {
         try {
           logger.info(`Generating TTS audio for IVR menu: ${menuName}`);
           audioData = await workflowAudioService.generateSingleAudio(
@@ -838,25 +862,36 @@ class InboundCallController {
             voiceId,
             language
           );
+          
+          // Validate audio data was actually generated
+          if (!audioData || !audioData.audioUrl) {
+            throw new Error('TTS service returned empty audio data');
+          }
+          
+          ttsSuccess = true;
           logger.info(`ðŸŽµ TTS audio generated successfully:`, {
-            audioUrl: audioData?.audioUrl,
-            audioAssetId: audioData?.publicId,
-            duration: audioData?.duration,
+            audioUrl: audioData.audioUrl,
+            audioAssetId: audioData.audioAssetId || audioData.publicId,
+            duration: audioData.duration,
             fullAudioData: audioData
           });
         } catch (audioError) {
-          logger.error(`TTS audio generation failed for menu ${menuName}:`, {
+          ttsError = audioError;
+          logger.error(`âŒ TTS audio generation failed for menu ${menuName}:`, {
             error: audioError.message,
             stack: audioError.stack,
             greetingText,
-            voiceId
+            voiceId,
+            audioData: audioData
           });
-          // Continue without audio - menu will work with text-to-speech fallback
+          // Don't set audioData to null here - keep any partial data for debugging
+          // But mark as failed so response shows proper status
         }
       }
 
+
       // Simplified create/update logic
-      const menuData = {
+      let menuData = {
         promptKey: menuName,
         displayName: config.displayName || menuName.replace(/ivr_[a-z]+_[0-9]+/, 'New IVR') || menuName,
         nodes: config.nodes || [],
@@ -871,10 +906,19 @@ class InboundCallController {
       if (!isWorkflowBased) {
         menuData.text = config.greeting;
       } else {
-        // For workflow-based IVRs, ensure there's at least a greeting node
-        const greetingNode = menuData.nodes.find(node => node.type === 'greeting');
-        if (!greetingNode) {
-          logger.info(`ðŸ”§ Adding default greeting node to workflow ${menuName} - no greeting node found`);
+        // For workflow-based IVRs, ensure there is a start audio node, and avoid duplicate default-greeting IDs.
+        menuData.nodes = (menuData.nodes || []).filter((node, index, arr) => {
+          if (!node?.id) return true;
+          if (node.id !== 'default-greeting') return true;
+          return arr.findIndex((n) => n?.id === 'default-greeting') === index;
+        });
+
+        const hasStartAudioNode = menuData.nodes.some(
+          (node) => node?.type === 'greeting' || node?.type === 'audio'
+        );
+
+        if (!hasStartAudioNode) {
+          logger.info(`Adding default greeting node to workflow ${menuName} - no greeting/audio node found`);
           menuData.nodes.push({
             id: 'default-greeting',
             type: 'greeting',
@@ -888,8 +932,8 @@ class InboundCallController {
         }
       }
 
-      // Add audio files if generation succeeded
-      if (audioData && greetingText) {
+      // Add audio files only when fresh TTS generation succeeded
+      if (ttsSuccess && !audioData?.fromCache && audioData?.audioUrl && greetingText) {
         const newTextHash = crypto.createHash('sha256').update(greetingText).digest('hex');
 
         // Check for existing menu to avoid duplicates
@@ -899,7 +943,7 @@ class InboundCallController {
           );
 
           if (existingAudioFile) {
-            logger.info(`ðŸ”„ Audio file with same text already exists, skipping generation. Hash: ${newTextHash}`);
+            logger.info(`Ã°Å¸â€â€ž Audio file with same text already exists, skipping generation. Hash: ${newTextHash}`);
           } else {
             const audioFileData = this.createAudioFileData(audioData, greetingText, voiceId);
             menuData.audioFiles = (menu.audioFiles || []).concat(audioFileData);
@@ -912,10 +956,48 @@ class InboundCallController {
 
       // Create or update menu
       if (menu) {
-        // Update existing menu
-        Object.assign(menu, menuData);
-        menu.updatedAt = new Date();
-        await menu.save();
+        // Update existing menu with retry for optimistic concurrency conflicts.
+        // This endpoint can be hit concurrently from UI + socket-driven refreshes.
+        let retriesLeft = 2;
+        while (true) {
+          try {
+            Object.assign(menu, menuData);
+            menu.updatedAt = new Date();
+            await menu.save();
+            break;
+          } catch (saveError) {
+            if (saveError?.name !== 'VersionError' || retriesLeft <= 0) {
+              throw saveError;
+            }
+
+            logger.warn(`Version conflict while updating IVR menu ${menuName}. Retrying... (${3 - retriesLeft}/2)`);
+            retriesLeft -= 1;
+
+            const latestMenu = await Workflow.findById(menu._id);
+            if (!latestMenu) {
+              throw new Error(`IVR menu '${menuName}' no longer exists`);
+            }
+
+            // Preserve newly generated audio records while rebasing on latest version.
+            if (Array.isArray(menuData.audioFiles) && menuData.audioFiles.length > 0) {
+              const mergedAudioFiles = [...(latestMenu.audioFiles || [])];
+              for (const newAudio of menuData.audioFiles) {
+                const exists = mergedAudioFiles.some(
+                  (existingAudio) =>
+                    existingAudio.textHash &&
+                    newAudio.textHash &&
+                    existingAudio.textHash === newAudio.textHash
+                );
+                if (!exists) {
+                  mergedAudioFiles.push(newAudio);
+                }
+              }
+              menuData.audioFiles = mergedAudioFiles;
+            }
+
+            menu = latestMenu;
+          }
+        }
       } else {
         // Create new menu
         menu = new Workflow(menuData);
@@ -984,10 +1066,10 @@ class InboundCallController {
 
         if (isCreate) {
           io.emit('ivr_config_created', eventData);
-          logger.info(`ðŸ“¡ Socket.IO emitted: ivr_config_created for ${menuName} with complete data`);
+          logger.info(`Ã°Å¸â€œÂ¡ Socket.IO emitted: ivr_config_created for ${menuName} with complete data`);
         } else {
           io.emit('ivr_config_updated', eventData);
-          logger.info(`ðŸ“¡ Socket.IO emitted: ivr_config_updated for ${menuName} with complete data`);
+          logger.info(`Ã°Å¸â€œÂ¡ Socket.IO emitted: ivr_config_updated for ${menuName} with complete data`);
         }
       }
 
@@ -995,20 +1077,40 @@ class InboundCallController {
         ? menu.audioFiles[menu.audioFiles.length - 1]
         : null;
 
+      // Build response with proper audio data handling
+      const responseAudioUrl = ttsSuccess && audioData?.audioUrl 
+        ? audioData.audioUrl 
+        : (audioFile?.audioUrl || null);
+        
+      const responseAudioAssetId = ttsSuccess && (audioData?.audioAssetId || audioData?.publicId)
+        ? (audioData.audioAssetId || audioData.publicId)
+        : (audioFile?.audioAssetId || null);
+
       const action = isCreate ? 'created' : 'updated';
+      
+      logger.info(`ðŸ“¤ Building IVR response for ${menuName}:`, {
+        ttsSuccess,
+        hasAudioData: !!audioData,
+        audioUrl: responseAudioUrl,
+        audioAssetId: responseAudioAssetId,
+        ttsError: ttsError?.message
+      });
+      
       res.json({
         success: true,
         message: `IVR menu '${menuName}' ${action} successfully`,
+        ttsStatus: ttsSuccess ? 'completed' : (ttsError ? 'failed' : 'skipped'),
         ivrMenu: {
           _id: menu._id,
           ivrName: menu.promptKey,
-          displayName: menu.displayName, // Add displayName to response
+          displayName: menu.displayName,
           greeting: {
             text: menu.text,
-            audioUrl: audioData?.audioUrl || null,
-            audioAssetId: audioData?.audioAssetId || null, // âœ… FIXED: Use correct field from TTS response
+            audioUrl: responseAudioUrl,
+            audioAssetId: responseAudioAssetId,
             voice: config.voiceId || config.voice || menu.menuConfig?.voiceId || 'en-GB-SoniaNeural'
           },
+
           menuOptions: (menu.menuConfig?.options || []).map(opt => ({
             _id: opt._id,
             digit: opt.digit,
@@ -1021,7 +1123,7 @@ class InboundCallController {
             maxAttempts: config.maxAttempts || 3,
             invalidInputMessage: config.invalidInputMessage || 'Invalid selection. Please try again.'
           },
-          // âœ… ALWAYS include workflowConfig with proper structure for frontend canvas
+          // Ã¢Å“â€¦ ALWAYS include workflowConfig with proper structure for frontend canvas
           workflowConfig: {
             nodes: menu.nodes || [],
             edges: menu.edges || [],
@@ -1044,7 +1146,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ—‘ï¸ Delete IVR configuration
+   * Ã°Å¸â€”â€˜Ã¯Â¸Â Delete IVR configuration
    */
   async deleteIVRConfig(req, res) {
     try {
@@ -1097,7 +1199,7 @@ class InboundCallController {
         });
       }
 
-      // ðŸ—‘ï¸ STEP 1: Delete Cloudinary audio assets (VERY IMPORTANT)
+      // Ã°Å¸â€”â€˜Ã¯Â¸Â STEP 1: Delete Cloudinary audio assets (VERY IMPORTANT)
       let cloudinaryAssetsDeleted = false;
       const deletedAudioAssetIds = []; // Track deleted asset IDs for response
 
@@ -1111,7 +1213,7 @@ class InboundCallController {
             if (audioFile.audioAssetId) {
               await cloudinaryUtils.deleteFile(audioFile.audioAssetId);
               deletedAudioAssetIds.push(audioFile.audioAssetId);
-              logger.info(`ðŸ—‘ï¸ Deleted audio from Cloudinary: ${audioFile.audioAssetId}`);
+              logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted audio from Cloudinary: ${audioFile.audioAssetId}`);
             }
           }
         }
@@ -1122,26 +1224,26 @@ class InboundCallController {
             if (option.audioAssetId) {
               await cloudinaryUtils.deleteFile(option.audioAssetId);
               deletedAudioAssetIds.push(option.audioAssetId);
-              logger.info(`ðŸ—‘ï¸ Deleted option audio from Cloudinary: ${option.audioAssetId}`);
+              logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted option audio from Cloudinary: ${option.audioAssetId}`);
             }
           }
         }
 
         cloudinaryAssetsDeleted = true;
       } catch (cloudinaryError) {
-        logger.error('âš ï¸ Failed to delete Cloudinary assets:', cloudinaryError);
+        logger.error('Ã¢Å¡Â Ã¯Â¸Â Failed to delete Cloudinary assets:', cloudinaryError);
         // Continue with DB deletion even if Cloudinary fails
       }
 
-      // ðŸ—‘ï¸ STEP 2: Delete from database (hard delete, not soft delete)
+      // Ã°Å¸â€”â€˜Ã¯Â¸Â STEP 2: Delete from database (hard delete, not soft delete)
       await Workflow.findByIdAndDelete(menuId);
 
       // Remove from in-memory service
       inboundCallService.ivrMenus.delete(menu.promptKey);
 
-      logger.info(`ðŸ—‘ï¸ IVR menu deleted from database: ${menu.promptKey} (ID: ${menuId})`);
+      logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â IVR menu deleted from database: ${menu.promptKey} (ID: ${menuId})`);
 
-      // ðŸ“¡ STEP 3: Emit socket event for frontend updates
+      // Ã°Å¸â€œÂ¡ STEP 3: Emit socket event for frontend updates
       if (io) {
         const eventData = {
           menuId: menu._id,
@@ -1152,10 +1254,10 @@ class InboundCallController {
         };
 
         io.emit('ivr_config_deleted', eventData);
-        logger.info(`ðŸ“¡ Socket.IO emitted: ivr_config_deleted for ${menu.promptKey}`);
+        logger.info(`Ã°Å¸â€œÂ¡ Socket.IO emitted: ivr_config_deleted for ${menu.promptKey}`);
       }
 
-      // âœ… STEP 4: Return comprehensive success response
+      // Ã¢Å“â€¦ STEP 4: Return comprehensive success response
       res.json({
         success: true,
         message: `IVR menu '${menu.promptKey || menu.ivrName}' deleted successfully`,
@@ -1177,22 +1279,51 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“‹ Get IVR configurations
+   * Ã°Å¸â€œâ€¹ Get IVR configurations
    */
   async getIVRConfigs(req, res) {
     try {
       // Import Workflow model to get data from database
       const { default: Workflow } = await import('../models/Workflow.js');
 
-      logger.info('ðŸ” Querying IVR workflows with filter: { isActive: true }');
+      logger.info('Ã°Å¸â€Â Querying IVR workflows with filter: { isActive: true }');
 
       // Get all IVR workflows from database
       const menus = await Workflow.find({ isActive: true })
         .select('promptKey displayName text nodes edges config status tags createdAt updatedAt')
         .sort({ promptKey: 1 });
 
-      logger.info(`ðŸ“Š Found ${menus.length} IVR menus in database`);
-      logger.info('ðŸ“‹ Raw menu data:', JSON.stringify(menus, null, 2));
+      const workflowIds = menus.map((menu) => menu._id);
+      const usageByWorkflow = new Map();
+
+      if (workflowIds.length > 0) {
+        const usageStats = await WorkflowExecution.aggregate([
+          { $match: { workflowId: { $in: workflowIds } } },
+          {
+            $group: {
+              _id: '$workflowId',
+              totalExecutions: { $sum: 1 },
+              uniqueContacts: { $addToSet: '$callerNumber' }
+            }
+          },
+          {
+            $project: {
+              totalExecutions: 1,
+              contactsUsed: { $size: '$uniqueContacts' }
+            }
+          }
+        ]);
+
+        usageStats.forEach((item) => {
+          usageByWorkflow.set(String(item._id), {
+            contactsUsed: item.contactsUsed || 0,
+            totalExecutions: item.totalExecutions || 0
+          });
+        });
+      }
+
+      logger.info(`Ã°Å¸â€œÅ  Found ${menus.length} IVR menus in database`);
+      logger.info('Ã°Å¸â€œâ€¹ Raw menu data:', JSON.stringify(menus, null, 2));
 
       // Transform to match expected format using Workflow structure
       const formattedMenus = menus.map(menu => {
@@ -1206,7 +1337,7 @@ class InboundCallController {
         // Validate input nodes and filter out incomplete ones
         const validInputNodes = inputNodes.filter(node => {
           if (!node.data?.digit) {
-            logger.warn(`âš ï¸ Input node missing digit in menu ${menu.promptKey}, skipping node`);
+            logger.warn(`Ã¢Å¡Â Ã¯Â¸Â Input node missing digit in menu ${menu.promptKey}, skipping node`);
             return false;
           }
           return true;
@@ -1239,6 +1370,8 @@ class InboundCallController {
           },
           status: menu.status || (menu.isActive ? 'active' : 'inactive'),
           tags: menu.tags || [],
+          contactsUsed: usageByWorkflow.get(String(menu._id))?.contactsUsed || 0,
+          totalExecutions: usageByWorkflow.get(String(menu._id))?.totalExecutions || 0,
           nodeCount: menu.nodeCount,
           edgeCount: menu.edgeCount,
           isComplete: menu.isComplete,
@@ -1247,7 +1380,7 @@ class InboundCallController {
         };
       });
 
-      logger.info('âœ… Formatted menus:', JSON.stringify(formattedMenus, null, 2));
+      logger.info('Ã¢Å“â€¦ Formatted menus:', JSON.stringify(formattedMenus, null, 2));
 
       res.json({
         success: true,
@@ -1261,7 +1394,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Schedule callback for inbound call
+   * Ã°Å¸â€œÅ¾ Schedule callback for inbound call
    */
   async scheduleCallback(req, res) {
     try {
@@ -1321,7 +1454,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Get callback statistics
+   * Ã°Å¸â€œÅ¾ Get callback statistics
    */
   async getCallbackStats(req, res) {
     try {
@@ -1338,7 +1471,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Get active callbacks
+   * Ã°Å¸â€œÅ¾ Get active callbacks
    */
   async getActiveCallbacks(req, res) {
     try {
@@ -1365,7 +1498,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Cancel callback
+   * Ã°Å¸â€œÅ¾ Cancel callback
    */
   async cancelCallback(req, res) {
     try {
@@ -1401,7 +1534,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Reschedule callback
+   * Ã°Å¸â€œÅ¾ Reschedule callback
    */
   async rescheduleCallback(req, res) {
     try {
@@ -1466,7 +1599,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ“ž Get callbacks by phone number
+   * Ã°Å¸â€œÅ¾ Get callbacks by phone number
    */
   async getCallbacksByPhone(req, res) {
     try {
@@ -1505,7 +1638,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ‘¥ Get agent statistics
+   * Ã°Å¸â€˜Â¥ Get agent statistics
    */
   async getAgentStats(req, res) {
     try {
@@ -1520,7 +1653,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ‘¥ Add agent to system
+   * Ã°Å¸â€˜Â¥ Add agent to system
    * NOTE: Agents are stored in memory only. Consider DB persistence for production use.
    */
   async addAgent(req, res) {
@@ -1555,7 +1688,7 @@ class InboundCallController {
   }
 
   /**
-   * ðŸ‘¥ Remove agent from system
+   * Ã°Å¸â€˜Â¥ Remove agent from system
    * NOTE: Agents are stored in memory only. Consider DB persistence for production use.
    */
   async removeAgent(req, res) {
@@ -1587,4 +1720,3 @@ class InboundCallController {
 }
 
 export default InboundCallController;
-

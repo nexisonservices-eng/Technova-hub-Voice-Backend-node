@@ -6,6 +6,7 @@
 // Node Types
 export const NODE_TYPES = {
   GREETING: 'greeting',
+  AUDIO: 'audio',  // Added for frontend compatibility
   MENU: 'menu',
   USER_INPUT: 'input',
   SPEECH_INPUT: 'speech_input',
@@ -57,6 +58,41 @@ export const NODE_CONFIGS = {
     }
   },
 
+  // AUDIO type - Frontend-compatible version of GREETING
+  [NODE_TYPES.AUDIO]: {
+    name: 'Audio Message',
+    category: NODE_CATEGORIES.INTERACTION,
+    icon: '🔊',
+    description: 'Play audio message (TTS or uploaded file)',
+    color: '#4CAF50',
+    inputs: 1,
+    outputs: ['next', 'timeout'],
+    dataSchema: {
+      // Frontend field names (mapped in IVRMenuCard.jsx)
+      mode: { type: 'select', options: ['tts', 'upload'], default: 'tts', label: 'Audio Mode' },
+      messageText: { type: 'string', required: true, label: 'Message Text (for TTS)', condition: { mode: 'tts' } },
+      voice: { type: 'string', default: 'en-GB-SoniaNeural', label: 'Voice' },
+      language: { type: 'string', default: 'en-GB', label: 'Language' },
+      audioUrl: { type: 'url', label: 'Audio File URL', condition: { mode: 'upload' } },
+      audioAssetId: { type: 'string', label: 'Audio Asset ID' },
+      afterPlayback: { type: 'select', options: ['next', 'wait'], default: 'next', label: 'After Playback' },
+      timeoutSeconds: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout (seconds)' },
+      maxRetries: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Retries' },
+      fallbackAudioNodeId: { type: 'string', label: 'Fallback Audio Node' },
+      // Backend-mapped field names (for compatibility)
+      text: { type: 'string', label: 'Text (mapped from messageText)' },
+      timeout: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout' },
+      max_retries: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Retries' }
+    },
+    validation: {
+      required: ['mode'],
+      rules: {
+        messageText: { minLength: 1, maxLength: 500, condition: { mode: 'tts' } },
+        audioUrl: { required: true, condition: { mode: 'upload' } }
+      }
+    }
+  },
+
   [NODE_TYPES.USER_INPUT]: {
     name: 'User Input',
     category: NODE_CATEGORIES.INTERACTION,
@@ -66,22 +102,25 @@ export const NODE_CONFIGS = {
     inputs: 1,
     outputs: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '*', '#', 'timeout', 'no_match'],
     dataSchema: {
-      text: { type: 'string', required: true, label: 'Prompt Text' },
-      inputType: { type: 'select', options: ['digits', 'speech', 'both'], default: 'digits', label: 'Input Type' },
-      numDigits: { type: 'number', default: 1, min: 1, max: 20, label: 'Number of Digits' },
-      finishOnKey: { type: 'string', default: '#', label: 'Finish On Key' },
-      speechTimeout: { type: 'number', default: 5, min: 1, max: 30, label: 'Speech Timeout (seconds)' },
-      speechModel: { type: 'select', options: ['default', 'phone_number', 'universal'], default: 'default', label: 'Speech Model' },
-      timeout: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout (seconds)' },
-      maxRetries: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Retries' },
-      invalidInputMessage: { type: 'string', default: 'Invalid input. Please try again.', label: 'Invalid Input Message' }
+      digit: { type: 'string', default: '1', label: 'Digit' },
+      label: { type: 'string', default: '', label: 'Label' },
+      action: { type: 'select', options: ['transfer', 'voicemail', 'menu', 'end'], default: 'transfer', label: 'Action' },
+      destination: { type: 'string', label: 'Destination', placeholder: '+1234567890' },
+      promptAudioNodeId: { type: 'string', label: 'Prompt Audio Node ID' },
+      invalidAudioNodeId: { type: 'string', label: 'Invalid Audio Node ID' },
+      timeoutAudioNodeId: { type: 'string', label: 'Timeout Audio Node ID' },
+      maxAttempts: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Attempts' },
+      timeoutSeconds: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout (seconds)' },
+      // Backend-mapped fields
+      timeout: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout' },
+      max_attempts: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Attempts' }
     },
     validation: {
-      required: ['text'],
+      required: ['digit', 'action'],
       rules: {
-        text: { minLength: 1, maxLength: 500 },
+        destination: { pattern: /^\+?[1-9]\d{1,14}$/, condition: { action: 'transfer' } },
         timeout: { min: 1, max: 60 },
-        maxRetries: { min: 1, max: 10 }
+        maxAttempts: { min: 1, max: 10 }
       }
     }
   },
@@ -95,18 +134,20 @@ export const NODE_CONFIGS = {
     inputs: 1,
     outputs: ['true', 'false'],
     dataSchema: {
-      variable: { type: 'string', required: true, label: 'Variable Name' },
+      condition: { type: 'select', options: ['business_hours', 'caller_id', 'custom'], default: 'business_hours', label: 'Condition Type' },
+      variable: { type: 'string', label: 'Variable Name' },
       operator: { type: 'select', options: ['equals', 'not_equals', 'contains', 'greater_than', 'less_than', 'exists', 'regex'], default: 'equals', label: 'Operator' },
-      value: { type: 'string', required: true, label: 'Value' },
-      customVariableName: { type: 'string', label: 'Custom Variable Name' },
-      caseSensitive: { type: 'boolean', default: false, label: 'Case Sensitive' },
-      truePathMessage: { type: 'string', label: 'True Path Message' },
-      falsePathMessage: { type: 'string', label: 'False Path Message' }
+      value: { type: 'string', label: 'Value' },
+      truePath: { type: 'string', label: 'True Path Node ID' },
+      falsePath: { type: 'string', label: 'False Path Node ID' },
+      // Backend-mapped fields
+      true_path: { type: 'string', label: 'True Path' },
+      false_path: { type: 'string', label: 'False Path' }
     },
     validation: {
-      required: ['variable', 'operator', 'value'],
+      required: ['condition'],
       rules: {
-        variable: { minLength: 1, maxLength: 100 },
+        variable: { minLength: 1, maxLength: 100, condition: { condition: 'custom' } },
         value: { maxLength: 200 }
       }
     }
@@ -121,20 +162,21 @@ export const NODE_CONFIGS = {
     inputs: 1,
     outputs: ['completed', 'timeout', 'error'],
     dataSchema: {
-      text: { type: 'string', required: true, label: 'Voicemail Prompt' },
+      text: { type: 'string', default: 'Please leave your message after the beep.', label: 'Voicemail Prompt' },
       maxLength: { type: 'number', default: 60, min: 1, max: 300, label: 'Max Length (seconds)' },
       transcribe: { type: 'boolean', default: true, label: 'Transcribe Recording' },
       playBeep: { type: 'boolean', default: true, label: 'Play Beep' },
-      recordingUrl: { type: 'url', label: 'Recording Webhook URL' },
-      emailNotifications: { type: 'array', label: 'Email Notifications', itemSchema: { email: { type: 'email', required: true, label: 'Email Address' }, conditions: { type: 'string', label: 'Send Conditions' } } },
-      silenceTimeout: { type: 'number', default: 5, min: 1, max: 30, label: 'Silence Timeout (seconds)' }
+      greetingAudioNodeId: { type: 'string', label: 'Greeting Audio Node ID' },
+      mailbox: { type: 'string', default: 'general', label: 'Mailbox' },
+      storageRoute: { type: 'string', label: 'Storage Route' },
+      // Backend-mapped fields
+      max_length: { type: 'number', default: 60, min: 1, max: 300, label: 'Max Length' },
+      greeting_audio_node_id: { type: 'string', label: 'Greeting Audio Node ID' }
     },
     validation: {
-      required: ['text'],
       rules: {
         text: { minLength: 1, maxLength: 500 },
-        maxLength: { min: 1, max: 300 },
-        silenceTimeout: { min: 1, max: 30 }
+        maxLength: { min: 1, max: 300 }
       }
     }
   },
@@ -149,13 +191,11 @@ export const NODE_CONFIGS = {
     outputs: ['answered', 'busy', 'no_answer', 'failed'],
     dataSchema: {
       destination: { type: 'string', required: true, label: 'Destination Number', placeholder: '+1234567890' },
+      label: { type: 'string', label: 'Label' },
       announceText: { type: 'string', label: 'Announcement Text', placeholder: 'Transferring you now...' },
       timeout: { type: 'number', default: 30, min: 10, max: 120, label: 'Ring Timeout (seconds)' },
-      callerId: { type: 'string', label: 'Caller ID', placeholder: '+1234567890' },
-      record: { type: 'boolean', default: false, label: 'Record Transfer' },
-      musicOnHold: { type: 'select', options: ['default', 'none', 'custom'], default: 'default', label: 'Music on Hold' },
-      customMusicUrl: { type: 'url', label: 'Custom Music URL', placeholder: 'https://example.com/music.mp3', condition: { musicOnHold: 'custom' } },
-      transferMode: { type: 'select', options: ['blind', 'attended'], default: 'blind', label: 'Transfer Mode' }
+      // Backend-mapped fields
+      announce_text: { type: 'string', label: 'Announcement Text' }
     },
     validation: {
       required: ['destination'],
@@ -202,14 +242,30 @@ export const NODE_CONFIGS = {
     outputs: [],
     dataSchema: {
       text: { type: 'string', label: 'Goodbye Message', placeholder: 'Thank you for calling. Goodbye!' },
-      reason: { type: 'select', options: ['normal', 'error', 'timeout', 'hangup'], default: 'normal', label: 'End Reason' },
-      logData: { type: 'boolean', default: true, label: 'Log Call Data' },
-      sendSummary: { type: 'boolean', default: false, label: 'Send Call Summary' },
-      summaryEmail: { type: 'email', label: 'Summary Email', placeholder: 'summary@example.com', condition: { sendSummary: true } }
+      terminationType: { type: 'select', options: ['hangup', 'transfer', 'voicemail', 'callback'], default: 'hangup', label: 'Termination Type' },
+      transferNumber: { type: 'string', label: 'Transfer Number', placeholder: '+1234567890', condition: { terminationType: 'transfer' } },
+      voicemailBox: { type: 'string', label: 'Voicemail Box', condition: { terminationType: 'voicemail' } },
+      callbackDelay: { type: 'number', default: 15, min: 1, max: 60, label: 'Callback Delay (minutes)', condition: { terminationType: 'callback' } },
+      maxCallbackAttempts: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Callback Attempts' },
+      sendSurvey: { type: 'boolean', default: false, label: 'Send Survey' },
+      logCall: { type: 'boolean', default: true, label: 'Log Call' },
+      sendReceipt: { type: 'boolean', default: false, label: 'Send Receipt' },
+      contactMethod: { type: 'select', options: ['sms', 'email', 'whatsapp'], default: 'sms', label: 'Contact Method' },
+      // Backend-mapped fields
+      reason: { type: 'string', label: 'End Reason' },
+      transfer_number: { type: 'string', label: 'Transfer Number' },
+      voicemail_box: { type: 'string', label: 'Voicemail Box' },
+      callback_delay: { type: 'number', label: 'Callback Delay' },
+      max_callback_attempts: { type: 'number', label: 'Max Callback Attempts' },
+      send_survey: { type: 'boolean', label: 'Send Survey' },
+      log_data: { type: 'boolean', label: 'Log Call Data' },
+      send_receipt: { type: 'boolean', label: 'Send Receipt' },
+      contact_method: { type: 'string', label: 'Contact Method' }
     },
     validation: {
       rules: {
-        text: { maxLength: 500 }
+        text: { maxLength: 500 },
+        transferNumber: { pattern: /^\+?[1-9]\d{1,14}$/, condition: { terminationType: 'transfer' } }
       }
     }
   },
@@ -292,12 +348,27 @@ export const NODE_TEMPLATES = {
     }
   },
   
+  audioMessage: {
+    type: NODE_TYPES.AUDIO,
+    data: {
+      mode: 'tts',
+      messageText: 'Welcome to our service.',
+      voice: 'en-GB-SoniaNeural',
+      language: 'en-GB',
+      afterPlayback: 'next',
+      timeoutSeconds: 10,
+      maxRetries: 3
+    }
+  },
+  
   customerService: {
     type: NODE_TYPES.USER_INPUT,
     data: {
-      text: 'Please enter your selection.',
-      inputType: 'digits',
-      numDigits: 1
+      digit: '1',
+      label: 'Customer Support',
+      action: 'transfer',
+      maxAttempts: 3,
+      timeoutSeconds: 10
     }
   },
   

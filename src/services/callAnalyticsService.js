@@ -16,7 +16,7 @@ class CallAnalyticsService {
   async getAnalytics(period = 'today', filters = {}) {
     try {
       const cacheKey = `analytics_${period}_${JSON.stringify(filters)}`;
-      
+
       // Check cache
       if (this.cache.has(cacheKey)) {
         const cached = this.cache.get(cacheKey);
@@ -26,7 +26,7 @@ class CallAnalyticsService {
       }
 
       const dateRange = this.getDateRange(period);
-      
+
       // Base query
       let query = {
         createdAt: { $gte: dateRange.start, $lte: dateRange.end }
@@ -50,13 +50,13 @@ class CallAnalyticsService {
 
       // Calculate metrics
       const analytics = this.calculateMetrics(calls, period);
-      
+
       // Add queue analytics
       analytics.queues = inboundCallService.getAllQueueStatus();
-      
+
       // Add user analytics
       analytics.users = await this.getUserAnalytics(dateRange);
-      
+
       // Cache results
       this.cache.set(cacheKey, {
         data: analytics,
@@ -78,7 +78,7 @@ class CallAnalyticsService {
     const totalCalls = calls.length;
     const inboundCalls = calls.filter(c => c.direction === 'inbound');
     const outboundCalls = calls.filter(c => c.direction === 'outbound');
-    
+
     const completedCalls = calls.filter(c => c.status === 'completed');
     const failedCalls = calls.filter(c => c.status === 'failed');
     const missedCalls = calls.filter(c => c.status === 'no-answer' || c.status === 'busy');
@@ -88,7 +88,7 @@ class CallAnalyticsService {
     const avgDuration = answeredCalls.length > 0
       ? Math.round(answeredCalls.reduce((sum, c) => sum + c.duration, 0) / answeredCalls.length)
       : 0;
-    
+
     const totalDuration = answeredCalls.reduce((sum, c) => sum + c.duration, 0);
 
     // Success rates
@@ -141,15 +141,15 @@ class CallAnalyticsService {
   ========================== */
   getIVRAnalytics(calls) {
     const ivrCalls = calls.filter(c => c.routing && c.routing !== 'default');
-    
+
     const routingBreakdown = {};
     const menuBreakdown = {};
-    
+
     ivrCalls.forEach(call => {
       // Routing breakdown
       const routing = call.routing || 'unknown';
       routingBreakdown[routing] = (routingBreakdown[routing] || 0) + 1;
-      
+
       // Menu interactions (from conversation analysis)
       if (call.conversation) {
         call.conversation.forEach(msg => {
@@ -179,7 +179,7 @@ class CallAnalyticsService {
   ========================== */
   getHourlyBreakdown(calls) {
     const hourly = {};
-    
+
     for (let hour = 0; hour < 24; hour++) {
       hourly[hour] = {
         total: 0,
@@ -206,7 +206,7 @@ class CallAnalyticsService {
   ========================== */
   getDailyBreakdown(calls) {
     const daily = {};
-    
+
     calls.forEach(call => {
       const date = new Date(call.createdAt).toISOString().split('T')[0];
       if (!daily[date]) {
@@ -218,7 +218,7 @@ class CallAnalyticsService {
           duration: 0
         };
       }
-      
+
       daily[date].total++;
       daily[date][call.direction]++;
       if (call.status === 'completed') {
@@ -307,7 +307,7 @@ class CallAnalyticsService {
     const hourlyPerformance = this.getHourlyBreakdown(calls);
     const bestHour = Object.entries(hourlyPerformance)
       .filter(([_, data]) => data.total >= 5) // Minimum 5 calls
-      .sort(([,a], [,b]) => (b.completed / b.total) - (a.completed / a.total))
+      .sort(([, a], [, b]) => (b.completed / b.total) - (a.completed / a.total))
       .slice(0, 3);
 
     // Most engaged users (by conversation length)
@@ -332,11 +332,11 @@ class CallAnalyticsService {
   ========================== */
   calculateAvgAIResponseTime(aiCalls) {
     if (aiCalls.length === 0) return 0;
-    
+
     const totalResponseTime = aiCalls.reduce((sum, call) => {
       return sum + (call.aiMetrics?.avgResponseTime || 0);
     }, 0);
-    
+
     return Math.round(totalResponseTime / aiCalls.length);
   }
 
@@ -367,7 +367,7 @@ class CallAnalyticsService {
   getDateRange(period) {
     const now = new Date();
     let start;
-    
+
     switch (period) {
       case 'today':
         start = new Date(now);
@@ -389,7 +389,7 @@ class CallAnalyticsService {
         start = new Date(now);
         start.setHours(0, 0, 0, 0);
     }
-    
+
     return { start, end: now };
   }
 
@@ -400,7 +400,7 @@ class CallAnalyticsService {
     try {
       const now = new Date();
       const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-      
+
       const recentCalls = await Call.find({
         createdAt: { $gte: oneHourAgo }
       });
@@ -442,7 +442,7 @@ class CallAnalyticsService {
   async exportAnalytics(period = 'today', format = 'json') {
     try {
       const analytics = await this.getAnalytics(period);
-      
+
       switch (format.toLowerCase()) {
         case 'csv':
           return this.convertToCSV(analytics);
@@ -463,7 +463,7 @@ class CallAnalyticsService {
       'Period,Total Calls,Inbound,Outbound,Completed,Success Rate,Avg Duration',
       `${analytics.period},${analytics.summary.totalCalls},${analytics.summary.inboundCalls},${analytics.summary.outboundCalls},${analytics.summary.completedCalls},${analytics.summary.successRate}%,${analytics.summary.avgDuration}s`
     ].join('\n');
-    
+
     return csv;
   }
 

@@ -7,6 +7,8 @@ import aiAssistantService from './aiAssistantService.js';
 import Call from '../models/call.js';
 import User from '../models/user.js';
 import { emitQueueUpdate, emitIVRUpdate } from '../sockets/unifiedSocket.js';
+import callDetailsController from '../controllers/callDetailsController.js';
+
 
 class InboundCallService {
   constructor() {
@@ -17,7 +19,6 @@ class InboundCallService {
 
     this.initializeDefaultIVR();
     this.initializeRoutingRules();
-    this.initializeSampleQueues(); // Add sample data for testing
 
     logger.info('âœ“ Inbound Call Service Initialized');
   }
@@ -145,7 +146,19 @@ class InboundCallService {
         provider: 'twilio'
       });
 
+      // Notify call details controller of new call
+      await callDetailsController.notifyCallCreated({
+        callSid: CallSid,
+        phoneNumber: From,
+        to: To,
+        direction: 'inbound',
+        status: 'initiated',
+        provider: 'twilio',
+        timestamp: new Date()
+      }, 'inbound');
+
       // Determine routing based on rules
+
       const routing = await this.determineRouting(call, user);
 
       // Check if AI fallback should be triggered
@@ -939,39 +952,6 @@ class InboundCallService {
       status[name] = this.getQueueStatus(name);
     }
     return status;
-  }
-
-  /* =========================
-     Initialize Sample Queues (for testing)
-  ========================== */
-  initializeSampleQueues() {
-    // Sample sales queue with mock callers
-    this.callQueues.set('sales', [
-      {
-        callSid: 'CA_sample_1',
-        from: '+1234567890',
-        queuedAt: new Date(Date.now() - 120000).toISOString(), // 2 minutes ago
-        priority: 'normal'
-      },
-      {
-        callSid: 'CA_sample_2',
-        from: '+0987654321',
-        queuedAt: new Date(Date.now() - 30000).toISOString(), // 30 seconds ago
-        priority: 'high'
-      }
-    ]);
-
-    // Sample support queue
-    this.callQueues.set('support', [
-      {
-        callSid: 'CA_sample_3',
-        from: '+1122334455',
-        queuedAt: new Date(Date.now() - 60000).toISOString(), // 1 minute ago
-        priority: 'normal'
-      }
-    ]);
-
-    logger.info('âœ“ Sample queues initialized for testing');
   }
 }
 

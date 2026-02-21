@@ -1,4 +1,5 @@
 import leadService from '../services/leadService.js';
+import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 
@@ -8,7 +9,7 @@ class LeadController {
      */
     async getLeads(req, res) {
         try {
-            const { page, limit, status, intent, search } = req.query;
+            const { page, limit, status, intent, search, workflowId } = req.query;
             const filters = {};
 
             // Filter by owner (from JWT) - assumes auth middleware sets req.user
@@ -25,6 +26,28 @@ class LeadController {
                     { 'caller.name': { $regex: search, $options: 'i' } },
                     { 'bookingDetails.notes': { $regex: search, $options: 'i' } }
                 ];
+            }
+
+            if (workflowId) {
+                const executionFilter = { workflowId };
+                const executions = await WorkflowExecution.find(executionFilter)
+                    .select('callSid')
+                    .lean();
+                const workflowCallSids = [...new Set(executions.map((item) => item.callSid).filter(Boolean))];
+
+                if (workflowCallSids.length === 0) {
+                    return res.json(ResponseFormatter.success({
+                        leads: [],
+                        pagination: {
+                            total: 0,
+                            page: Number(page) || 1,
+                            pages: 0,
+                            hasMore: false
+                        }
+                    }, 'Leads retrieved successfully'));
+                }
+
+                filters.callSid = { $in: workflowCallSids };
             }
 
             const result = await leadService.getLeads(filters, { page, limit });

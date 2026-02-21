@@ -748,7 +748,7 @@ router.post('/menus', [
     });
 
     // Generate audio for all nodes
-    const { updatedWorkflow } = await pythonTTSService.populateWorkflowAudio(newMenu, true);
+    const updatedWorkflow = await pythonTTSService.populateWorkflowAudio(newMenu, true);
 
     // Save updated workflow
     await updatedWorkflow.save();
@@ -1010,7 +1010,13 @@ router.post('/menus/:id/test', async (req, res) => {
     const { id } = req.params;
     const { callSid, phoneNumber } = req.body;
 
-    const menu = await Workflow.findOne({ promptKey: id, isActive: true });
+    let menu = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      menu = await Workflow.findOne({ _id: id, isActive: true });
+    }
+    if (!menu) {
+      menu = await Workflow.findOne({ promptKey: id, isActive: true });
+    }
     if (!menu) {
       return res.status(404).json({
         success: false,
@@ -1164,13 +1170,23 @@ router.post('/workflow/generate-audio', async (req, res) => {
   try {
     const workflow = req.body;
     const { forceRegenerate = false } = req.query;
-    const result = await pythonTTSService.populateWorkflowAudio(workflow, forceRegenerate === 'true' || forceRegenerate === true);
+    const updatedWorkflow = await pythonTTSService.populateWorkflowAudio(
+      workflow,
+      forceRegenerate === 'true' || forceRegenerate === true
+    );
+    const generatedFiles = (updatedWorkflow.nodes || [])
+      .map((node) => ({
+        nodeId: node.id,
+        nodeType: node.type,
+        audioUrl: node?.data?.audioUrl || node.audioUrl || null
+      }))
+      .filter((entry) => Boolean(entry.audioUrl));
 
     res.json({
       success: true,
-      message: `Successfully generated ${result.generatedCount} audio files`,
-      ivrMenu: result.updatedWorkflow,
-      generatedFiles: result.files
+      message: `Successfully generated ${generatedFiles.length} audio files`,
+      ivrMenu: updatedWorkflow,
+      generatedFiles
     });
 
   } catch (error) {

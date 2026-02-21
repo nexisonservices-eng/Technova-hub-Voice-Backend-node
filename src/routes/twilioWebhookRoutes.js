@@ -14,8 +14,14 @@ import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import Workflow from '../models/Workflow.js';
 import ExecutionLog from '../models/ExecutionLog.js';
 import twilio from 'twilio';
+import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 
 const router = express.Router();
+
+router.use((req, res, next) => {
+  if (req.method === 'GET') return next();
+  return verifyTwilioRequest(req, res, next);
+});
 
 /**
  * POST /webhook/twilio/voice
@@ -448,7 +454,7 @@ router.post('/enqueue', async (req, res) => {
  */
 router.post('/queue/wait', async (req, res) => {
   try {
-    const { CallSid, QueueSid, QueuePosition, CurrentQueueSize } = req.body;
+    const { CallSid, QueueSid, QueuePosition, CurrentQueueSize, queueName } = req.body;
     
     logger.info(`Queue position update: ${CallSid} -> position ${QueuePosition} of ${CurrentQueueSize}`);
     
@@ -465,6 +471,20 @@ router.post('/queue/wait', async (req, res) => {
       io.emit('queue_position_update', {
         callSid: CallSid,
         queueSid: QueueSid,
+        position: QueuePosition,
+        queueSize: CurrentQueueSize
+      });
+      io.emit('caller_joined_queue', {
+        callSid: CallSid,
+        queueName: queueName || 'General',
+        caller: {
+          callSid: CallSid,
+          queuedAt: new Date().toISOString()
+        }
+      });
+      io.emit('queue_update', {
+        queueName: queueName || 'General',
+        callSid: CallSid,
         position: QueuePosition,
         queueSize: CurrentQueueSize
       });
@@ -500,6 +520,16 @@ router.post('/queue/leave', async (req, res) => {
     if (execution) {
       await execution.setVariable('queue_result', QueueResult);
       await execution.setVariable('queue_leave_time', new Date());
+    }
+
+    // Emit queue leave event via Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('caller_left_queue', {
+        queueName: 'General',
+        callSid: CallSid,
+        result: QueueResult
+      });
     }
     
     // Generate response based on queue result
@@ -537,3 +567,4 @@ router.get('/health', (req, res) => {
 });
 
 export default router;
+
