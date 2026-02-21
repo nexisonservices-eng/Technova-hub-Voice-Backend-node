@@ -6,18 +6,30 @@ import { initializeSocketIO, shutdownSocketIO } from './src/sockets/unifiedSocke
 import { connectDB } from './src/config/db.js';
 import logger from './src/utils/logger.js';
 
-const DEFAULT_ALLOWED_ORIGINS = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173'
-];
+const normalizeOrigin = (origin = '') => origin.trim().replace(/\/+$/, '');
 
 const parseAllowedOrigins = () => {
   const rawOrigins = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
   const configured = rawOrigins
     .split(',')
-    .map(origin => origin.trim())
+    .map(normalizeOrigin)
     .filter(Boolean);
-  return configured.length ? configured : DEFAULT_ALLOWED_ORIGINS;
+
+  const envFrontends = [
+    process.env.FRONTEND_URL,
+    process.env.FRONTEND_BASE_URL,
+    process.env.ADMIN_FRONTEND_URL
+  ]
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  const deduped = Array.from(new Set([...configured, ...envFrontends]));
+
+  if (deduped.length) {
+    return deduped;
+  }
+
+  return [];
 };
 
 const allowedOrigins = parseAllowedOrigins();
@@ -106,3 +118,5 @@ server
     }
     throw err;
   });
+
+

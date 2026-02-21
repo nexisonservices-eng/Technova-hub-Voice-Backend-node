@@ -19,18 +19,30 @@ import callDetailsRoutes from "./routes/callDetailsRoutes.js";
 
 import path from 'path';
 
-const DEFAULT_ALLOWED_ORIGINS = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173'
-];
+const normalizeOrigin = (origin = '') => origin.trim().replace(/\/+$/, '');
 
 const parseAllowedOrigins = () => {
   const rawOrigins = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
   const configured = rawOrigins
     .split(',')
-    .map(origin => origin.trim())
+    .map(normalizeOrigin)
     .filter(Boolean);
-  return configured.length ? configured : DEFAULT_ALLOWED_ORIGINS;
+
+  const envFrontends = [
+    process.env.FRONTEND_URL,
+    process.env.FRONTEND_BASE_URL,
+    process.env.ADMIN_FRONTEND_URL
+  ]
+    .map(normalizeOrigin)
+    .filter(Boolean);
+
+  const deduped = Array.from(new Set([...configured, ...envFrontends]));
+
+  if (deduped.length) {
+    return deduped;
+  }
+
+  return [];
 };
 
 const app = express();
@@ -38,18 +50,27 @@ const allowedOrigins = parseAllowedOrigins();
 
 // Middleware
 app.set('trust proxy', 1);
-app.use(cors({
+const corsOptions = {
   origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) {
       return callback(null, true);
     }
-    return callback(new Error('Not allowed by CORS'));
+
+    const normalizedOrigin = normalizeOrigin(origin);
+    if (allowedOrigins.includes(normalizedOrigin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   maxAge: 86400
-}));
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
@@ -128,3 +149,5 @@ app.use((err, req, res, next) => {
 });
 
 export default app;
+
+
