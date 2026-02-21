@@ -25,7 +25,7 @@ const parseAllowedOrigins = () => {
 
   const deduped = Array.from(new Set([...configured, ...envFrontends]));
 
-  if (deduped.length) {
+  if (deduped.length > 0) {
     return deduped;
   }
 

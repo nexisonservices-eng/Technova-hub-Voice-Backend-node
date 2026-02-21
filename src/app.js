@@ -38,7 +38,7 @@ const parseAllowedOrigins = () => {
 
   const deduped = Array.from(new Set([...configured, ...envFrontends]));
 
-  if (deduped.length) {
+  if (deduped.length > 0) {
     return deduped;
   }
 
@@ -56,6 +56,10 @@ const corsOptions = {
       return callback(null, true);
     }
 
+    if (allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+
     const normalizedOrigin = normalizeOrigin(origin);
     if (allowedOrigins.includes(normalizedOrigin)) {
       return callback(null, true);
@@ -64,12 +68,13 @@ const corsOptions = {
     return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
   credentials: true,
   maxAge: 86400
 };
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
