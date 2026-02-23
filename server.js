@@ -1,58 +1,34 @@
-import 'dotenv/config';
+import 'dotenv/config'; // Load environment variables from .env
 import http from 'http';
 import { Server } from 'socket.io';
-import app from './src/app.js';
+import app from "./src/app.js";
 import { initializeSocketIO, shutdownSocketIO } from './src/sockets/unifiedSocket.js';
-import { connectDB } from './src/config/db.js';
-import logger from './src/utils/logger.js';
+import workflowRoutes from './src/routes/workflowRoutes.js';
 
-const normalizeOrigin = (origin = '') => origin.trim().replace(/\/+$/, '');
+import { connectDB } from "./src/config/db.js";
+import logger from "./src/utils/logger.js";
 
-const parseAllowedOrigins = () => {
-  const rawOrigins = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
-  const configured = rawOrigins
-    .split(',')
-    .map(normalizeOrigin)
-    .filter(Boolean);
+// ===== STARTUP SEQUENCE =====
+logger.info(' Starting Technovo Voice Backend...');
 
-  const envFrontends = [
-    process.env.FRONTEND_URL,
-    process.env.FRONTEND_BASE_URL,
-    process.env.ADMIN_FRONTEND_URL
-  ]
-    .map(normalizeOrigin)
-    .filter(Boolean);
-
-  const deduped = Array.from(new Set([...configured, ...envFrontends]));
-
-  if (deduped.length > 0) {
-    return deduped;
-  }
-
-  return [];
-};
-
-const allowedOrigins = parseAllowedOrigins();
-const PORT = Number(process.env.PORT) || 5000;
-const isProduction = process.env.NODE_ENV === 'production';
-const hasWildcardOrigin = allowedOrigins.includes('*');
-
-if (!isProduction && allowedOrigins.length === 0) {
-  logger.warn('No explicit CORS origins configured for Socket.IO. Cross-origin web clients may fail to connect.');
-}
-
-logger.info('Starting Technovo Voice Backend');
-logger.info('Connecting to MongoDB');
+// 1. Connect to MongoDB
+logger.info('📡 Connecting to MongoDB...');
 await connectDB();
-logger.info('MongoDB connected');
+logger.info('✅ MongoDB connected');
 
+// 2. Initialize Twilio (lazy initialization - will log when first used)
+logger.info('📞 Initializing Twilio Service...');
+
+// 3. Create HTTP Server
+logger.info('🌐 Creating HTTP Server...');
 const server = http.createServer(app);
 
+// 4. Initialize Socket.IO
+logger.info('🔌 Initializing Socket.IO...');
 const io = new Server(server, {
   cors: {
-    origin: hasWildcardOrigin ? '*' : allowedOrigins,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: !hasWildcardOrigin
+    origin: "*",
+    methods: ["GET", "POST"]
   },
   pingTimeout: 60000,
   pingInterval: 25000,
@@ -61,67 +37,54 @@ const io = new Server(server, {
 });
 
 initializeSocketIO(io);
-app.set('io', io);
-logger.info('Socket.IO ready');
+logger.info('✅ Socket.IO ready');
 
+// 5. Start Health Check
+logger.info('🏥 Starting Health Check...');
+
+// ⚠️ Check for valid BASE_URL (Critical for Twilio Webhooks)
 if (!process.env.BASE_URL || process.env.BASE_URL.includes('localhost')) {
-  logger.warn('BASE_URL is missing or points to localhost, Twilio webhooks may fail in production');
+  logger.warn('╔════════════════════════════════════════════════════════════╗');
+  logger.warn('║ CRITICAL WARNING: BASE_URL is missing or uses localhost!   ║');
+  logger.warn('║ Twilio webhooks (Error 11200) WILL FAIL.                   ║');
+  logger.warn('║ USE NGROK OR PUBLIC URL: e.g. https://xyz.ngrok-free.app   ║');
+  logger.warn('╚════════════════════════════════════════════════════════════╝');
 }
 
-let isShuttingDown = false;
+// Graceful shutdown function
 const shutdown = async () => {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
+  logger.info('🛑 Shutting down server...');
+  shutdownSocketIO();
 
-  logger.info('Shutting down server');
-
-  try {
-    shutdownSocketIO();
-  } catch (error) {
-    logger.error('Error while shutting down Socket.IO', { error: error.message });
-  }
-
-  server.close((error) => {
-    if (error) {
-      logger.error('Error while closing HTTP server', { error: error.message });
-      process.exit(1);
-      return;
-    }
-    logger.info('HTTP server closed');
+  server.close(() => {
+    logger.info('🛑 HTTP server closed');
     process.exit(0);
   });
 
+  // Force exit after 5s if server doesn't close
   setTimeout(() => {
-    logger.warn('Forcing shutdown after timeout');
+    logger.warn('⚠️ Forcing shutdown');
     process.exit(1);
-  }, 10000).unref();
+  }, 5000);
 };
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled promise rejection', { reason });
-  if (isProduction) {
-    shutdown();
+// Capture shutdown signals
+process.on('SIGINT', shutdown);   // CTRL+C
+process.on('SIGTERM', shutdown);  // Docker / PM2
+
+// Start server with port error handling
+server.listen(process.env.PORT || 5000, () => {
+  const port = process.env.PORT || 5000;
+  logger.info(`🌐 Server running on port ${port}`);
+  logger.info(`📡 Health check available at: http://localhost:${port}/health`);
+  logger.info(`🔌 Socket.IO ready for connections`);
+  logger.info(`📞 Twilio service initialized (lazy)`);
+  logger.info('==============================');
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    logger.error(`❌ Port ${process.env.PORT || 5000} already in use`);
+    process.exit(1); // Exit so nodemon can restart
+  } else {
+    throw err;
   }
 });
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught exception', { message: error.message, stack: error.stack });
-  shutdown();
-});
-
-server
-  .listen(PORT, () => {
-    logger.info(`Server running on port ${PORT}`);
-    logger.info(`Health check: http://localhost:${PORT}/health`);
-  })
-  .on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      logger.error(`Port ${PORT} already in use`);
-      process.exit(1);
-      return;
-    }
-    throw err;
-  });
-
-
