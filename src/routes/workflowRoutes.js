@@ -14,11 +14,22 @@ import workflowNodeService from '../services/workflowNodeService.js';
 import { NODE_TYPES, NODE_CONFIGS } from '../config/workflowNodeConfig.js';
 import { authenticate } from '../middleware/auth.js';
 import twilio from 'twilio';
-import { getSocketIO } from '../sockets/unifiedSocket.js';
+import { getSocketIO, getUserRoom } from '../sockets/unifiedSocket.js';
+import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
 const router = express.Router();
+router.use(authenticate);
+router.use(resolveUserTwilioContext);
+
+const getAuthenticatedUserId = (req) => {
+  const rawUserId = req.user?._id || req.user?.id || req.user?.sub || req.user?.userId;
+  if (!rawUserId || !mongoose.Types.ObjectId.isValid(rawUserId)) {
+    return null;
+  }
+  return new mongoose.Types.ObjectId(rawUserId);
+};
 
 /**
  * GET /api/workflow/nodes
@@ -300,7 +311,7 @@ router.get('/test', (req, res) => {
  * POST /api/workflow/generate-audio
  * Generate audio for all nodes in a workflow
  */
-router.post('/generate-audio', [
+router.post('/generate-audio', authenticate, [
   body('workflowId').isMongoId().withMessage('Valid workflow ID is required'),
   body('forceRegenerate').optional().isBoolean().withMessage('forceRegenerate must be boolean')
 ], async (req, res) => {
@@ -314,9 +325,13 @@ router.post('/generate-audio', [
     }
 
     const { workflowId, forceRegenerate = false } = req.body;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     // Find the workflow using the Workflow model
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -356,11 +371,15 @@ router.post('/generate-audio', [
  * GET /api/workflow/:workflowId
  * Get workflow configuration with nodes and edges
  */
-router.get('/:workflowId', async (req, res) => {
+router.get('/:workflowId', authenticate, async (req, res) => {
   try {
     const { workflowId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -400,11 +419,15 @@ router.get('/:workflowId', async (req, res) => {
  * GET /api/workflow/:workflowId/refresh
  * Get fresh workflow data with latest audio URLs (after TTS completion)
  */
-router.get('/:workflowId/refresh', async (req, res) => {
+router.get('/:workflowId/refresh', authenticate, async (req, res) => {
   try {
     const { workflowId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -467,7 +490,7 @@ router.get('/:workflowId/refresh', async (req, res) => {
  * PUT /api/workflow/:workflowId
  * Update workflow configuration and generate audio
  */
-router.put('/:workflowId', [
+router.put('/:workflowId', authenticate, [
   body('nodes').isArray().withMessage('Nodes must be an array'),
   body('edges').isArray().withMessage('Edges must be an array')
 ], async (req, res) => {
@@ -481,6 +504,10 @@ router.put('/:workflowId', [
     }
 
     const { workflowId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { nodes = [], edges = [] } = req.body;
 
     console.log('🔄 PUT /api/workflow/:id - Updating workflow:', {
@@ -491,7 +518,7 @@ router.put('/:workflowId', [
       edgesSample: edges.slice(0, 2)
     });
 
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       console.error('❌ Workflow not found:', workflowId);
       return res.status(404).json({
@@ -521,7 +548,7 @@ router.put('/:workflowId', [
     // Emit socket event for real-time frontend updates
     const io = getSocketIO();
     if (io) {
-      io.emit('workflow_updated', {
+      io.to(getUserRoom(userId)).emit('workflow_updated', {
         workflowId: updateResult._id,
         workflowData: {
           _id: updateResult._id,
@@ -575,9 +602,13 @@ router.put('/:workflowId', [
  * GET /api/workflow/:workflowId/tts-status/:jobId
  * Get TTS job status with detailed error information
  */
-router.get('/:workflowId/tts-status/:jobId', async (req, res) => {
+router.get('/:workflowId/tts-status/:jobId', authenticate, async (req, res) => {
   try {
     const { workflowId, jobId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     const job = ttsJobQueue.getJobStatus(jobId);
     if (!job) {
@@ -595,7 +626,7 @@ router.get('/:workflowId/tts-status/:jobId', async (req, res) => {
     }
 
     // Get fresh workflow data to show current audio URLs
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     const nodesWithAudio = [];
     const nodesWithoutAudio = [];
     
@@ -658,9 +689,18 @@ router.get('/:workflowId/tts-status/:jobId', async (req, res) => {
  * POST /api/workflow/:workflowId/tts-retry/:jobId
  * Retry a failed TTS job
  */
-router.post('/:workflowId/tts-retry/:jobId', async (req, res) => {
+router.post('/:workflowId/tts-retry/:jobId', authenticate, async (req, res) => {
   try {
     const { workflowId, jobId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    if (!workflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
 
     const job = ttsJobQueue.getJobStatus(jobId);
     if (!job) {
@@ -703,7 +743,7 @@ router.post('/:workflowId/tts-retry/:jobId', async (req, res) => {
  * GET /api/workflow/tts-queue-stats
  * Get TTS queue statistics (admin endpoint)
  */
-router.get('/tts-queue-stats', async (req, res) => {
+router.get('/tts-queue-stats', authenticate, async (req, res) => {
   try {
     const stats = ttsJobQueue.getQueueStats();
     
@@ -725,7 +765,7 @@ router.get('/tts-queue-stats', async (req, res) => {
  * PUT /api/workflow/:workflowId/status
  * Update workflow status (active/inactive)
  */
-router.put('/:workflowId/status', [
+router.put('/:workflowId/status', authenticate, [
   body('status').isIn(['active', 'inactive']).withMessage('Status must be active or inactive')
 ], async (req, res) => {
   try {
@@ -738,9 +778,13 @@ router.put('/:workflowId/status', [
     }
 
     const { workflowId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { status } = req.body;
 
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -776,11 +820,15 @@ router.put('/:workflowId/status', [
  * GET /api/workflow/:workflowId/status
  * Get workflow status
  */
-router.get('/:workflowId/status', async (req, res) => {
+router.get('/:workflowId/status', authenticate, async (req, res) => {
   try {
     const { workflowId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
-    const workflow = await Workflow.findById(workflowId).select('status updatedAt');
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('status updatedAt');
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -809,9 +857,21 @@ router.get('/:workflowId/status', async (req, res) => {
  * DELETE /api/workflow/:workflowId
  * Delete workflow and all associated audio files
  */
-router.delete('/:workflowId', async (req, res) => {
+router.delete('/:workflowId', authenticate, async (req, res) => {
   try {
     const { workflowId } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    if (!workflow) {
+      return res.status(404).json({
+        success: false,
+        error: 'Workflow not found'
+      });
+    }
 
     // Use ivrWorkflowEngine to delete workflow and clean up audio files
     const result = await ivrWorkflowEngine.deleteWorkflow(workflowId);

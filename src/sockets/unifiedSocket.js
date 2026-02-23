@@ -3,6 +3,7 @@ import callStateService from '../services/callStateService.js';
 import AIBridgeService from '../services/aiBridgeService.js';
 import ttsJobQueue from '../services/ttsJobQueue.js';
 import analyticsController from '../controllers/analyticsController.js';
+import { verifyOrResolveToken } from '../middleware/auth.js';
 import { setupIVRWorkflowHandlers } from './ivrWorkflowSocket.js';
 import IVRWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import InboundCallController, { setSocketIO } from '../controllers/inboundCallController.js';
@@ -15,6 +16,12 @@ const activeConnections = new Map();
 const CONNECTION_CLEANUP_INTERVAL = 30000; // 30s
 const ANALYTICS_ROOM = 'analytics_room';
 const CALLS_ROOM = 'calls_room';
+const USER_ROOM_PREFIX = 'user:';
+
+const resolveUserId = (user) =>
+  user?._id || user?.id || user?.sub || user?.userId || null;
+
+export const getUserRoom = (userId) => `${USER_ROOM_PREFIX}${String(userId)}`;
 
 export function initializeSocketIO(socketIo) {
   if (initialized) {
@@ -38,9 +45,34 @@ export function initializeSocketIO(socketIo) {
   setSocketIO(io);
   logger.info('🔌 InboundCallController connected to Socket.IO');
 
+  // Require JWT authentication for all socket clients.
+  io.use(async (socket, next) => {
+    try {
+      const authToken = socket.handshake?.auth?.token;
+      const headerAuth = socket.handshake?.headers?.authorization;
+      const headerToken = typeof headerAuth === 'string' && headerAuth.startsWith('Bearer ')
+        ? headerAuth.slice(7)
+        : null;
+      const queryToken = socket.handshake?.query?.token;
+
+      const token = authToken || headerToken || queryToken;
+      const user = await verifyOrResolveToken(token);
+      socket.user = user;
+      return next();
+    } catch (error) {
+      logger.warn(`Socket auth failed for ${socket.id || 'unknown'}: ${error.message}`);
+      return next(new Error('Unauthorized'));
+    }
+  });
+
   io.on('connection', (socket) => {
     logger.info(`✅ Socket.io client connected: ${socket.id}`);
     activeConnections.set(socket.id, { connectedAt: Date.now(), socket });
+
+    const socketUserId = resolveUserId(socket.user);
+    if (socketUserId) {
+      socket.join(getUserRoom(socketUserId));
+    }
 
     socket.on('join_analytics_room', async (payload = {}) => {
       try {
@@ -201,9 +233,18 @@ export function initializeSocketIO(socketIo) {
     socket.on('request_ivr_menus', async (data) => {
       try {
         const { default: Workflow } = await import('../models/Workflow.js');
+        const userId = resolveUserId(socket.user);
+        if (!userId) {
+          socket.emit('ivr_menus_error', {
+            error: 'Unauthorized',
+            timestamp: new Date().toISOString()
+          });
+          return;
+        }
         
         // Production-level query - only valid IVR workflows
         const ivrWorkflows = await Workflow.findActive({
+          createdBy: userId,
           promptKey: { $exists: true, $ne: null },
           displayName: { $exists: true, $ne: null }
         })
@@ -359,6 +400,11 @@ export function initializeSocketIO(socketIo) {
       const workflowId = data?.workflowId;
       try {
         const { workflowData } = data;
+        const userId = resolveUserId(socket.user);
+        if (!userId) {
+          throw new Error('Unauthorized');
+        }
+
         logger.info(`Received workflow update from client ${socket.id}`, {
           workflowId,
           nodeCount: workflowData?.nodes?.length || 0
@@ -367,8 +413,8 @@ export function initializeSocketIO(socketIo) {
         // Update workflow in database
         const { default: Workflow } = await import('../models/Workflow.js');
         
-        const updateResult = await Workflow.findByIdAndUpdate(
-          workflowId,
+        const updateResult = await Workflow.findOneAndUpdate(
+          { _id: workflowId, createdBy: userId },
           {
             $set: {
               nodes: workflowData.nodes || [],
@@ -383,8 +429,8 @@ export function initializeSocketIO(socketIo) {
         if (updateResult) {
           logger.info(`Workflow ${workflowId} updated successfully`);
 
-          // Broadcast updated workflow to all connected clients using io instance
-          const updatedWorkflow = await Workflow.findById(workflowId);
+          // Broadcast updated workflow only to the owner room
+          const updatedWorkflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
           if (updatedWorkflow) {
             const formattedWorkflow = {
               _id: updatedWorkflow._id,
@@ -420,17 +466,21 @@ export function initializeSocketIO(socketIo) {
               updatedAt: updatedWorkflow.updatedAt
             };
 
-            // Broadcast to all connected clients using io instance
-            io.emit('workflow_updated', {
+            io.to(getUserRoom(userId)).emit('workflow_updated', {
               workflowId: workflowId,
               workflowData: formattedWorkflow,
               timestamp: new Date().toISOString()
             });
 
-            logger.info(`📡 Broadcasted workflow update to all clients for workflow ${workflowId}`);
+            logger.info(`📡 Broadcasted workflow update to owner room for workflow ${workflowId}`);
           }
         } else {
-          logger.error(`❌ Failed to update workflow ${workflowId}: Workflow not found`);
+          logger.error(`❌ Failed to update workflow ${workflowId}: Workflow not found or unauthorized`);
+          socket.emit('workflow_error', {
+            workflowId,
+            error: 'Workflow not found or unauthorized',
+            timestamp: new Date().toISOString()
+          });
         }
       } catch (error) {
         logger.error(`Error handling workflow update from client ${socket.id}:`, error);

@@ -134,7 +134,7 @@ class InboundCallService {
   ========================== */
   async processIncomingCall(callData) {
     try {
-      const { CallSid, From, To } = callData;
+      const { CallSid, From, To, userId = null } = callData;
 
       logger.info(`ðŸ“ž Processing inbound call: ${CallSid} from ${From}`);
 
@@ -143,7 +143,8 @@ class InboundCallService {
         callSid: CallSid,
         phoneNumber: From,
         direction: 'inbound',
-        provider: 'twilio'
+        provider: 'twilio',
+        userId
       });
 
       // Notify call details controller of new call
@@ -687,7 +688,7 @@ class InboundCallService {
   /* =========================
      Enhanced Callback Integration
   ========================== */
-  async scheduleCallback(callSid, phoneNumber, priority = 'normal', scheduledTime = null) {
+  async scheduleCallback(callSid, phoneNumber, priority = 'normal', scheduledTime = null, userId = null) {
     try {
       const state = callStateService.getCallState(callSid);
       if (!state) {
@@ -697,7 +698,7 @@ class InboundCallService {
       const callback = await callbackService.scheduleCallback({
         originalCallSid: callSid,
         phoneNumber: phoneNumber,
-        requestedBy: state.user?._id || 'system',
+        requestedBy: userId || state.user?._id || null,
         priority: priority,
         scheduledFor: scheduledTime || new Date(Date.now() + 15 * 60 * 1000), // 15 minutes default
         context: {
@@ -716,10 +717,10 @@ class InboundCallService {
     }
   }
 
-  async handleCallbackRequest(callSid, phoneNumber, priority = 'normal') {
+  async handleCallbackRequest(callSid, phoneNumber, priority = 'normal', scheduledTime = null, userId = null) {
     try {
       // Schedule the callback
-      const callback = await this.scheduleCallback(callSid, phoneNumber, priority);
+      const callback = await this.scheduleCallback(callSid, phoneNumber, priority, scheduledTime, userId);
 
       // Update call state with callback request
       await callStateService.updateCallState(callSid, {

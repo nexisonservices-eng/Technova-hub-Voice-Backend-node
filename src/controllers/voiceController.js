@@ -3,24 +3,27 @@ import telephonyService from '../services/telephonyService.js';
 import callStateService from '../services/callStateService.js';
 import logger from '../utils/logger.js';
 import Call from '../models/call.js';
+import { getUserIdString } from '../utils/authContext.js';
 
 class CallController {
   async startOutboundCall(req, res) {
     try {
       const { phoneNumber, scenario } = req.body;
+      const userId = getUserIdString(req);
 
       if (!phoneNumber) {
         return res.status(400).json({ message: 'Phone number is required' });
       }
 
-      const result = await telephonyService.initiateOutboundCall(phoneNumber, scenario);
+      const result = await telephonyService.initiateOutboundCall(phoneNumber, req.twilioContext, scenario);
 
       await callStateService.createCall({
         callSid: result.callSid,
         phoneNumber,
         direction: 'outbound',
         provider: telephonyService.provider,
-        scenario: scenario || null
+        scenario: scenario || null,
+        userId
       });
 
       res.status(200).json({
@@ -51,7 +54,8 @@ class CallController {
   async getCallDetails(req, res) {
     try {
       const { callSid } = req.params;
-      const call = await Call.findOne({ callSid }).populate('user');
+      const userId = getUserIdString(req);
+      const call = await Call.findOne({ callSid, user: userId }).populate('user');
 
       if (!call) {
         return res.status(404).json({ error: 'Call not found' });
@@ -66,7 +70,9 @@ class CallController {
 
   async getActiveCalls(req, res) {
     try {
+      const userId = getUserIdString(req);
       const activeCalls = await Call.find({
+        user: userId,
         status: { $in: ['initiated', 'ringing', 'in-progress'] }
       })
         .populate('user', 'name email')
@@ -86,10 +92,11 @@ class CallController {
 
   async getCallStats(req, res) {
     try {
+      const userId = getUserIdString(req);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      const calls = await Call.find({ createdAt: { $gte: today } });
+      const calls = await Call.find({ user: userId, createdAt: { $gte: today } });
 
       const completed = calls.filter(c => c.status === 'completed');
 
@@ -112,16 +119,17 @@ class CallController {
   async endCall(req, res) {
     try {
       const { callSid } = req.params;
+      const userId = getUserIdString(req);
 
       if (!callSid) {
         return res.status(400).json({ success: false, message: 'Call SID is required' });
       }
 
-      await telephonyService.endCall(callSid);
+      await telephonyService.endCall(callSid, req.twilioContext);
       await callStateService.endCall(callSid);
 
       await Call.updateOne(
-        { callSid },
+        { callSid, user: userId },
         { $set: { status: 'completed', endTime: new Date() } }
       );
 

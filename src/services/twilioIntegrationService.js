@@ -12,19 +12,8 @@ import { EventEmitter } from 'events';
 class TwilioIntegrationService extends EventEmitter {
   constructor() {
     super();
-    
-    // Initialize Twilio client
-    this.accountSid = process.env.TWILIO_ACCOUNT_SID;
-    this.authToken = process.env.TWILIO_AUTH_TOKEN;
-    this.phoneNumber = process.env.TWILIO_PHONE_NUMBER;
-    
-    if (!this.accountSid || !this.authToken) {
-      logger.warn('Twilio credentials not found in environment variables');
-      this.client = null;
-    } else {
-      this.client = twilio(this.accountSid, this.authToken);
-      logger.info('Twilio client initialized');
-    }
+    this.phoneNumber = null;
+    this.client = null;
     
     // Active calls tracking
     this.activeCalls = new Map(); // callSid -> call data

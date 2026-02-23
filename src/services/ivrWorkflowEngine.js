@@ -33,7 +33,7 @@ class IVRWorkflowEngine extends EventEmitter {
     /**
      * Start a new workflow execution
      */
-    async startExecution(workflowId, callSid, callerNumber, destinationNumber) {
+    async startExecution(workflowId, callSid, callerNumber, destinationNumber, userId = null) {
         try {
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) throw new Error('Workflow not found');
@@ -41,6 +41,7 @@ class IVRWorkflowEngine extends EventEmitter {
             // Create execution log in database
             const executionLog = new ExecutionLog({
                 callSid,
+                userId: workflow.createdBy || userId,
                 workflowId,
                 workflowName: workflow.promptKey,
                 callerNumber,

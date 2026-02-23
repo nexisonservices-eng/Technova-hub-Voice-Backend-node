@@ -5,6 +5,7 @@
 import Call from '../models/call.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
+import { getUserObjectId } from '../utils/authContext.js';
 
 class CallLogController {
     /**
@@ -13,6 +14,10 @@ class CallLogController {
      */
     async getCallLogs(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
             const {
                 startDate,
                 endDate,
@@ -26,7 +31,7 @@ class CallLogController {
             } = req.query;
 
             // Build filter query
-            const filter = { deletedAt: null }; // Exclude soft-deleted
+            const filter = { deletedAt: null, user: userId }; // Exclude soft-deleted
 
             if (startDate || endDate) {
                 filter.createdAt = {};
@@ -77,8 +82,12 @@ class CallLogController {
     async getCallDetails(req, res) {
         try {
             const { callSid } = req.params;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
-            const call = await Call.findOne({ callSid, deletedAt: null })
+            const call = await Call.findOne({ callSid, user: userId, deletedAt: null })
                 .select('-__v')
                 .lean();
 
@@ -106,6 +115,10 @@ class CallLogController {
      */
     async exportCallLogs(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
             const {
                 startDate,
                 endDate,
@@ -116,7 +129,7 @@ class CallLogController {
             } = req.query;
 
             // Build filter (same as getCallLogs)
-            const filter = { deletedAt: null };
+            const filter = { deletedAt: null, user: userId };
 
             if (startDate || endDate) {
                 filter.createdAt = {};
@@ -171,8 +184,12 @@ class CallLogController {
     async deleteCallLog(req, res) {
         try {
             const { callSid } = req.params;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
-            const call = await Call.findOne({ callSid, deletedAt: null });
+            const call = await Call.findOne({ callSid, user: userId, deletedAt: null });
 
             if (!call) {
                 return res.status(404).json(
@@ -206,6 +223,10 @@ class CallLogController {
     async bulkDeleteCallLogs(req, res) {
         try {
             const { callSids } = req.body;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
             if (!Array.isArray(callSids) || callSids.length === 0) {
                 return res.status(400).json(
@@ -217,15 +238,15 @@ class CallLogController {
             }
 
             // Bulk soft delete
-            const result = await Call.updateMany(
-                { callSid: { $in: callSids }, deletedAt: null },
+            const resultScoped = await Call.updateMany(
+                { callSid: { $in: callSids }, user: userId, deletedAt: null },
                 { $set: { deletedAt: new Date() } }
             );
 
-            logger.info(`Bulk deleted ${result.modifiedCount} call logs`);
+            logger.info(`Bulk deleted ${resultScoped.modifiedCount} call logs`);
 
             res.json(ResponseFormatter.success({
-                deletedCount: result.modifiedCount,
+                deletedCount: resultScoped.modifiedCount,
                 requestedCount: callSids.length
             }));
 
@@ -245,6 +266,10 @@ class CallLogController {
         try {
             const { callSid } = req.params;
             const { tags } = req.body;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
             if (!Array.isArray(tags) || tags.length === 0) {
                 return res.status(400).json(
@@ -255,7 +280,7 @@ class CallLogController {
                 );
             }
 
-            const call = await Call.findOne({ callSid, deletedAt: null });
+            const call = await Call.findOne({ callSid, user: userId, deletedAt: null });
 
             if (!call) {
                 return res.status(404).json(
@@ -289,8 +314,12 @@ class CallLogController {
     async getCallStats(req, res) {
         try {
             const { startDate, endDate } = req.query;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
-            const filter = { deletedAt: null };
+            const filter = { deletedAt: null, user: userId };
 
             if (startDate || endDate) {
                 filter.createdAt = {};

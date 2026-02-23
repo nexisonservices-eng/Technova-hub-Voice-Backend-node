@@ -16,6 +16,12 @@ const WorkflowExecutionSchema = new mongoose.Schema({
   },
   
   // Workflow information
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: false,
+    index: true,
+    description: 'Owner userId from Admin backend'
+  },
   workflowId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Workflow',
@@ -558,6 +564,9 @@ WorkflowExecutionSchema.pre('save', function(next) {
   
   next();
 });
+
+WorkflowExecutionSchema.index({ userId: 1, createdAt: -1 });
+WorkflowExecutionSchema.index({ userId: 1, workflowId: 1, startTime: -1 });
 
 const WorkflowExecution = mongoose.model('WorkflowExecution', WorkflowExecutionSchema);
 

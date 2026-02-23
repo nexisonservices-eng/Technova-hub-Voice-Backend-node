@@ -31,6 +31,7 @@ router.post('/voice', async (req, res) => {
   try {
     const callData = req.body;
     const { CallSid, From, To, CallStatus } = callData;
+    const webhookUserId = req.tenantContext?.adminId || null;
     
     logger.info(`Incoming voice call: ${CallSid} from ${From} to ${To}`);
 
@@ -38,14 +39,20 @@ router.post('/voice', async (req, res) => {
     const ivrController = new IVRController();
     
     // Check if there's an active workflow first
-    const activeWorkflow = await ivrController.getActiveWorkflow();
+    const activeWorkflow = await ivrController.getActiveWorkflow(webhookUserId);
     
     if (activeWorkflow) {
       // Use existing workflow engine
       logger.info(`Using active workflow: ${activeWorkflow._id}`);
       
       // Start execution using existing workflow engine
-      await ivrWorkflowEngine.startExecution(activeWorkflow._id, CallSid, From, To);
+      await ivrWorkflowEngine.startExecution(
+        activeWorkflow._id,
+        CallSid,
+        From,
+        To,
+        webhookUserId || activeWorkflow.createdBy || null
+      );
       
       // Generate TwiML using existing system
       const twiml = await ivrWorkflowEngine.generateTwiML(activeWorkflow._id, activeWorkflow.nodes[0].id, null, CallSid);
@@ -130,6 +137,7 @@ router.post('/workflow/:workflowId', async (req, res) => {
   try {
     const { workflowId } = req.params;
     const { Digits, SpeechResult, CallSid } = req.body;
+    const webhookUserId = req.tenantContext?.adminId || null;
     
     logger.info(`Executing workflow ${workflowId} for call ${CallSid}`);
     
@@ -164,7 +172,10 @@ router.post('/workflow/:workflowId', async (req, res) => {
     logger.info('Using new integration service for workflow execution');
     
     // Get execution record
-    const execution = await WorkflowExecution.findOne({ callSid: CallSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: CallSid,
+      ...(webhookUserId ? { userId: webhookUserId } : {})
+    });
     if (!execution) {
       logger.warn(`No execution found for call ${CallSid}`);
       return res.status(404).send('Execution not found');
@@ -197,6 +208,7 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
   try {
     const { workflowId, nodeId } = req.params;
     const { CallSid, Digits, SpeechResult } = req.body;
+    const webhookUserId = req.tenantContext?.adminId || null;
     
     logger.info(`Executing node ${nodeId} in workflow ${workflowId} for call ${CallSid}`);
     
@@ -205,7 +217,10 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
     
     // Try existing workflow engine first
     try {
-      const workflow = await Workflow.findById(workflowId);
+      const workflow = await Workflow.findOne({
+        _id: workflowId,
+        ...(webhookUserId ? { createdBy: webhookUserId } : {})
+      });
       if (workflow) {
         logger.info('Using existing IVR workflow system');
         
@@ -224,7 +239,10 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
     logger.info('Using new integration service for node execution');
     
     // Get execution record
-    const execution = await WorkflowExecution.findOne({ callSid: CallSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: CallSid,
+      ...(webhookUserId ? { userId: webhookUserId } : {})
+    });
     if (!execution) {
       logger.warn(`No execution found for call ${CallSid}`);
       return res.status(404).send('Execution not found');

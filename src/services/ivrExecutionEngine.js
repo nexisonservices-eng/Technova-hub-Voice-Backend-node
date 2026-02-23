@@ -145,7 +145,7 @@ class IVRExecutionEngine {
     }
 
     response.dial({
-      callerId: process.env.TWILIO_PHONE_NUMBER,
+      callerId: data.callerId || context?.twilioPhoneNumber || undefined,
       timeout: data.timeout || 30
     }, destination);
 

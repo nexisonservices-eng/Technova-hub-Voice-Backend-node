@@ -3,6 +3,7 @@ import Broadcast from '../models/Broadcast.js';
 import BroadcastCall from '../models/BroadcastCall.js';
 import twilioVoiceService from './twilioVoiceService.js';
 import aiAssistantService from './aiAssistantService.js';
+import adminCredentialsService from './adminCredentialsService.js';
 import { emitBroadcastUpdate, emitCallUpdate, emitBroadcastListUpdate } from "../sockets/unifiedSocket.js";
 
 class BroadcastQueueService {
@@ -72,6 +73,7 @@ class BroadcastQueueService {
       // Count active calls
       const activeCalls = await BroadcastCall.countDocuments({
         broadcast: broadcastId,
+        userId: broadcast.createdBy,
         status: { $in: ['calling', 'ringing', 'in_progress'] }
       });
 
@@ -94,6 +96,7 @@ class BroadcastQueueService {
       if (callsToMake.length === 0) {
         const pendingCalls = await BroadcastCall.countDocuments({
           broadcast: broadcastId,
+          userId: broadcast.createdBy,
           status: { $in: ['queued', 'calling', 'ringing', 'in_progress'] }
         });
 
@@ -137,6 +140,7 @@ class BroadcastQueueService {
   async _getNextCalls(broadcastId, limit) {
     const freshCalls = await BroadcastCall.find({
       broadcast: broadcastId,
+      userId: { $exists: true },
       status: 'queued',
       attempts: 0
     })
@@ -160,7 +164,7 @@ class BroadcastQueueService {
    */
   async _initiateCall(callDoc, broadcast) {
     try {
-      const call = await BroadcastCall.findById(callDoc._id);
+      const call = await BroadcastCall.findOne({ _id: callDoc._id, userId: broadcast.createdBy });
 
       if (!call) {
         logger.error(`Call ${callDoc._id} not found`);
@@ -211,8 +215,12 @@ class BroadcastQueueService {
         return;
       }
 
-      const twilioResponse =
-        await twilioVoiceService.makeVoiceBroadcastCall({
+      const credentials = await adminCredentialsService.getTwilioCredentialsByUserId(String(broadcast.createdBy));
+      if (!credentials?.twilioAccountSid || !credentials?.twilioAuthToken || !credentials?.twilioPhoneNumber) {
+        throw new Error('Twilio credentials missing for broadcast owner');
+      }
+
+      const twilioResponse = await twilioVoiceService.makeVoiceBroadcastCall({
           to: call.contact.phone,
           audioUrl: call.personalizedMessage.audioUrl,
           messageText: call.personalizedMessage.text,
@@ -221,6 +229,10 @@ class BroadcastQueueService {
           disclaimerText:
             broadcast.config.compliance.disclaimerText,
           callbackUrl: `${process.env.BASE_URL}/webhook/broadcast/${call._id}/status`
+        }, {
+          twilioAccountSid: credentials.twilioAccountSid,
+          twilioAuthToken: credentials.twilioAuthToken,
+          twilioPhoneNumber: credentials.twilioPhoneNumber
         });
 
       await call.markCalling(twilioResponse.sid);

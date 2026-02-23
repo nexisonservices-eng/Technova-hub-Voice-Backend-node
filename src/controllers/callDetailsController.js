@@ -6,13 +6,14 @@ import logger from '../utils/logger.js';
 import inboundCallService from '../services/inboundCallService.js';
 import broadcastService from '../services/broadcastService.js';
 import analyticsController from './analyticsController.js';
-import { 
+import {
   emitCallDetailsUpdate, 
   emitInboundCallDetailsUpdate,
   emitIVRCallDetailsUpdate,
   emitOutboundCallDetailsUpdate,
   emitCallListUpdate
 } from '../sockets/unifiedSocket.js';
+import { getUserObjectId } from '../utils/authContext.js';
 
 
 /**
@@ -27,6 +28,10 @@ class CallDetailsController {
     try {
       const { callId } = req.params;
       const { type } = req.query; // 'inbound', 'ivr', 'outbound'
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
 
       if (!callId) {
         return res.status(400).json({
@@ -39,11 +44,11 @@ class CallDetailsController {
 
       // Try to find call in different collections based on type or search all
       if (!type || type === 'inbound' || type === 'ivr') {
-        callDetails = await Call.findOne({ callSid: callId }).lean();
+        callDetails = await Call.findOne({ callSid: callId, user: userId }).lean();
       }
 
       if (!callDetails && (!type || type === 'outbound')) {
-        callDetails = await BroadcastCall.findOne({ callSid: callId })
+        callDetails = await BroadcastCall.findOne({ callSid: callId, userId })
           .populate('broadcast', 'name campaignType status')
           .lean();
       }
@@ -89,6 +94,10 @@ class CallDetailsController {
         sortBy = 'createdAt',
         sortOrder = 'desc'
       } = req.query;
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
 
       const skip = (parseInt(page) - 1) * parseInt(limit);
       const query = {};
@@ -115,8 +124,8 @@ class CallDetailsController {
       if (!type || type === 'all') {
         // Get all call types
         const [inboundCalls, outboundCalls] = await Promise.all([
-          Call.find(query).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean(),
-          BroadcastCall.find(query).populate('broadcast', 'name campaignType').sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean()
+          Call.find({ ...query, user: userId }).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean(),
+          BroadcastCall.find({ ...query, userId }).populate('broadcast', 'name campaignType').sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean()
         ]);
 
 
@@ -125,23 +134,23 @@ class CallDetailsController {
         outboundCalls.forEach(c => c.callType = 'outbound');
 
         calls = [...inboundCalls, ...outboundCalls];
-        total = await Call.countDocuments(query) + await BroadcastCall.countDocuments(query);
+        total = await Call.countDocuments({ ...query, user: userId }) + await BroadcastCall.countDocuments({ ...query, userId });
       } else if (type === 'inbound') {
         query.direction = 'inbound';
         query.$or = [{ routing: 'default' }, { routing: { $exists: false } }];
-        calls = await Call.find(query).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean();
+        calls = await Call.find({ ...query, user: userId }).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean();
         calls.forEach(c => c.callType = 'inbound');
-        total = await Call.countDocuments(query);
+        total = await Call.countDocuments({ ...query, user: userId });
       } else if (type === 'ivr') {
         query.direction = 'inbound';
         query.routing = { $exists: true, $ne: 'default' };
-        calls = await Call.find(query).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean();
+        calls = await Call.find({ ...query, user: userId }).sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean();
         calls.forEach(c => c.callType = 'ivr');
-        total = await Call.countDocuments(query);
+        total = await Call.countDocuments({ ...query, user: userId });
       } else if (type === 'outbound') {
-        calls = await BroadcastCall.find(query).populate('broadcast', 'name campaignType').sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean();
+        calls = await BroadcastCall.find({ ...query, userId }).populate('broadcast', 'name campaignType').sort({ [sortBy]: sortOrder === 'desc' ? -1 : 1 }).skip(skip).limit(parseInt(limit)).lean();
         calls.forEach(c => c.callType = 'outbound');
-        total = await BroadcastCall.countDocuments(query);
+        total = await BroadcastCall.countDocuments({ ...query, userId });
       }
 
 
@@ -180,8 +189,9 @@ class CallDetailsController {
   async getIVRDetails(req, res) {
     try {
       const { callId } = req.params;
+      const userId = getUserObjectId(req);
 
-      const call = await Call.findOne({ callSid: callId }).lean();
+      const call = await Call.findOne({ callSid: callId, user: userId }).lean();
       
       if (!call) {
         return res.status(404).json({
@@ -265,8 +275,9 @@ class CallDetailsController {
   async getOutboundDetails(req, res) {
     try {
       const { callId } = req.params;
+      const userId = getUserObjectId(req);
 
-      const call = await BroadcastCall.findOne({ callSid: callId })
+      const call = await BroadcastCall.findOne({ callSid: callId, userId })
         .populate('broadcastId')
         .lean();
 
@@ -321,9 +332,11 @@ class CallDetailsController {
   async getInboundDetails(req, res) {
     try {
       const { callId } = req.params;
+      const userId = getUserObjectId(req);
 
       const call = await Call.findOne({ 
         callSid: callId,
+        user: userId,
         direction: 'inbound'
       }).lean();
 

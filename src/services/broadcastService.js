@@ -50,9 +50,10 @@ class BroadcastService {
   /**
    * Start broadcast - prepare audio assets and queue calls
    */
-  async startBroadcast(broadcastId) {
+  async startBroadcast(broadcastId, userId = null) {
     try {
-      const broadcast = await Broadcast.findById(broadcastId);
+      const query = userId ? { _id: broadcastId, createdBy: userId } : { _id: broadcastId };
+      const broadcast = await Broadcast.findOne(query);
 
       if (!broadcast) {
         throw new Error('Broadcast not found');
@@ -182,6 +183,7 @@ class BroadcastService {
           audioUrl: audioAsset?.audioUrl,
           audioAssetId: audioAsset?._id || null
         },
+        userId: broadcast.createdBy,
         status: 'queued',
         attempts: 0
       };
@@ -200,8 +202,8 @@ class BroadcastService {
   /**
    * Get broadcast status with real-time stats
    */
-  async getBroadcastStatus(broadcastId) {
-    const broadcast = await Broadcast.findById(broadcastId)
+  async getBroadcastStatus(broadcastId, userId) {
+    const broadcast = await Broadcast.findOne({ _id: broadcastId, createdBy: userId })
       .populate('createdBy', 'name email');
 
     if (!broadcast) {
@@ -209,7 +211,7 @@ class BroadcastService {
     }
 
     const stats = await BroadcastCall.aggregate([
-      { $match: { broadcast: broadcast._id } },
+      { $match: { broadcast: broadcast._id, userId } },
       {
         $group: {
           _id: '$status',
@@ -241,8 +243,8 @@ class BroadcastService {
   /**
    * Cancel ongoing broadcast
    */
-  async cancelBroadcast(broadcastId) {
-    const broadcast = await Broadcast.findById(broadcastId);
+  async cancelBroadcast(broadcastId, userId) {
+    const broadcast = await Broadcast.findOne({ _id: broadcastId, createdBy: userId });
 
     if (!broadcast) {
       throw new Error('Broadcast not found');
@@ -251,7 +253,7 @@ class BroadcastService {
     broadcastQueueService.stopBroadcast(broadcastId);
 
     await BroadcastCall.updateMany(
-      { broadcast: broadcastId, status: 'queued' },
+      { broadcast: broadcastId, userId, status: 'queued' },
       { status: 'cancelled' }
     );
 
@@ -268,8 +270,8 @@ class BroadcastService {
   /**
    * Delete broadcast and associated calls
    */
-  async deleteBroadcast(broadcastId) {
-    const broadcast = await Broadcast.findById(broadcastId);
+  async deleteBroadcast(broadcastId, userId) {
+    const broadcast = await Broadcast.findOne({ _id: broadcastId, createdBy: userId });
 
     if (!broadcast) {
       throw new Error('Broadcast not found');
@@ -301,10 +303,10 @@ class BroadcastService {
     }
 
     // Delete all associated calls
-    await BroadcastCall.deleteMany({ broadcast: broadcastId });
+    await BroadcastCall.deleteMany({ broadcast: broadcastId, userId });
 
     // Delete broadcast
-    await Broadcast.findByIdAndDelete(broadcastId);
+    await Broadcast.deleteOne({ _id: broadcastId, createdBy: userId });
 
     logger.info(`Broadcast ${broadcastId} fully deleted (DB + Cloudinary)`);
 

@@ -23,7 +23,7 @@ const allowUnsignedInDev = () =>
 
 const resolveAuthContext = async (req) => {
   const toNumber = normalizePhone(req.body?.To || req.query?.To || '');
-  let authToken = process.env.TWILIO_AUTH_TOKEN;
+  let authToken = '';
   let tenant = null;
 
   if (toNumber) {
@@ -66,7 +66,7 @@ export const verifyTwilioRequest = async (req, res, next) => {
 
     if (tenant) {
       req.tenantContext = {
-        adminId: tenant.userId,
+        adminId: String(tenant.userId),
         toNumber,
         twilioAccountSid: tenant.twilioAccountSid || null,
       };

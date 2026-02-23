@@ -3,6 +3,7 @@ import Call from '../models/call.js';
 import twilioVoiceService from './twilioVoiceService.js';
 import callStateService from './callStateService.js';
 import { emitCallbackUpdate } from '../sockets/unifiedSocket.js';
+import adminCredentialsService from './adminCredentialsService.js';
 
 class CallbackService {
   constructor() {
@@ -47,6 +48,7 @@ class CallbackService {
       // Create callback record using existing Call model
       const callback = await Call.create({
         callSid: `CB_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        user: requestedBy || null,
         phoneNumber,
         direction: 'outbound',
         status: 'scheduled',
@@ -137,11 +139,19 @@ class CallbackService {
       await callback.save();
 
       // Create outbound call
+      const credentials = await adminCredentialsService.getTwilioCredentialsByUserId(String(callback.user || callback.providerData?.requestedBy || ""));
+      if (!credentials?.twilioAccountSid || !credentials?.twilioAuthToken || !credentials?.twilioPhoneNumber) {
+        throw new Error('Twilio credentials missing for callback owner');
+      }
       const callResult = await twilioVoiceService.makeVoiceBroadcastCall({
         to: callback.phoneNumber,
         audioUrl: `${process.env.BASE_URL}/audio/callback-greeting.mp3`,
         disclaimerText: 'This is a scheduled callback from our system',
         callbackUrl: `${process.env.BASE_URL}/webhook/callback/status/${callback._id}`
+      }, {
+        twilioAccountSid: credentials.twilioAccountSid,
+        twilioAuthToken: credentials.twilioAuthToken,
+        twilioPhoneNumber: credentials.twilioPhoneNumber
       });
 
       // Update callback with Twilio call SID
@@ -269,9 +279,9 @@ class CallbackService {
   /**
    * Cancel a scheduled callback
    */
-  async cancelCallback(callbackId, reason) {
+  async cancelCallback(callbackId, reason, userId = null) {
     try {
-      const callback = await Call.findById(callbackId);
+      const callback = await Call.findOne({ _id: callbackId, ...(userId ? { user: userId } : {}) });
       if (!callback) {
         throw new Error('Callback not found');
       }
@@ -283,7 +293,14 @@ class CallbackService {
       // Cancel Twilio call if in progress
       if (callback.providerData?.twilioCallSid) {
         try {
-          await twilioVoiceService.endCall(callback.providerData.twilioCallSid);
+          const credentials = await adminCredentialsService.getTwilioCredentialsByUserId(String(callback.user || callback.providerData?.requestedBy || ""));
+          if (credentials?.twilioAccountSid && credentials?.twilioAuthToken && credentials?.twilioPhoneNumber) {
+            await twilioVoiceService.endCall(callback.providerData.twilioCallSid, {
+              twilioAccountSid: credentials.twilioAccountSid,
+              twilioAuthToken: credentials.twilioAuthToken,
+              twilioPhoneNumber: credentials.twilioPhoneNumber
+            });
+          }
         } catch (err) {
           logger.warn(`Failed to cancel Twilio call: ${err.message}`);
         }
@@ -316,9 +333,9 @@ class CallbackService {
   /**
    * Reschedule a callback
    */
-  async rescheduleCallback(callbackId, newDate, reason) {
+  async rescheduleCallback(callbackId, newDate, reason, userId = null) {
     try {
-      const callback = await Call.findById(callbackId);
+      const callback = await Call.findOne({ _id: callbackId, ...(userId ? { user: userId } : {}) });
       if (!callback) {
         throw new Error('Callback not found');
       }
@@ -357,7 +374,7 @@ class CallbackService {
   /**
    * Get callback statistics
    */
-  async getCallbackStats(period = 'today') {
+  async getCallbackStats(period = 'today', userId = null) {
     try {
       const now = new Date();
       let startDate;
@@ -384,6 +401,7 @@ class CallbackService {
         { 
           $match: { 
             tags: { $in: ['callback'] },
+            ...(userId ? { user: userId } : {}),
             createdAt: { $gte: startDate }
           } 
         },
@@ -406,6 +424,7 @@ class CallbackService {
 
       const pendingCount = await Call.countDocuments({
         tags: { $in: ['callback'] },
+        ...(userId ? { user: userId } : {}),
         status: 'scheduled',
         startTime: { $lte: new Date() }
       });
@@ -428,9 +447,10 @@ class CallbackService {
   /**
    * Get callbacks by phone number
    */
-  async getCallbacksByPhone(phoneNumber) {
+  async getCallbacksByPhone(phoneNumber, userId = null) {
     try {
       return await Call.find({
+        ...(userId ? { user: userId } : {}),
         phoneNumber,
         tags: { $in: ['callback'] }
       })
@@ -445,9 +465,10 @@ class CallbackService {
   /**
    * Get active callbacks
    */
-  async getActiveCallbacks() {
+  async getActiveCallbacks(userId = null) {
     try {
       return await Call.find({
+        ...(userId ? { user: userId } : {}),
         tags: { $in: ['callback'] },
         status: { $in: ['scheduled', 'attempted'] }
       });

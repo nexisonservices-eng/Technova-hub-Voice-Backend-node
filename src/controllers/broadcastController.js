@@ -3,33 +3,11 @@ import Broadcast from '../models/Broadcast.js';
 import BroadcastCall from '../models/BroadcastCall.js';
 import { validateTemplate } from '../utils/messagePersonalizer.js';
 import logger from '../utils/logger.js';
-import mongoose from 'mongoose';
+import { getUserObjectId } from '../utils/authContext.js';
 
 /**
  * Helper function to extract user ID from request
  */
-const extractUserId = (req) => {
-  // Try different possible user ID fields from JWT token
-  const userId = req.user?._id || req.user?.id || req.user?.sub || req.user?.userId;
-  
-  if (userId) {
-    // If it's already a valid ObjectId, return it
-    if (mongoose.Types.ObjectId.isValid(userId)) {
-      return userId;
-    }
-    // If it's a string, try to convert to ObjectId
-    try {
-      return new mongoose.Types.ObjectId(userId);
-    } catch (error) {
-      logger.warn('Invalid user ID format, using fallback:', userId);
-    }
-  }
-  
-  // Fallback for development/testing
-  logger.warn('No valid user ID found, using system fallback');
-  return new mongoose.Types.ObjectId(); // Generate a valid ObjectId for testing
-};
-
 class BroadcastController {
   /**
    * POST /broadcast/start
@@ -46,6 +24,10 @@ class BroadcastController {
         maxRetries,
         compliance
       } = req.body;
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       // Validate template
       const templateValidation = validateTemplate(messageTemplate);
@@ -80,11 +62,11 @@ class BroadcastController {
           maxRetries,
           compliance
         },
-        extractUserId(req)
+        userId
       );
 
       // Start broadcast asynchronously
-      broadcastService.startBroadcast(broadcast._id).catch(error => {
+      broadcastService.startBroadcast(broadcast._id, userId).catch(error => {
         logger.error(
           `Failed to start broadcast ${broadcast._id}:`,
           error
@@ -116,8 +98,11 @@ class BroadcastController {
   async getBroadcastStatus(req, res) {
     try {
       const { id } = req.params;
-
-      const broadcast = await broadcastService.getBroadcastStatus(id);
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
+      const broadcast = await broadcastService.getBroadcastStatus(id, userId);
 
       res.json({
         success: true,
@@ -147,8 +132,11 @@ class BroadcastController {
   async cancelBroadcast(req, res) {
     try {
       const { id } = req.params;
-
-      const broadcast = await broadcastService.cancelBroadcast(id);
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
+      const broadcast = await broadcastService.cancelBroadcast(id, userId);
 
       res.json({
         success: true,
@@ -176,8 +164,12 @@ class BroadcastController {
     try {
       const { id } = req.params;
       const { status, page = 1, limit = 50 } = req.query;
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
-      const query = { broadcast: id };
+      const query = { broadcast: id, userId };
       if (status) {
         query.status = status;
       }
@@ -219,8 +211,12 @@ class BroadcastController {
   async listBroadcasts(req, res) {
     try {
       const { status, page = 1, limit = 20 } = req.query;
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
-      const query = { createdBy: extractUserId(req) };
+      const query = { createdBy: userId };
       if (status) {
         query.status = status;
       }
@@ -263,7 +259,11 @@ class BroadcastController {
   async deleteBroadcast(req, res) {
     try {
       const { id } = req.params;
-      await broadcastService.deleteBroadcast(id);
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
+      await broadcastService.deleteBroadcast(id, userId);
 
       res.json({
         success: true,

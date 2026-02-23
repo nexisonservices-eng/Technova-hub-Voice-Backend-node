@@ -8,6 +8,11 @@ const broadcastCallSchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      index: true
+    },
 
     contact: {
       phone: {
@@ -100,6 +105,7 @@ const broadcastCallSchema = new mongoose.Schema(
 // Indexes
 broadcastCallSchema.index({ broadcast: 1, status: 1 });
 broadcastCallSchema.index({ broadcast: 1, attempts: 1, retryAfter: 1 });
+broadcastCallSchema.index({ userId: 1, createdAt: -1 });
 
 // Instance methods
 broadcastCallSchema.methods.markCalling = async function (callSid) {

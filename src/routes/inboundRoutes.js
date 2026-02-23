@@ -4,15 +4,26 @@ import InboundCallController from '../controllers/inboundCallController.js';
 import inboundWebhooks from '../webhooks/inboundWebhooks.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import { authenticate } from '../middleware/auth.js';
+import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 import InboundRoutingRule from '../models/InboundRoutingRule.js';
 import Workflow from '../models/Workflow.js';
 import mongoose from 'mongoose';
 import twilio from 'twilio';
+import { getUserObjectId } from '../utils/authContext.js';
 
 const router = express.Router();
 
 // Create controller instance
 const inboundCallController = new InboundCallController();
+
+// Allow webhook routes to be public only on /webhook mount.
+// If accessed through /inbound, require JWT auth.
+const requireWebhookContextOrAuth = (req, res, next) => {
+  if (req.baseUrl === '/webhook') {
+    return next();
+  }
+  return authenticate(req, res, next);
+};
 
 const mapRuleResponse = (rule) => ({
   id: String(rule._id),
@@ -27,66 +38,68 @@ const mapRuleResponse = (rule) => ({
 });
 
 // 🌐 Public Twilio webhook endpoints (secured via Twilio signature)
-router.post('/incoming', verifyTwilioRequest, inboundCallController.handleInboundCall.bind(inboundCallController));
-router.post('/status', verifyTwilioRequest, inboundCallController.handleCallStatus.bind(inboundCallController));
+router.post('/incoming', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleInboundCall.bind(inboundCallController));
+router.post('/status', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleCallStatus.bind(inboundCallController));
 
 // 📞 Enhanced webhook handlers for comprehensive inbound call management
-router.post('/call/answered', verifyTwilioRequest, inboundWebhooks.handleCallAnswered.bind(inboundWebhooks));
-router.post('/call/completed', verifyTwilioRequest, inboundWebhooks.handleCallCompleted.bind(inboundWebhooks));
-router.post('/call/failed', verifyTwilioRequest, inboundWebhooks.handleCallFailed.bind(inboundWebhooks));
-router.post('/call/machine-detection', verifyTwilioRequest, inboundWebhooks.handleMachineDetection.bind(inboundWebhooks));
-router.post('/call/recording', verifyTwilioRequest, inboundWebhooks.handleRecording.bind(inboundWebhooks));
-router.post('/call/dtmf', verifyTwilioRequest, inboundWebhooks.handleDTMF.bind(inboundWebhooks));
-router.post('/call/transfer', verifyTwilioRequest, inboundWebhooks.handleTransfer.bind(inboundWebhooks));
-router.post('/call/park', verifyTwilioRequest, inboundWebhooks.handlePark.bind(inboundWebhooks));
+router.post('/call/answered', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleCallAnswered.bind(inboundWebhooks));
+router.post('/call/completed', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleCallCompleted.bind(inboundWebhooks));
+router.post('/call/failed', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleCallFailed.bind(inboundWebhooks));
+router.post('/call/machine-detection', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleMachineDetection.bind(inboundWebhooks));
+router.post('/call/recording', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleRecording.bind(inboundWebhooks));
+router.post('/call/dtmf', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleDTMF.bind(inboundWebhooks));
+router.post('/call/transfer', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleTransfer.bind(inboundWebhooks));
+router.post('/call/park', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handlePark.bind(inboundWebhooks));
 
 // 🎛️ IVR menu handling
-router.post('/ivr/selection/:callSid', verifyTwilioRequest, inboundCallController.handleIVRSelection.bind(inboundCallController));
+router.post('/ivr/selection/:callSid', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleIVRSelection.bind(inboundCallController));
 
 // 📬 Voicemail handling
-router.post('/voicemail/:callSid', verifyTwilioRequest, inboundCallController.handleVoicemail.bind(inboundCallController));
+router.post('/voicemail/:callSid', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleVoicemail.bind(inboundCallController));
 
 // 📞 Callback handling
-router.post('/callback/option/:callSid', verifyTwilioRequest, inboundCallController.handleCallbackOption.bind(inboundCallController));
-router.post('/callback/number/:callSid', verifyTwilioRequest, inboundCallController.handleCallbackNumber.bind(inboundCallController));
-router.post('/callback/status/:callbackId', verifyTwilioRequest, inboundWebhooks.handleCallbackStatus.bind(inboundWebhooks));
+router.post('/callback/option/:callSid', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleCallbackOption.bind(inboundCallController));
+router.post('/callback/number/:callSid', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleCallbackNumber.bind(inboundCallController));
+router.post('/callback/status/:callbackId', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleCallbackStatus.bind(inboundWebhooks));
 
 // 📞 Booking flow handling
-router.post('/booking/input/:callSid', verifyTwilioRequest, inboundCallController.handleBookingInput.bind(inboundCallController));
+router.post('/booking/input/:callSid', requireWebhookContextOrAuth, verifyTwilioRequest, inboundCallController.handleBookingInput.bind(inboundCallController));
 
 // 👥 Conference and queue management
-router.post('/conference/events', verifyTwilioRequest, inboundWebhooks.handleConferenceEvents.bind(inboundWebhooks));
-router.post('/queue/status', verifyTwilioRequest, inboundWebhooks.handleQueueStatus.bind(inboundWebhooks));
+router.post('/conference/events', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleConferenceEvents.bind(inboundWebhooks));
+router.post('/queue/status', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handleQueueStatus.bind(inboundWebhooks));
 
 // 💳 Payment processing (if enabled)
-router.post('/payment/status', verifyTwilioRequest, inboundWebhooks.handlePaymentStatus.bind(inboundWebhooks));
+router.post('/payment/status', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handlePaymentStatus.bind(inboundWebhooks));
 
 // 🔒 Protected endpoints (JWT required) - for dashboard/management
-router.get('/analytics', authenticate, inboundCallController.getInboundAnalytics.bind(inboundCallController));
-router.get('/analytics/export', authenticate, inboundCallController.exportAnalytics.bind(inboundCallController));
-router.get('/queues', authenticate, inboundCallController.getQueueStatus.bind(inboundCallController));
-router.get('/queues/:queueName', authenticate, inboundCallController.getQueueStatus.bind(inboundCallController));
+router.use(authenticate);
+router.use(resolveUserTwilioContext);
+router.get('/analytics', inboundCallController.getInboundAnalytics.bind(inboundCallController));
+router.get('/analytics/export', inboundCallController.exportAnalytics.bind(inboundCallController));
+router.get('/queues', inboundCallController.getQueueStatus.bind(inboundCallController));
+router.get('/queues/:queueName', inboundCallController.getQueueStatus.bind(inboundCallController));
 
 // 🎛️ IVR configuration management
-router.get('/ivr/configs', authenticate, inboundCallController.getIVRConfigs.bind(inboundCallController));
-router.post('/ivr/configs', authenticate, inboundCallController.updateIVRConfig.bind(inboundCallController));
-router.delete('/ivr/configs/:menuId', authenticate, inboundCallController.deleteIVRConfig.bind(inboundCallController));
+router.get('/ivr/configs', inboundCallController.getIVRConfigs.bind(inboundCallController));
+router.post('/ivr/configs', inboundCallController.updateIVRConfig.bind(inboundCallController));
+router.delete('/ivr/configs/:menuId', inboundCallController.deleteIVRConfig.bind(inboundCallController));
 
 // 📞 Callback management
-router.post('/callbacks/schedule', authenticate, inboundCallController.scheduleCallback.bind(inboundCallController));
-router.get('/callbacks/stats', authenticate, inboundCallController.getCallbackStats.bind(inboundCallController));
-router.get('/callbacks/active', authenticate, inboundCallController.getActiveCallbacks.bind(inboundCallController));
-router.delete('/callbacks/:callbackId', authenticate, inboundCallController.cancelCallback.bind(inboundCallController));
-router.put('/callbacks/:callbackId/reschedule', authenticate, inboundCallController.rescheduleCallback.bind(inboundCallController));
-router.get('/callbacks/phone/:phoneNumber', authenticate, inboundCallController.getCallbacksByPhone.bind(inboundCallController));
+router.post('/callbacks/schedule', inboundCallController.scheduleCallback.bind(inboundCallController));
+router.get('/callbacks/stats', inboundCallController.getCallbackStats.bind(inboundCallController));
+router.get('/callbacks/active', inboundCallController.getActiveCallbacks.bind(inboundCallController));
+router.delete('/callbacks/:callbackId', inboundCallController.cancelCallback.bind(inboundCallController));
+router.put('/callbacks/:callbackId/reschedule', inboundCallController.rescheduleCallback.bind(inboundCallController));
+router.get('/callbacks/phone/:phoneNumber', inboundCallController.getCallbacksByPhone.bind(inboundCallController));
 
 // 👥 Agent management
-router.get('/agents/stats', authenticate, inboundCallController.getAgentStats.bind(inboundCallController));
-router.post('/agents', authenticate, inboundCallController.addAgent.bind(inboundCallController));
-router.delete('/agents/:agentId', authenticate, inboundCallController.removeAgent.bind(inboundCallController));
+router.get('/agents/stats', inboundCallController.getAgentStats.bind(inboundCallController));
+router.post('/agents', inboundCallController.addAgent.bind(inboundCallController));
+router.delete('/agents/:agentId', inboundCallController.removeAgent.bind(inboundCallController));
 
 // Routing rules compatibility endpoints
-router.get('/routing/rules', authenticate, async (req, res) => {
+router.get('/routing/rules', async (req, res) => {
   try {
     const rules = await InboundRoutingRule.find({})
       .sort({ priority: 1, updatedAt: -1 })
@@ -101,7 +114,7 @@ router.get('/routing/rules', authenticate, async (req, res) => {
   }
 });
 
-router.post('/routing/rules', authenticate, async (req, res) => {
+router.post('/routing/rules', async (req, res) => {
   try {
     const incomingRule = req.body || {};
     const payload = {
@@ -154,7 +167,7 @@ router.post('/routing/rules', authenticate, async (req, res) => {
   }
 });
 
-router.delete('/routing/rules/:ruleId', authenticate, async (req, res) => {
+router.delete('/routing/rules/:ruleId', async (req, res) => {
   try {
     const { ruleId } = req.params;
     const deleted = await InboundRoutingRule.findByIdAndDelete(ruleId);
@@ -167,7 +180,7 @@ router.delete('/routing/rules/:ruleId', authenticate, async (req, res) => {
   }
 });
 
-router.patch('/routing/rules/:ruleId/toggle', authenticate, async (req, res) => {
+router.patch('/routing/rules/:ruleId/toggle', async (req, res) => {
   try {
     const { ruleId } = req.params;
     const rule = await InboundRoutingRule.findById(ruleId);
@@ -188,10 +201,14 @@ router.patch('/routing/rules/:ruleId/toggle', authenticate, async (req, res) => 
   }
 });
 
-router.post('/routing/rules/:ruleId/test', authenticate, async (req, res) => {
+router.post('/routing/rules/:ruleId/test', async (req, res) => {
   try {
     const { ruleId } = req.params;
     const { callSid, phoneNumber } = req.body || {};
+    const userId = getUserObjectId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     const rule = await InboundRoutingRule.findById(ruleId);
     if (!rule) {
@@ -213,10 +230,10 @@ router.post('/routing/rules/:ruleId/test', authenticate, async (req, res) => {
 
     let menu = null;
     if (rule.ivrMenuId && mongoose.Types.ObjectId.isValid(rule.ivrMenuId)) {
-      menu = await Workflow.findOne({ _id: rule.ivrMenuId, isActive: true });
+      menu = await Workflow.findOne({ _id: rule.ivrMenuId, isActive: true, createdBy: userId });
     }
     if (!menu && ivrPromptKey) {
-      menu = await Workflow.findOne({ promptKey: ivrPromptKey, isActive: true });
+      menu = await Workflow.findOne({ promptKey: ivrPromptKey, isActive: true, createdBy: userId });
     }
 
     if (!menu) {

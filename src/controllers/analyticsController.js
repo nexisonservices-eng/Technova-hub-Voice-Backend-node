@@ -4,6 +4,7 @@ import Workflow from '../models/Workflow.js';
 import User from '../models/user.js';
 import logger from '../utils/logger.js';
 import { getIO } from '../sockets/unifiedSocket.js';
+import { getUserObjectId } from '../utils/authContext.js';
 
 /**
  * Production-level Analytics Controller
@@ -24,8 +25,12 @@ class AnalyticsController {
    */
   async getInboundAnalytics(req, res) {
     try {
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
       const { period = 'today', callType = 'all', status = 'all' } = req.query;
-      const analyticsData = await this.getOrGenerateInboundAnalytics({ period, callType, status });
+      const analyticsData = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId: String(userId) });
 
       res.json({
         success: true,
@@ -43,15 +48,15 @@ class AnalyticsController {
     }
   }
 
-  buildCacheKey(period = 'today', callType = 'all', status = 'all') {
-    return `analytics_${period}_${callType}_${status}`;
+  buildCacheKey(period = 'today', callType = 'all', status = 'all', userId = 'anonymous') {
+    return `analytics_${userId}_${period}_${callType}_${status}`;
   }
 
-  async getOrGenerateInboundAnalytics({ period = 'today', callType = 'all', status = 'all' } = {}) {
+  async getOrGenerateInboundAnalytics({ period = 'today', callType = 'all', status = 'all', userId = null } = {}) {
     const normalizedPeriod = period || 'today';
     const normalizedCallType = callType || 'all';
     const normalizedStatus = status || 'all';
-    const cacheKey = this.buildCacheKey(normalizedPeriod, normalizedCallType, normalizedStatus);
+    const cacheKey = this.buildCacheKey(normalizedPeriod, normalizedCallType, normalizedStatus, userId || 'anonymous');
 
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
@@ -61,7 +66,8 @@ class AnalyticsController {
     const analyticsData = await this.generateInboundAnalytics({
       period: normalizedPeriod,
       callType: normalizedCallType,
-      status: normalizedStatus
+      status: normalizedStatus,
+      userId
     });
 
     this.cache.set(cacheKey, {
@@ -72,8 +78,9 @@ class AnalyticsController {
     return analyticsData;
   }
 
-  async generateInboundAnalytics({ period = 'today', callType = 'all', status = 'all' } = {}) {
+  async generateInboundAnalytics({ period = 'today', callType = 'all', status = 'all', userId = null } = {}) {
     const dateRange = this.getDateRange(period);
+    const ownerFilter = userId ? { user: userId } : {};
 
     const [
       summary,
@@ -86,15 +93,15 @@ class AnalyticsController {
       recentCalls,
       dailyBreakdown
     ] = await Promise.all([
-      this.getSummaryStats(dateRange, callType, status),
-      this.getHourlyDistribution(dateRange),
-      this.getIVRBreakdown(dateRange),
-      this.getAIMetrics(dateRange),
+      this.getSummaryStats(dateRange, callType, status, ownerFilter),
+      this.getHourlyDistribution(dateRange, ownerFilter),
+      this.getIVRBreakdown(dateRange, userId),
+      this.getAIMetrics(dateRange, ownerFilter),
       this.getUsersStats(),
-      this.getIVRStats(dateRange),
-      this.getQueueStats(dateRange),
-      this.getRecentCalls(dateRange, 50),
-      this.getDailyBreakdown(period)
+      this.getIVRStats(dateRange, userId),
+      this.getQueueStats(dateRange, ownerFilter),
+      this.getRecentCalls(dateRange, 50, ownerFilter),
+      this.getDailyBreakdown(period, ownerFilter)
     ]);
 
     return {
@@ -119,8 +126,9 @@ class AnalyticsController {
   /**
    * Get summary statistics
    */
-  async getSummaryStats(dateRange, callType, status) {
+  async getSummaryStats(dateRange, callType, status, ownerFilter = {}) {
     const matchStage = {
+      ...ownerFilter,
       createdAt: { $gte: dateRange.start, $lte: dateRange.end }
     };
 
@@ -248,10 +256,11 @@ class AnalyticsController {
   /**
    * Get hourly distribution
    */
-  async getHourlyDistribution(dateRange) {
+  async getHourlyDistribution(dateRange, ownerFilter = {}) {
     const data = await Call.aggregate([
       {
         $match: {
+          ...ownerFilter,
           createdAt: { $gte: dateRange.start, $lte: dateRange.end }
         }
       },
@@ -296,12 +305,14 @@ class AnalyticsController {
   /**
    * Get IVR breakdown
    */
-  async getIVRBreakdown(dateRange) {
+  async getIVRBreakdown(dateRange, userId = null) {
+    const executionFilter = {
+      startTime: { $gte: dateRange.start, $lte: dateRange.end }
+    };
+    if (userId) executionFilter.userId = userId;
     const data = await ExecutionLog.aggregate([
       {
-        $match: {
-          startTime: { $gte: dateRange.start, $lte: dateRange.end }
-        }
+        $match: executionFilter
       },
       {
         $group: {
@@ -322,10 +333,11 @@ class AnalyticsController {
   /**
    * Get AI metrics
    */
-  async getAIMetrics(dateRange) {
+  async getAIMetrics(dateRange, ownerFilter = {}) {
     const aiCalls = await Call.aggregate([
       {
         $match: {
+          ...ownerFilter,
           createdAt: { $gte: dateRange.start, $lte: dateRange.end },
           aiAssisted: true
         }
@@ -347,6 +359,7 @@ class AnalyticsController {
     ]);
 
     const totalCalls = await Call.countDocuments({
+      ...ownerFilter,
       createdAt: { $gte: dateRange.start, $lte: dateRange.end }
     });
 
@@ -394,19 +407,20 @@ class AnalyticsController {
   /**
    * Get IVR stats
    */
-  async getIVRStats(dateRange) {
+  async getIVRStats(dateRange, userId = null) {
     const [containment, abandon, avgDuration, transfer] = await Promise.all([
-      this.getIVRContainmentRate(dateRange),
-      this.getIVRAbandonRate(dateRange),
-      this.getIVRAvgDuration(dateRange),
-      this.getIVRTransferRate(dateRange)
+      this.getIVRContainmentRate(dateRange, userId),
+      this.getIVRAbandonRate(dateRange, userId),
+      this.getIVRAvgDuration(dateRange, userId),
+      this.getIVRTransferRate(dateRange, userId)
     ]);
 
     // Get flow performance
     const flows = await ExecutionLog.aggregate([
       {
         $match: {
-          startTime: { $gte: dateRange.start, $lte: dateRange.end }
+          startTime: { $gte: dateRange.start, $lte: dateRange.end },
+          ...(userId ? { userId } : {})
         }
       },
       {
@@ -440,10 +454,11 @@ class AnalyticsController {
   /**
    * Get queue stats
    */
-  async getQueueStats(dateRange) {
+  async getQueueStats(dateRange, ownerFilter = {}) {
     const stats = await Call.aggregate([
       {
         $match: {
+          ...ownerFilter,
           createdAt: { $gte: dateRange.start, $lte: dateRange.end },
           queued: true
         }
@@ -494,6 +509,7 @@ class AnalyticsController {
 
     // Get current longest queue
     const currentQueue = await Call.countDocuments({
+      ...ownerFilter,
       status: 'queued',
       createdAt: { $gte: new Date(Date.now() - 3600000) }
     });
@@ -505,8 +521,9 @@ class AnalyticsController {
   /**
    * Get recent calls
    */
-  async getRecentCalls(dateRange, limit = 50) {
+  async getRecentCalls(dateRange, limit = 50, ownerFilter = {}) {
     const rows = await Call.find({
+      ...ownerFilter,
       createdAt: { $gte: dateRange.start, $lte: dateRange.end }
     })
       .sort({ createdAt: -1 })
@@ -525,7 +542,7 @@ class AnalyticsController {
   /**
    * Get daily breakdown
    */
-  async getDailyBreakdown(period) {
+  async getDailyBreakdown(period, ownerFilter = {}) {
     const days = period === 'week' ? 7 : period === 'month' ? 30 : 1;
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
@@ -533,6 +550,7 @@ class AnalyticsController {
     const data = await Call.aggregate([
       {
         $match: {
+          ...ownerFilter,
           createdAt: { $gte: startDate }
         }
       },
@@ -570,10 +588,15 @@ class AnalyticsController {
    */
   async exportAnalytics(req, res) {
     try {
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
       const { period = 'today', format = 'csv' } = req.query;
       const dateRange = this.getDateRange(period);
 
       const calls = await Call.find({
+        user: userId,
         createdAt: { $gte: dateRange.start, $lte: dateRange.end }
       })
         .sort({ createdAt: -1 })
@@ -764,9 +787,9 @@ class AnalyticsController {
     return total > 0 ? Math.round((active / total) * 100) : 0;
   }
 
-  async getIVRContainmentRate(dateRange) {
+  async getIVRContainmentRate(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end } } },
+      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
       {
         $group: {
           _id: null,
@@ -781,9 +804,9 @@ class AnalyticsController {
     return Math.round((result[0].contained / result[0].total) * 100);
   }
 
-  async getIVRAbandonRate(dateRange) {
+  async getIVRAbandonRate(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end } } },
+      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
       {
         $group: {
           _id: null,
@@ -798,17 +821,17 @@ class AnalyticsController {
     return Math.round((result[0].abandoned / result[0].total) * 100);
   }
 
-  async getIVRAvgDuration(dateRange) {
+  async getIVRAvgDuration(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end } } },
+      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
       { $group: { _id: null, avg: { $avg: '$duration' } } }
     ]);
     return result[0]?.avg || 0;
   }
 
-  async getIVRTransferRate(dateRange) {
+  async getIVRTransferRate(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end } } },
+      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
       {
         $group: {
           _id: null,

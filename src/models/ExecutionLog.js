@@ -10,6 +10,13 @@ const ExecutionLogSchema = new mongoose.Schema({
     },
 
     // Workflow reference
+    userId: {
+        type: mongoose.Schema.Types.ObjectId,
+        required: false,
+        index: true,
+        description: 'Owner userId from Admin backend'
+    },
+
     workflowId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Workflow',

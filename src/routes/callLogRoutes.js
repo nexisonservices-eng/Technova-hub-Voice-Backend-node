@@ -6,11 +6,13 @@ import express from 'express';
 import CallLogController from '../controllers/callLogController.js';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validation.js';
+import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 
 const router = express.Router();
 
 // All routes require authentication
 router.use(authenticate);
+router.use(resolveUserTwilioContext);
 
 /**
  * @route GET /api/call-logs

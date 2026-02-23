@@ -9,11 +9,24 @@ import crypto from 'crypto';
 import Call from '../models/call.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
+import mongoose from 'mongoose';
+import { getUserRoom } from '../sockets/unifiedSocket.js';
 
 // Import Socket.IO instance for real-time events
 let io = null;
 export const setSocketIO = (socketIO) => {
   io = socketIO;
+};
+
+const getAuthenticatedUserId = (req) => {
+  const rawUserId = req.user?._id || req.user?.id || req.user?.sub || req.user?.userId;
+  if (!rawUserId) return null;
+
+  if (mongoose.Types.ObjectId.isValid(rawUserId)) {
+    return new mongoose.Types.ObjectId(rawUserId);
+  }
+
+  return null;
 };
 
 class InboundCallController {
@@ -83,7 +96,8 @@ class InboundCallController {
       const result = await inboundCallService.processIncomingCall({
         CallSid,
         From,
-        To
+        To,
+        userId: req.tenantContext?.adminId || null
       });
 
       // Update call status
@@ -379,6 +393,10 @@ class InboundCallController {
   async getInboundAnalytics(req, res) {
     try {
       const { period = 'today' } = req.query;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       // Calculate date range
       const now = new Date();
@@ -408,6 +426,7 @@ class InboundCallController {
 
       // Fetch analytics data
       const inboundCalls = await Call.find({
+        user: userId,
         direction: 'inbound',
         createdAt: { $gte: startDate }
       }).sort({ createdAt: -1 });
@@ -525,7 +544,7 @@ class InboundCallController {
       const { period = 'today', format = 'csv' } = req.query;
 
       // Get the same analytics data as getInboundAnalytics
-      const mockRequest = { query: { period } };
+      const mockRequest = { query: { period }, user: req.user };
       const analyticsResponse = await this.getInboundAnalytics(mockRequest, {
         json: (data) => data
       });
@@ -590,6 +609,13 @@ class InboundCallController {
   async updateIVRConfig(req, res) {
     try {
       const { menuName, config } = req.body;
+      const userId = getAuthenticatedUserId(req);
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'Unauthorized: invalid user identity'
+        });
+      }
 
       // Strict validation for required fields
       const validation = this.validateRequiredFields(req.body, ['menuName', 'config']);
@@ -772,7 +798,7 @@ class InboundCallController {
       if (menuName && menuName.length === 24 && /^[0-9a-fA-F]{24}$/.test(menuName)) {
         try {
           const { ObjectId } = await import('mongodb');
-          menu = await Workflow.findOne({ _id: new ObjectId(menuName) });
+          menu = await Workflow.findOne({ _id: new ObjectId(menuName), createdBy: userId });
           logger.info('Ã°Å¸â€Â DEBUG: Found by ObjectId:', menu?._id);
         } catch (err) {
           // Invalid ObjectId, continue with other searches
@@ -782,6 +808,7 @@ class InboundCallController {
       // If not found by _id, try by promptKey and displayName
       if (!menu) {
         menu = await Workflow.findOne({
+          createdBy: userId,
           $or: [
             { promptKey: menuName },
             { displayName: menuName }
@@ -899,7 +926,9 @@ class InboundCallController {
         config: defaultConfig,
         tags: config.tags || [],
         status: config.status || 'draft',
-        isActive: true
+        isActive: true,
+        createdBy: userId,
+        lastModifiedBy: userId
       };
 
       // Add greeting text for traditional IVRs
@@ -973,7 +1002,7 @@ class InboundCallController {
             logger.warn(`Version conflict while updating IVR menu ${menuName}. Retrying... (${3 - retriesLeft}/2)`);
             retriesLeft -= 1;
 
-            const latestMenu = await Workflow.findById(menu._id);
+            const latestMenu = await Workflow.findOne({ _id: menu._id, createdBy: userId });
             if (!latestMenu) {
               throw new Error(`IVR menu '${menuName}' no longer exists`);
             }
@@ -1065,10 +1094,10 @@ class InboundCallController {
         };
 
         if (isCreate) {
-          io.emit('ivr_config_created', eventData);
+          io.to(getUserRoom(userId)).emit('ivr_config_created', eventData);
           logger.info(`Ã°Å¸â€œÂ¡ Socket.IO emitted: ivr_config_created for ${menuName} with complete data`);
         } else {
-          io.emit('ivr_config_updated', eventData);
+          io.to(getUserRoom(userId)).emit('ivr_config_updated', eventData);
           logger.info(`Ã°Å¸â€œÂ¡ Socket.IO emitted: ivr_config_updated for ${menuName} with complete data`);
         }
       }
@@ -1151,6 +1180,13 @@ class InboundCallController {
   async deleteIVRConfig(req, res) {
     try {
       const { menuId } = req.params;
+      const userId = getAuthenticatedUserId(req);
+
+      if (!userId) {
+        return res.status(401).json({
+          error: 'Unauthorized: invalid user identity'
+        });
+      }
 
       // Strict validation for required fields
       const validation = this.validateRequiredFields(req.params, ['menuId']);
@@ -1169,7 +1205,7 @@ class InboundCallController {
       let menu = null;
       try {
         const { ObjectId } = await import('mongodb');
-        menu = await Workflow.findById(menuId);
+        menu = await Workflow.findOne({ _id: new ObjectId(menuId), createdBy: userId });
       } catch (err) {
         logger.error('Invalid ObjectId format:', menuId, err);
         return res.status(400).json({
@@ -1188,6 +1224,7 @@ class InboundCallController {
       // Check if menu is being used in any active calls
       // PERFORMANCE NOTE: Ensure MongoDB has compound index on { routing: 1, status: 1 } for optimal performance
       const activeCallsWithMenu = await Call.countDocuments({
+        user: userId,
         routing: menu.promptKey,
         status: { $in: ['initiated', 'ringing', 'in-progress'] }
       });
@@ -1236,7 +1273,7 @@ class InboundCallController {
       }
 
       // Ã°Å¸â€”â€˜Ã¯Â¸Â STEP 2: Delete from database (hard delete, not soft delete)
-      await Workflow.findByIdAndDelete(menuId);
+      await Workflow.deleteOne({ _id: menu._id, createdBy: userId });
 
       // Remove from in-memory service
       inboundCallService.ivrMenus.delete(menu.promptKey);
@@ -1253,7 +1290,7 @@ class InboundCallController {
           deletedAt: new Date().toISOString()
         };
 
-        io.emit('ivr_config_deleted', eventData);
+        io.to(getUserRoom(userId)).emit('ivr_config_deleted', eventData);
         logger.info(`Ã°Å¸â€œÂ¡ Socket.IO emitted: ivr_config_deleted for ${menu.promptKey}`);
       }
 
@@ -1283,13 +1320,20 @@ class InboundCallController {
    */
   async getIVRConfigs(req, res) {
     try {
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          error: 'Unauthorized: invalid user identity'
+        });
+      }
+
       // Import Workflow model to get data from database
       const { default: Workflow } = await import('../models/Workflow.js');
 
-      logger.info('Ã°Å¸â€Â Querying IVR workflows with filter: { isActive: true }');
+      logger.info('Ã°Å¸â€Â Querying IVR workflows with owner filter');
 
       // Get all IVR workflows from database
-      const menus = await Workflow.find({ isActive: true })
+      const menus = await Workflow.find({ isActive: true, createdBy: userId })
         .select('promptKey displayName text nodes edges config status tags createdAt updatedAt')
         .sort({ promptKey: 1 });
 
@@ -1399,6 +1443,10 @@ class InboundCallController {
   async scheduleCallback(req, res) {
     try {
       const { callSid, phoneNumber, priority, scheduledTime } = req.body;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       // Strict validation for required fields
       const validation = this.validateRequiredFields(req.body, ['callSid', 'phoneNumber']);
@@ -1433,7 +1481,8 @@ class InboundCallController {
         callSid,
         phoneNumber,
         priority || 'normal',
-        parsedScheduledTime
+        parsedScheduledTime,
+        userId
       );
 
       res.json({
@@ -1459,8 +1508,12 @@ class InboundCallController {
   async getCallbackStats(req, res) {
     try {
       const { period = 'today' } = req.query;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
-      const stats = await callbackService.getCallbackStats(period);
+      const stats = await callbackService.getCallbackStats(period, userId);
 
       res.json(stats);
 
@@ -1475,7 +1528,11 @@ class InboundCallController {
    */
   async getActiveCallbacks(req, res) {
     try {
-      const callbacks = await callbackService.getActiveCallbacks();
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
+      const callbacks = await callbackService.getActiveCallbacks(userId);
 
       res.json({
         success: true,
@@ -1504,6 +1561,10 @@ class InboundCallController {
     try {
       const { callbackId } = req.params;
       const { reason } = req.body;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       // Strict validation for required fields
       const validation = this.validateRequiredFields(req.params, ['callbackId']);
@@ -1514,7 +1575,7 @@ class InboundCallController {
         });
       }
 
-      const callback = await callbackService.cancelCallback(callbackId, reason);
+      const callback = await callbackService.cancelCallback(callbackId, reason, userId);
 
       res.json({
         success: true,
@@ -1540,6 +1601,10 @@ class InboundCallController {
     try {
       const { callbackId } = req.params;
       const { scheduledTime, reason } = req.body;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       // Strict validation for required fields
       const paramValidation = this.validateRequiredFields(req.params, ['callbackId']);
@@ -1578,7 +1643,8 @@ class InboundCallController {
       const callback = await callbackService.rescheduleCallback(
         callbackId,
         parsedScheduledTime,
-        reason
+        reason,
+        userId
       );
 
       res.json({
@@ -1604,6 +1670,10 @@ class InboundCallController {
   async getCallbacksByPhone(req, res) {
     try {
       const { phoneNumber } = req.params;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       // Strict validation for required fields
       const validation = this.validateRequiredFields(req.params, ['phoneNumber']);
@@ -1614,7 +1684,7 @@ class InboundCallController {
         });
       }
 
-      const callbacks = await callbackService.getCallbacksByPhone(phoneNumber);
+      const callbacks = await callbackService.getCallbacksByPhone(phoneNumber, userId);
 
       res.json({
         success: true,

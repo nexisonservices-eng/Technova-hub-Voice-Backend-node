@@ -12,6 +12,8 @@ import { IndustryNodeHandlers } from '../services/industryNodeHandlers.js';
 import workflowNodeService from '../services/workflowNodeService.js';
 import { NODE_TYPES, NODE_CONFIGS } from '../config/workflowNodeConfig.js';
 import { authenticate } from '../middleware/auth.js';
+import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
+import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 import twilio from 'twilio';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 
@@ -22,13 +24,21 @@ const router = express.Router();
 // Create IVR controller instance
 const ivrController = new IVRController();
 
+const getAuthenticatedUserId = (req) => {
+  const rawUserId = req.user?._id || req.user?.id || req.user?.sub || req.user?.userId;
+  if (!rawUserId || !mongoose.Types.ObjectId.isValid(rawUserId)) {
+    return null;
+  }
+  return new mongoose.Types.ObjectId(rawUserId);
+};
+
 // Twilio webhook endpoints
-router.post('/welcome', (req, res) => ivrController.welcome(req, res));
-router.post('/select-language', (req, res) => ivrController.selectLanguage(req, res));
-router.post('/handle-input', (req, res) => ivrController.handleInput(req, res));
-router.post('/next-step', (req, res) => ivrController.nextStep(req, res));
-router.post('/process-service', (req, res) => ivrController.processService(req, res));
-router.post('/call-status', (req, res) => ivrController.handleCallStatus(req, res));
+router.post('/welcome', verifyTwilioRequest, (req, res) => ivrController.welcome(req, res));
+router.post('/select-language', verifyTwilioRequest, (req, res) => ivrController.selectLanguage(req, res));
+router.post('/handle-input', verifyTwilioRequest, (req, res) => ivrController.handleInput(req, res));
+router.post('/next-step', verifyTwilioRequest, (req, res) => ivrController.nextStep(req, res));
+router.post('/process-service', verifyTwilioRequest, (req, res) => ivrController.processService(req, res));
+router.post('/call-status', verifyTwilioRequest, (req, res) => ivrController.handleCallStatus(req, res));
 
 // Multer configuration for audio uploads
 import multer from 'multer';
@@ -41,13 +51,13 @@ const upload = multer({
  * POST /ivr/audio/upload
  * Upload audio file for IVR nodes
  */
-router.post('/audio/upload', upload.single('audio'), (req, res) => IVRAudioController.upload(req, res));
+router.post('/audio/upload', authenticate, upload.single('audio'), (req, res) => IVRAudioController.upload(req, res));
 
 /**
  * DELETE /ivr/audio/:publicId
  * Delete custom uploaded audio file (handles Cloudinary paths with forward slashes)
  */
-router.delete('/audio/:publicId', (req, res) => {
+router.delete('/audio/:publicId', authenticate, (req, res) => {
   // Only handle if publicId contains forward slashes (Cloudinary path)
   const publicId = decodeURIComponent(req.params.publicId);
   if (publicId.includes('/')) {
@@ -63,10 +73,11 @@ router.delete('/audio/:publicId', (req, res) => {
  * POST /ivr/tts/preview
  * Generate audio for TTS preview
  */
-router.post('/tts/preview', (req, res) => IVRAudioController.ttsPreview(req, res));
+router.post('/tts/preview', authenticate, (req, res) => IVRAudioController.ttsPreview(req, res));
 
 // Apply authentication for all management endpoints below
 router.use(authenticate);
+router.use(resolveUserTwilioContext);
 
 // Management endpoints for audio generation and management
 
@@ -82,7 +93,12 @@ router.use(authenticate);
  */
 router.get('/prompts', async (req, res) => {
   try {
-    const prompts = await Workflow.find({ isActive: true })
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const prompts = await Workflow.find({ isActive: true, createdBy: userId })
       .select('promptKey displayName nodes edges config status tags createdAt updatedAt')
       .sort({ promptKey: 1 });
 
@@ -107,7 +123,12 @@ router.get('/prompts', async (req, res) => {
 router.get('/prompts/:promptKey', async (req, res) => {
   try {
     const { promptKey } = req.params;
-    const prompt = await Workflow.findOne({ promptKey, isActive: true });
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const prompt = await Workflow.findOne({ promptKey, isActive: true, createdBy: userId });
 
     if (!prompt) {
       return res.status(404).json({
@@ -148,7 +169,16 @@ router.post('/generate-audio', [
       });
     }
 
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const { promptKey, text, language, forceRegenerate = false } = req.body;
+    const prompt = await Workflow.findOne({ promptKey, createdBy: userId, isActive: true }).select('_id');
+    if (!prompt) {
+      return res.status(404).json({ success: false, error: 'Prompt not found' });
+    }
 
     logger.info(`Generating audio for prompt: ${promptKey}, language: ${language}`);
 
@@ -196,7 +226,16 @@ router.post('/generate-all-languages', [
       });
     }
 
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const { promptKey, text, forceRegenerate = false } = req.body;
+    const prompt = await Workflow.findOne({ promptKey, createdBy: userId, isActive: true }).select('_id');
+    if (!prompt) {
+      return res.status(404).json({ success: false, error: 'Prompt not found' });
+    }
 
     logger.info(`Generating audio for all languages for prompt: ${promptKey}`);
 
@@ -231,7 +270,16 @@ router.post('/generate-all-languages', [
 router.delete('/audio/:promptKey/:language', async (req, res) => {
   
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const { promptKey, language } = req.params;
+    const prompt = await Workflow.findOne({ promptKey, createdBy: userId, isActive: true }).select('_id');
+    if (!prompt) {
+      return res.status(404).json({ success: false, error: 'Prompt not found' });
+    }
 
     if (!['en-GB', 'ta-IN', 'hi-IN'].includes(language)) {
       return res.status(400).json({
@@ -302,10 +350,15 @@ router.post('/create-menu-prompt', [
       });
     }
 
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const { promptKey, text, options, tags = [] } = req.body;
 
     // Check if prompt already exists
-    const existingPrompt = await Workflow.findOne({ promptKey });
+    const existingPrompt = await Workflow.findOne({ promptKey, createdBy: userId });
     if (existingPrompt) {
       return res.status(409).json({
         success: false,
@@ -324,7 +377,9 @@ router.post('/create-menu-prompt', [
         options
       },
       tags,
-      isActive: true
+      isActive: true,
+      createdBy: userId,
+      lastModifiedBy: userId
     });
 
     await newPrompt.save();
@@ -363,9 +418,13 @@ router.put('/prompts/:promptKey', [
     }
 
     const { promptKey } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const updates = req.body;
 
-    const prompt = await Workflow.findOne({ promptKey });
+    const prompt = await Workflow.findOne({ promptKey, createdBy: userId });
     if (!prompt) {
       return res.status(404).json({
         success: false,
@@ -406,8 +465,13 @@ router.put('/prompts/:promptKey', [
  */
 router.get('/stats', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const stats = await Workflow.aggregate([
-      { $match: { isActive: true } },
+      { $match: { isActive: true, createdBy: userId } },
       {
         $group: {
           _id: '$status',
@@ -463,6 +527,11 @@ router.post('/batch-generate', [
       });
     }
 
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const { prompts, forceRegenerate = false } = req.body;
     const results = [];
 
@@ -470,6 +539,20 @@ router.post('/batch-generate', [
 
     for (const prompt of prompts) {
       try {
+        const promptDoc = await Workflow.findOne({
+          promptKey: prompt.promptKey,
+          createdBy: userId,
+          isActive: true
+        }).select('_id');
+
+        if (!promptDoc) {
+          results.push({
+            promptKey: prompt.promptKey,
+            results: { error: 'Prompt not found' }
+          });
+          continue;
+        }
+
         const promptResults = {};
 
         for (const language of prompt.languages) {
@@ -566,15 +649,20 @@ router.get('/voices/:language', async (req, res) => {
  */
 router.get('/menus', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     // Pagination parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
     // Get total count
-    const total = await Workflow.countDocuments({ isActive: true });
+    const total = await Workflow.countDocuments({ isActive: true, createdBy: userId });
 
-    const menus = await Workflow.find({ isActive: true })
+    const menus = await Workflow.find({ isActive: true, createdBy: userId })
       .select('promptKey displayName nodes edges config status tags createdAt updatedAt')
       .sort({ promptKey: 1 })
       .skip(skip)
@@ -642,6 +730,10 @@ router.get('/menus', async (req, res) => {
 router.get('/menus/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     let query = {};
     if (mongoose.Types.ObjectId.isValid(id)) {
@@ -650,7 +742,7 @@ router.get('/menus/:id', async (req, res) => {
       query = { promptKey: id };
     }
 
-    const menu = await Workflow.findOne({ ...query, isActive: true });
+    const menu = await Workflow.findOne({ ...query, isActive: true, createdBy: userId });
 
     if (!menu) {
       return res.status(404).json({
@@ -722,10 +814,15 @@ router.post('/menus', [
       });
     }
 
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
     const { name, greeting, menu, tags = [] } = req.body;
 
     // Check if menu already exists
-    const existingMenu = await Workflow.findOne({ promptKey: name });
+    const existingMenu = await Workflow.findOne({ promptKey: name, createdBy: userId });
     if (existingMenu) {
       return res.status(409).json({
         success: false,
@@ -744,7 +841,9 @@ router.post('/menus', [
         options: menu
       },
       tags,
-      isActive: true
+      isActive: true,
+      createdBy: userId,
+      lastModifiedBy: userId
     });
 
     // Generate audio for all nodes
@@ -820,6 +919,10 @@ router.put('/menus/:id', [
     }
 
     const { id } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const updates = req.body;
     const { voiceId } = updates;
 
@@ -830,7 +933,7 @@ router.put('/menus/:id', [
       query = { promptKey: id };
     }
 
-    const menu = await Workflow.findOne(query);
+    const menu = await Workflow.findOne({ ...query, createdBy: userId });
     if (!menu) {
       return res.status(404).json({
         success: false,
@@ -931,6 +1034,10 @@ router.put('/menus/:id', [
 router.delete('/menus/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     let query = {};
     if (mongoose.Types.ObjectId.isValid(id)) {
@@ -939,7 +1046,7 @@ router.delete('/menus/:id', async (req, res) => {
       query = { promptKey: id };
     }
 
-    const menu = await Workflow.findOne(query);
+    const menu = await Workflow.findOne({ ...query, createdBy: userId });
     if (!menu) {
       return res.status(404).json({
         success: false,
@@ -1009,13 +1116,17 @@ router.post('/menus/:id/test', async (req, res) => {
   try {
     const { id } = req.params;
     const { callSid, phoneNumber } = req.body;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     let menu = null;
     if (mongoose.Types.ObjectId.isValid(id)) {
-      menu = await Workflow.findOne({ _id: id, isActive: true });
+      menu = await Workflow.findOne({ _id: id, isActive: true, createdBy: userId });
     }
     if (!menu) {
-      menu = await Workflow.findOne({ promptKey: id, isActive: true });
+      menu = await Workflow.findOne({ promptKey: id, isActive: true, createdBy: userId });
     }
     if (!menu) {
       return res.status(404).json({

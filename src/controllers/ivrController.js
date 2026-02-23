@@ -31,8 +31,12 @@ class IVRController {
   /**
    * Fetch the active IVR workflow
    */
-  async getActiveWorkflow() {
-    return await Workflow.findOne({ status: 'active', isActive: true });
+  async getActiveWorkflow(userId = null) {
+    const filter = { status: 'active', isActive: true };
+    if (userId && Workflow.schema.path('createdBy')) {
+      filter.createdBy = userId;
+    }
+    return await Workflow.findOne(filter);
   }
 
   /* =========================
@@ -50,7 +54,7 @@ class IVRController {
     logger.info(`Incoming call ${CallSid || "unknown"}`);
 
     try {
-      const workflow = await this.getActiveWorkflow();
+      const workflow = await this.getActiveWorkflow(req.tenantContext?.adminId || null);
 
       if (!workflow) {
         logger.warn('No active IVR workflow found. Falling back to default welcome.');
@@ -63,7 +67,13 @@ class IVRController {
       if (!startNode) throw new Error('Workflow has no nodes');
 
       // Initialize execution tracking
-      await ivrWorkflowEngine.startExecution(workflow._id, CallSid, From, To);
+      await ivrWorkflowEngine.startExecution(
+        workflow._id,
+        CallSid,
+        From,
+        To,
+        req.tenantContext?.adminId || workflow.createdBy || null
+      );
 
       const twiml = await ivrWorkflowEngine.generateTwiML(workflow._id, startNode.id, null, CallSid);
       this.send(res, twiml);

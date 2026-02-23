@@ -250,22 +250,24 @@ class TTSJobQueue {
 
     const progress = (job.processedNodes / job.totalNodes) * 100;
     
-    this.io.emit(`workflow-${job.workflowId}-progress`, {
+    const progressPayload = {
       jobId: job.id,
       nodeId: currentNodeId,
       progress: Math.round(progress),
       processedNodes: job.processedNodes,
       totalNodes: job.totalNodes,
       status: 'processing'
-    });
+    };
 
-    // Also emit to general workflow channel
-    this.io.emit('workflow_updated', {
+    const updatedPayload = {
       workflowId: job.workflowId,
       ttsStatus: 'processing',
       ttsProgress: Math.round(progress),
       timestamp: new Date().toISOString()
-    });
+    };
+
+    this._emitToWorkflowOwner(job.workflowId, `workflow-${job.workflowId}-progress`, progressPayload);
+    this._emitToWorkflowOwner(job.workflowId, 'workflow_updated', updatedPayload);
   }
 
   /**
@@ -288,7 +290,7 @@ class TTSJobQueue {
     };
 
     // Emit to workflow-specific channel
-    this.io.emit(`workflow-${job.workflowId}-completed`, eventData);
+    this._emitToWorkflowOwner(job.workflowId, `workflow-${job.workflowId}-completed`, eventData);
     
     // Convert processedNodes array to object mapped by nodeId (frontend expects this format)
     const audioUrlsObject = {};
@@ -300,7 +302,7 @@ class TTSJobQueue {
     }
     
     // Emit to general workflow channel
-    this.io.emit('workflow_updated', {
+    this._emitToWorkflowOwner(job.workflowId, 'workflow_updated', {
       workflowId: job.workflowId,
       ttsStatus: job.status === 'completed' ? 'completed' : 'partial',
       audioUrls: audioUrlsObject,  // Now an object mapped by nodeId
@@ -325,13 +327,24 @@ class TTSJobQueue {
       timestamp: new Date().toISOString()
     };
 
-    this.io.emit(`workflow-${job.workflowId}-failed`, eventData);
-    this.io.emit('workflow_updated', {
+    this._emitToWorkflowOwner(job.workflowId, `workflow-${job.workflowId}-failed`, eventData);
+    this._emitToWorkflowOwner(job.workflowId, 'workflow_updated', {
       workflowId: job.workflowId,
       ttsStatus: 'failed',
       error: error.message,
       timestamp: new Date().toISOString()
     });
+  }
+
+  async _emitToWorkflowOwner(workflowId, eventName, payload) {
+    if (!this.io || !workflowId) return;
+    try {
+      const workflow = await Workflow.findById(workflowId).select('createdBy').lean();
+      if (!workflow?.createdBy) return;
+      this.io.to(`user:${String(workflow.createdBy)}`).emit(eventName, payload);
+    } catch (error) {
+      logger.warn(`Failed scoped emit for workflow ${workflowId}: ${error.message}`);
+    }
   }
 
   /**
