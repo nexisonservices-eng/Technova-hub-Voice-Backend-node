@@ -47,6 +47,8 @@ const parseAllowedOrigins = () => {
 
 const app = express();
 const allowedOrigins = parseAllowedOrigins();
+const isProduction = process.env.NODE_ENV === 'production';
+const hasWildcardOrigin = allowedOrigins.includes('*');
 
 // Middleware
 app.set('trust proxy', 1);
@@ -56,7 +58,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    if (allowedOrigins.includes('*')) {
+    if (hasWildcardOrigin) {
       return callback(null, true);
     }
 
@@ -69,11 +71,16 @@ const corsOptions = {
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
-  credentials: true,
+  credentials: !hasWildcardOrigin,
   maxAge: 86400
 };
 
-app.use(cors());
+if (!isProduction && allowedOrigins.length === 0) {
+  logger.warn('No explicit CORS origins configured. Development requests may be blocked.');
+}
+
+app.use(cors(corsOptions));
+app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));

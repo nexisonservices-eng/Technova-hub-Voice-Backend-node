@@ -44,7 +44,6 @@ class TwilioWebhooks {
       // 🔥 CRITICAL FIX: Set proper headers for Twilio
       res.setHeader('Content-Type', 'text/xml');
       res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Access-Control-Allow-Origin', '*');
 
       // 🔥 CRITICAL FIX: Support both audio URL and text-to-speech
       let audioSection = '';

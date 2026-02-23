@@ -35,6 +35,11 @@ const parseAllowedOrigins = () => {
 const allowedOrigins = parseAllowedOrigins();
 const PORT = Number(process.env.PORT) || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
+const hasWildcardOrigin = allowedOrigins.includes('*');
+
+if (!isProduction && allowedOrigins.length === 0) {
+  logger.warn('No explicit CORS origins configured for Socket.IO. Cross-origin web clients may fail to connect.');
+}
 
 logger.info('Starting Technovo Voice Backend');
 logger.info('Connecting to MongoDB');
@@ -45,9 +50,9 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: hasWildcardOrigin ? '*' : allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: true
+    credentials: !hasWildcardOrigin
   },
   pingTimeout: 60000,
   pingInterval: 25000,
