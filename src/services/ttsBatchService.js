@@ -4,10 +4,15 @@ import logger from '../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
 
-// const PYTHON_TTS_URL = 'https://technova-hub-voice-backend-python-jzxq.onrender.com';
-const PYTHON_TTS_URL = 'http://localhost:4000';
-
 class TTSBatchService {
+  constructor() {
+    this.pythonServiceUrl =
+      process.env.AI_SERVICE_HTTP ||
+      process.env.PYTHON_TTS_SERVICE_URL ||
+      'http://localhost:4000';
+  }
+
+
   /**
    * Generate TTS audio for batch of unique messages
    */
@@ -56,8 +61,9 @@ class TTSBatchService {
   async _generateSingle(message, voiceConfig) {
     try {
       const response = await axios.post(
-        `${PYTHON_TTS_URL}/tts/broadcast`,
+        `${this.pythonServiceUrl}/tts/broadcast`,
         {
+
           text: message.text,
           voice: voiceConfig.voiceId,
           provider: voiceConfig.provider,
