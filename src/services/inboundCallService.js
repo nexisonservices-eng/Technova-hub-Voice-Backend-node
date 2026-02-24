@@ -570,6 +570,7 @@ class InboundCallService {
 
     const queueEntry = {
       callSid,
+      userId: String(callStateService.getCallState(callSid)?.user?._id || ''),
       queuedAt: new Date(),
       position,
       priority,
@@ -931,12 +932,15 @@ class InboundCallService {
   /* =========================
      Queue Status
   ========================== */
-  getQueueStatus(queueName) {
+  getQueueStatus(queueName, userId = null) {
     const queue = this.callQueues.get(queueName) || [];
+    const filteredQueue = userId
+      ? queue.filter((call) => String(call.userId) === String(userId))
+      : queue;
     return {
       name: queueName,
-      length: queue.length,
-      calls: queue.map(call => ({
+      length: filteredQueue.length,
+      calls: filteredQueue.map(call => ({
         callSid: call.callSid,
         queuedAt: call.queuedAt,
         position: call.position
@@ -947,10 +951,10 @@ class InboundCallService {
   /* =========================
      All Queues Status
   ========================== */
-  getAllQueueStatus() {
+  getAllQueueStatus(userId = null) {
     const status = {};
     for (const [name, queue] of this.callQueues) {
-      status[name] = this.getQueueStatus(name);
+      status[name] = this.getQueueStatus(name, userId);
     }
     return status;
   }

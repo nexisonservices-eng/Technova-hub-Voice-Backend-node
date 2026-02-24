@@ -2,6 +2,7 @@ import leadService from '../services/leadService.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
+import { getUserObjectId } from '../utils/authContext.js';
 
 class LeadController {
     /**
@@ -9,13 +10,14 @@ class LeadController {
      */
     async getLeads(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized'));
+            }
             const { page, limit, status, intent, search, workflowId } = req.query;
             const filters = {};
 
-            // Filter by owner (from JWT) - assumes auth middleware sets req.user
-            if (req.user && req.user._id) {
-                filters.user = req.user._id;
-            }
+            filters.user = userId;
 
             if (status) filters.status = status;
             if (intent) filters.intent = intent;
@@ -29,7 +31,7 @@ class LeadController {
             }
 
             if (workflowId) {
-                const executionFilter = { workflowId };
+                const executionFilter = { workflowId, userId };
                 const executions = await WorkflowExecution.find(executionFilter)
                     .select('callSid')
                     .lean();
@@ -63,10 +65,14 @@ class LeadController {
      */
     async getLeadById(req, res) {
         try {
-            const lead = await leadService.getLeadById(req.params.id);
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized'));
+            }
+            const lead = await leadService.getLeadById(req.params.id, userId);
 
             // Permission check
-            if (req.user && lead.user && lead.user._id.toString() !== req.user._id.toString()) {
+            if (lead.user && String(lead.user._id) !== String(userId)) {
                 return res.status(403).json(ResponseFormatter.error('Unauthorized access to lead'));
             }
 
@@ -81,7 +87,11 @@ class LeadController {
      */
     async updateLead(req, res) {
         try {
-            const lead = await leadService.updateLead(req.params.id, req.body);
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized'));
+            }
+            const lead = await leadService.updateLead(req.params.id, req.body, userId);
             res.json(ResponseFormatter.success(lead, 'Lead updated successfully'));
         } catch (error) {
             res.status(500).json(ResponseFormatter.error(error.message));
@@ -93,9 +103,13 @@ class LeadController {
      */
     async deleteLead(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized'));
+            }
             // Use service method (if exists, or direct db call via service)
             // For now using update to set cancelled or strict delete if implemented
-            await leadService.updateLead(req.params.id, { status: 'CANCELLED' });
+            await leadService.updateLead(req.params.id, { status: 'CANCELLED' }, userId);
             // OR actually delete: await Lead.findByIdAndDelete(req.params.id);
 
             res.json(ResponseFormatter.success(null, 'Lead deleted successfully'));
@@ -109,9 +123,13 @@ class LeadController {
      */
     async exportLeads(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized'));
+            }
             const { status, intent } = req.query;
             const filters = {};
-            if (req.user && req.user._id) filters.user = req.user._id;
+            filters.user = userId;
             if (status) filters.status = status;
             if (intent) filters.intent = intent;
 

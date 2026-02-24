@@ -4,8 +4,8 @@ import logger from '../utils/logger.js';
 import fs from 'fs';
 import path from 'path';
 
-const PYTHON_TTS_URL = 'https://technova-hub-voice-backend-python-jzxq.onrender.com';
-// const PYTHON_TTS_URL = 'http://localhost:4000';
+// const PYTHON_TTS_URL = 'https://technova-hub-voice-backend-python-jzxq.onrender.com';
+const PYTHON_TTS_URL = 'http://localhost:4000';
 
 class TTSBatchService {
   /**

@@ -190,6 +190,9 @@ class CallDetailsController {
     try {
       const { callId } = req.params;
       const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
 
       const call = await Call.findOne({ callSid: callId, user: userId }).lean();
       
@@ -201,12 +204,12 @@ class CallDetailsController {
       }
 
       // Get execution logs if available
-      const executionLog = await ExecutionLog.findOne({ callSid: callId }).lean();
+      const executionLog = await ExecutionLog.findOne({ callSid: callId, userId }).lean();
 
       // Get workflow details
       let workflowDetails = null;
       if (call.routing && call.routing !== 'default') {
-        workflowDetails = await Workflow.findOne({ promptKey: call.routing }).lean();
+        workflowDetails = await Workflow.findOne({ promptKey: call.routing, createdBy: userId }).lean();
       }
 
       // Get IVR metrics

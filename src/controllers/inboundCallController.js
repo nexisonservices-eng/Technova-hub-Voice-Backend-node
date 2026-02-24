@@ -372,12 +372,16 @@ class InboundCallController {
   async getQueueStatus(req, res) {
     try {
       const { queueName } = req.params;
+      const userId = getAuthenticatedUserId(req);
+      if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
+      }
 
       if (queueName) {
-        const status = inboundCallService.getQueueStatus(queueName);
+        const status = inboundCallService.getQueueStatus(queueName, userId);
         res.json(status);
       } else {
-        const allStatus = inboundCallService.getAllQueueStatus();
+        const allStatus = inboundCallService.getAllQueueStatus(userId);
         res.json(allStatus);
       }
 
@@ -490,7 +494,7 @@ class InboundCallController {
       });
 
       // Queue analytics
-      const queueData = inboundCallService.getAllQueueStatus();
+      const queueData = inboundCallService.getAllQueueStatus(userId);
 
       res.json({
         period,

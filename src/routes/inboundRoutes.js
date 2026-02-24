@@ -101,7 +101,11 @@ router.delete('/agents/:agentId', inboundCallController.removeAgent.bind(inbound
 // Routing rules compatibility endpoints
 router.get('/routing/rules', async (req, res) => {
   try {
-    const rules = await InboundRoutingRule.find({})
+    const userId = getUserObjectId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const rules = await InboundRoutingRule.find({ userId })
       .sort({ priority: 1, updatedAt: -1 })
       .lean();
 
@@ -116,8 +120,13 @@ router.get('/routing/rules', async (req, res) => {
 
 router.post('/routing/rules', async (req, res) => {
   try {
+    const userId = getUserObjectId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const incomingRule = req.body || {};
     const payload = {
+      userId,
       name: String(incomingRule.name || '').trim(),
       priority: Number.isFinite(Number(incomingRule.priority)) ? Number(incomingRule.priority) : 1,
       condition: String(incomingRule.condition || '').trim(),
@@ -146,8 +155,8 @@ router.post('/routing/rules', async (req, res) => {
     let savedRule;
     const id = incomingRule.id || incomingRule._id;
     if (id) {
-      savedRule = await InboundRoutingRule.findByIdAndUpdate(
-        id,
+      savedRule = await InboundRoutingRule.findOneAndUpdate(
+        { _id: id, userId },
         { $set: payload },
         { new: true, runValidators: true }
       );
@@ -169,8 +178,12 @@ router.post('/routing/rules', async (req, res) => {
 
 router.delete('/routing/rules/:ruleId', async (req, res) => {
   try {
+    const userId = getUserObjectId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { ruleId } = req.params;
-    const deleted = await InboundRoutingRule.findByIdAndDelete(ruleId);
+    const deleted = await InboundRoutingRule.findOneAndDelete({ _id: ruleId, userId });
     if (!deleted) {
       return res.status(404).json({ success: false, error: 'Routing rule not found' });
     }
@@ -182,8 +195,12 @@ router.delete('/routing/rules/:ruleId', async (req, res) => {
 
 router.patch('/routing/rules/:ruleId/toggle', async (req, res) => {
   try {
+    const userId = getUserObjectId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { ruleId } = req.params;
-    const rule = await InboundRoutingRule.findById(ruleId);
+    const rule = await InboundRoutingRule.findOne({ _id: ruleId, userId });
 
     if (!rule) {
       return res.status(404).json({ success: false, error: 'Routing rule not found' });
@@ -210,7 +227,7 @@ router.post('/routing/rules/:ruleId/test', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const rule = await InboundRoutingRule.findById(ruleId);
+    const rule = await InboundRoutingRule.findOne({ _id: ruleId, userId });
     if (!rule) {
       return res.status(404).json({ success: false, error: 'Routing rule not found' });
     }

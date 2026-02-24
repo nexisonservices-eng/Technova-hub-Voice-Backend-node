@@ -219,6 +219,10 @@ class BroadcastQueueService {
       if (!credentials?.twilioAccountSid || !credentials?.twilioAuthToken || !credentials?.twilioPhoneNumber) {
         throw new Error('Twilio credentials missing for broadcast owner');
       }
+      const baseUrl = String(process.env.BASE_URL || '').replace(/\/$/, '');
+      if (!baseUrl) {
+        throw new Error('Missing BASE_URL for Twilio webhook callbacks');
+      }
 
       const twilioResponse = await twilioVoiceService.makeVoiceBroadcastCall({
           to: call.contact.phone,
@@ -228,7 +232,7 @@ class BroadcastQueueService {
           language: broadcast.voice.language,
           disclaimerText:
             broadcast.config.compliance.disclaimerText,
-          callbackUrl: `${process.env.BASE_URL}/webhook/broadcast/${call._id}/status`
+          callbackUrl: `${baseUrl}/webhook/broadcast/${call._id}/status`
         }, {
           twilioAccountSid: credentials.twilioAccountSid,
           twilioAuthToken: credentials.twilioAuthToken,

@@ -10,8 +10,21 @@ class TwilioVoiceService {
   }
 
   async makeVoiceBroadcastCall(params, twilioContext) {
-    const { to, audioUrl, disclaimerText, callbackUrl, messageText, voice, language } = params;
+    const {
+      to,
+      audioUrl,
+      disclaimerText,
+      callbackUrl,
+      messageText,
+      voice,
+      language,
+      enableOptOut
+    } = params;
     if (!to) throw new Error('Missing required param: to');
+    const baseUrl = String(process.env.BASE_URL || '').replace(/\/$/, '');
+    if (!baseUrl) {
+      throw new Error('Missing BASE_URL for Twilio webhook callbacks');
+    }
 
     const twimlParams = new URLSearchParams();
     twimlParams.append('disclaimer', disclaimerText || '');
@@ -21,15 +34,19 @@ class TwilioVoiceService {
       twimlParams.append('voice', voice || 'alice');
       twimlParams.append('language', language || 'en-IN');
     }
+    if (typeof enableOptOut !== 'undefined') {
+      twimlParams.append('enableOptOut', String(enableOptOut));
+    }
 
-    const twimlUrl = `${process.env.BASE_URL}/webhook/broadcast/twiml?${twimlParams.toString()}`;
+    const twimlUrl = `${baseUrl}/webhook/broadcast/twiml?${twimlParams.toString()}`;
+    const normalizedStatusCallback = String(callbackUrl || '').replace(/([^:]\/)\/+/g, '$1');
     const client = this.createClient(twilioContext);
     const call = await client.calls.create({
       to,
       from: twilioContext.twilioPhoneNumber,
       url: twimlUrl,
-      method: 'GET',
-      statusCallback: callbackUrl,
+      method: 'POST',
+      statusCallback: normalizedStatusCallback,
       statusCallbackMethod: 'POST',
       statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
       timeout: 25,

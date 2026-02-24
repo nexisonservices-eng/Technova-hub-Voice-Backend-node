@@ -1,19 +1,20 @@
 // middleware/auth.js
 import axios from 'axios';
-import jwt from 'jsonwebtoken';
+import logger from '../utils/logger.js';
 
-const getConfiguredSecrets = () => {
-  const secrets = [
-    process.env.JWT_SECRET,
-    process.env.ADMIN_JWT_SECRET,
-    ...String(process.env.JWT_SECRETS || '')
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean)
-  ].filter(Boolean);
+const AUTH_CACHE_TTL_MS = Number(process.env.AUTH_CACHE_TTL_MS || 30000);
+const MAX_AUTH_CACHE_SIZE = Number(process.env.MAX_AUTH_CACHE_SIZE || 1000);
 
-  return [...new Set(secrets)];
-};
+const tokenAuthCache = new Map();
+const pendingIntrospection = new Map();
+
+class AuthError extends Error {
+  constructor(message, status = 401) {
+    super(message);
+    this.name = 'AuthError';
+    this.status = status;
+  }
+}
 
 const getAdminBaseUrl = () =>
   String(
@@ -38,87 +39,127 @@ const normalizeAuthenticatedUser = (payload = {}) => {
   };
 };
 
-const verifyTokenLocally = (token) => {
-  const secrets = getConfiguredSecrets();
-  if (!secrets.length) return null;
+const getTokenFromHeader = (authHeader = '') => {
+  if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
 
-  for (const secret of secrets) {
-    try {
-      return jwt.verify(token, secret);
-    } catch (error) {
-      continue;
+  return authHeader.slice(7).trim().replace(/^"|"$/g, '') || null;
+};
+
+const getCachedUser = (token) => {
+  if (!token || AUTH_CACHE_TTL_MS <= 0) return null;
+
+  const cached = tokenAuthCache.get(token);
+  if (!cached) return null;
+
+  if (cached.expiresAt <= Date.now()) {
+    tokenAuthCache.delete(token);
+    return null;
+  }
+
+  return cached.user;
+};
+
+const setCachedUser = (token, user) => {
+  if (!token || !user || AUTH_CACHE_TTL_MS <= 0) return;
+
+  if (tokenAuthCache.size >= MAX_AUTH_CACHE_SIZE) {
+    const oldestKey = tokenAuthCache.keys().next().value;
+    if (oldestKey) tokenAuthCache.delete(oldestKey);
+  }
+
+  tokenAuthCache.set(token, {
+    user,
+    expiresAt: Date.now() + AUTH_CACHE_TTL_MS
+  });
+};
+
+const mapAuthFailure = (error) => {
+  if (error instanceof AuthError) return error;
+
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+
+    if (status === 401 || status === 403) {
+      return new AuthError('Invalid or expired token', 401);
+    }
+
+    if (!error.response) {
+      return new AuthError('Authentication service unavailable', 503);
+    }
+
+    if (status >= 500) {
+      return new AuthError('Authentication service unavailable', 503);
     }
   }
 
-  return null;
-};
-
-export const verifyAuthToken = (token) => {
-  if (!token) {
-    throw new Error('Unauthorized');
-  }
-
-  const payload = verifyTokenLocally(token);
-  if (!payload) {
-    throw new Error('Invalid or expired token');
-  }
-
-  return payload;
+  return new AuthError('Invalid or expired token', 401);
 };
 
 const introspectTokenWithAdmin = async (token) => {
   const adminBaseUrl = getAdminBaseUrl();
-  if (!adminBaseUrl) return null;
+  if (!adminBaseUrl) {
+    throw new AuthError('Authentication service unavailable', 503);
+  }
+
+  const headers = {
+    Authorization: `Bearer ${token}`
+  };
+
+  if (process.env.INTERNAL_API_KEY) {
+    headers['x-internal-api-key'] = process.env.INTERNAL_API_KEY;
+  }
 
   try {
     const response = await axios.get(`${adminBaseUrl}/api/user/credentials`, {
       timeout: Number(process.env.ADMIN_API_TIMEOUT_MS || 5000),
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
+      headers
     });
 
-    const userData = response?.data?.data;
-    const userId = userData?.userId;
-    if (!userId) return null;
+    const normalizedUser = normalizeAuthenticatedUser(
+      response?.data?.data || response?.data?.user || response?.data || {}
+    );
 
-    return {
-      userId: String(userId),
-      id: String(userId),
-      _id: String(userId),
-      email: userData?.email || null,
-      role: 'admin'
-    };
+    if (!normalizedUser) {
+      throw new AuthError('Invalid token payload', 401);
+    }
+
+    return normalizedUser;
   } catch (error) {
-    return null;
+    throw mapAuthFailure(error);
   }
 };
 
 export const verifyOrResolveToken = async (token) => {
-  const localPayload = verifyTokenLocally(token);
-  if (localPayload) {
-    const normalizedUser = normalizeAuthenticatedUser(localPayload);
-    if (!normalizedUser) {
-      throw new Error('Invalid token payload');
-    }
-    return normalizedUser;
+  const normalizedToken = String(token || '').trim().replace(/^"|"$/g, '');
+  if (!normalizedToken) {
+    throw new AuthError('Unauthorized', 401);
   }
 
-  const introspectedUser = await introspectTokenWithAdmin(token);
-  if (introspectedUser) {
-    return introspectedUser;
-  }
+  const cachedUser = getCachedUser(normalizedToken);
+  if (cachedUser) return cachedUser;
 
-  throw new Error('Invalid or expired token');
+  const pending = pendingIntrospection.get(normalizedToken);
+  if (pending) return pending;
+
+  const introspectionPromise = introspectTokenWithAdmin(normalizedToken)
+    .then((user) => {
+      setCachedUser(normalizedToken, user);
+      return user;
+    })
+    .finally(() => {
+      pendingIntrospection.delete(normalizedToken);
+    });
+
+  pendingIntrospection.set(normalizedToken, introspectionPromise);
+  return introspectionPromise;
 };
 
-export const authenticate = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Unauthorized' });
-  }
+export const verifyAuthToken = async (token) => verifyOrResolveToken(token);
 
-  const token = authHeader.split(' ')[1];
+export const authenticate = async (req, res, next) => {
+  const token = getTokenFromHeader(req.headers.authorization);
   if (!token) {
     return res.status(401).json({ message: 'Unauthorized' });
   }
@@ -128,9 +169,16 @@ export const authenticate = async (req, res, next) => {
     req.user = user;
     return next();
   } catch (error) {
-    if (error.message === 'Invalid token payload') {
-      return res.status(401).json({ message: error.message });
+    const mapped = mapAuthFailure(error);
+
+    if (mapped.status === 503) {
+      logger.warn('Auth service unavailable while validating token', {
+        path: req.originalUrl,
+        method: req.method
+      });
+      return res.status(503).json({ message: 'Authentication service unavailable' });
     }
+
     return res.status(401).json({ message: 'Invalid or expired token' });
   }
 };

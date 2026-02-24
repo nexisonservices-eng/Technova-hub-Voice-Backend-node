@@ -912,11 +912,15 @@ router.post('/workflow/:workflowId', async (req, res) => {
     const { workflowId } = req.params;
     const { Digits, SpeechResult } = req.body;
     const { CallSid } = req.body;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
     logger.info(`Executing workflow ${workflowId} for call ${CallSid}`);
 
     // Check if workflow is active before executing
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       logger.error(`Workflow ${workflowId} not found`);
       const response = new VoiceResponse();
@@ -966,8 +970,12 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
   try {
     const { workflowId, nodeId } = req.params;
     const { CallSid } = req.body;
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
     if (!workflow) {
       return res.status(404).json({ error: 'Workflow not found' });
     }

@@ -1187,7 +1187,11 @@ router.post('/menus/:id/test', async (req, res) => {
  */
 router.get('/active-calls', async (req, res) => {
   try {
-    const activeCalls = await ivrAnalyticsService.getActiveCalls();
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const activeCalls = await ivrAnalyticsService.getActiveCalls(userId);
     res.json({ success: true, data: activeCalls });
   } catch (error) {
     logger.error('Failed to get active calls:', error);
@@ -1201,9 +1205,17 @@ router.get('/active-calls', async (req, res) => {
  */
 router.get('/analytics/workflow/:workflowId', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { workflowId } = req.params;
     const { startDate, endDate } = req.query;
-    const stats = await ivrAnalyticsService.getWorkflowStats(workflowId, startDate, endDate);
+    const ownedWorkflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    if (!ownedWorkflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+    const stats = await ivrAnalyticsService.getWorkflowStats(workflowId, startDate, endDate, userId);
     res.json({ success: true, data: stats });
   } catch (error) {
     logger.error('Failed to get workflow stats:', error);
@@ -1217,8 +1229,12 @@ router.get('/analytics/workflow/:workflowId', async (req, res) => {
  */
 router.get('/analytics/nodes/:workflowId', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { workflowId } = req.params;
-    const stats = await ivrAnalyticsService.getNodeAnalytics(workflowId);
+    const stats = await ivrAnalyticsService.getNodeAnalytics(workflowId, userId);
     res.json({ success: true, data: stats });
   } catch (error) {
     logger.error('Failed to get node stats:', error);
@@ -1232,9 +1248,17 @@ router.get('/analytics/nodes/:workflowId', async (req, res) => {
  */
 router.get('/executions/:workflowId', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { workflowId } = req.params;
     const limit = parseInt(req.query.limit) || 50;
-    const executions = await ivrAnalyticsService.getRecentExecutions(workflowId, limit);
+    const ownedWorkflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    if (!ownedWorkflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+    const executions = await ivrAnalyticsService.getRecentExecutions(workflowId, limit, userId);
     res.json({ success: true, data: executions });
   } catch (error) {
     logger.error('Failed to get recent executions:', error);
@@ -1248,8 +1272,15 @@ router.get('/executions/:workflowId', async (req, res) => {
  */
 router.get('/executions/details/:callSid', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { callSid } = req.params;
-    const details = await ivrAnalyticsService.getExecutionDetails(callSid);
+    const details = await ivrAnalyticsService.getExecutionDetails(callSid, userId);
+    if (!details) {
+      return res.status(404).json({ success: false, error: 'Execution not found' });
+    }
     res.json({ success: true, data: details });
   } catch (error) {
     logger.error('Failed to get execution details:', error);
@@ -1263,8 +1294,16 @@ router.get('/executions/details/:callSid', async (req, res) => {
  */
 router.post('/executions/:callSid/stop', async (req, res) => {
   try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
     const { callSid } = req.params;
     const { reason } = req.body;
+    const details = await ivrAnalyticsService.getExecutionDetails(callSid, userId);
+    if (!details) {
+      return res.status(404).json({ success: false, error: 'Execution not found' });
+    }
     await ivrWorkflowEngine.endExecution(callSid, reason || 'manual_stop');
     res.json({ success: true, message: 'Execution stopped' });
   } catch (error) {

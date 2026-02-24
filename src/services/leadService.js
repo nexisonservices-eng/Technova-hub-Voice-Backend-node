@@ -55,9 +55,11 @@ class LeadService {
     /**
      * Get single lead by ID
      */
-    async getLeadById(leadId) {
+    async getLeadById(leadId, userId = null) {
         try {
-            const lead = await Lead.findById(leadId)
+            const query = { _id: leadId };
+            if (userId) query.user = userId;
+            const lead = await Lead.findOne(query)
                 .populate('assignedAgent', 'name email')
                 .populate('user');
 
@@ -72,10 +74,12 @@ class LeadService {
     /**
      * Update lead details
      */
-    async updateLead(leadId, updates) {
+    async updateLead(leadId, updates, userId = null) {
         try {
-            const lead = await Lead.findByIdAndUpdate(
-                leadId,
+            const filter = { _id: leadId };
+            if (userId) filter.user = userId;
+            const lead = await Lead.findOneAndUpdate(
+                filter,
                 { $set: updates },
                 { new: true, runValidators: true }
             ).populate('assignedAgent', 'name email');

@@ -15,10 +15,115 @@ import Workflow from '../models/Workflow.js';
 import ExecutionLog from '../models/ExecutionLog.js';
 import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
+import adminCredentialsService from '../services/adminCredentialsService.js';
 
 const router = express.Router();
 
+const normalizePhone = (value) => {
+  const digits = String(value || '').replace(/[^\d+]/g, '');
+  if (!digits) return '';
+  return digits.startsWith('+') ? digits : `+${digits}`;
+};
+
+const resolveWebhookUserId = async (req) => {
+  if (req.tenantContext?.adminId) {
+    return String(req.tenantContext.adminId);
+  }
+
+  const toNumber = normalizePhone(req.body?.To || req.query?.To || '');
+  if (!toNumber) return null;
+
+  const tenant = await adminCredentialsService.getTwilioCredentialsByPhoneNumber(toNumber);
+  if (!tenant?.userId) return null;
+
+  req.tenantContext = {
+    ...(req.tenantContext || {}),
+    adminId: String(tenant.userId),
+    toNumber,
+    twilioAccountSid: tenant.twilioAccountSid || null,
+  };
+
+  return String(tenant.userId);
+};
+
+const resolveWebhookUserIdForCall = async (req, callSid) => {
+  const fromNumber = await resolveWebhookUserId(req);
+  if (fromNumber) return fromNumber;
+  if (!callSid) return null;
+
+  const execution = await WorkflowExecution.findOne({ callSid }).select('userId').lean();
+  if (!execution?.userId) return null;
+
+  req.tenantContext = {
+    ...(req.tenantContext || {}),
+    adminId: String(execution.userId),
+  };
+
+  return String(execution.userId);
+};
+
+/**
+ * POST /webhooks/twilio/inbound (also available under /webhook/twilio/inbound)
+ * Public inbound webhook endpoint for Twilio number voice URL.
+ * Must stay unauthenticated and return TwiML directly with HTTP 200.
+ */
+router.post('/inbound', async (req, res) => {
+  try {
+    const callData = req.body;
+    const { CallSid, From, To } = callData;
+    const webhookUserId = await resolveWebhookUserId(req);
+
+    logger.info(`Inbound webhook hit: ${CallSid} from ${From} to ${To}`);
+
+    if (!webhookUserId) {
+      logger.warn(`Unable to resolve tenant for inbound call ${CallSid} to ${To}`);
+      const VoiceResponse = twilio.twiml.VoiceResponse;
+      const response = new VoiceResponse();
+      response.say({ voice: 'alice' }, 'We apologize, but this service is currently unavailable.');
+      response.hangup();
+      return res.status(200).type('text/xml').send(response.toString());
+    }
+
+    const activeWorkflow = await Workflow.findOne({
+      status: 'active',
+      isActive: true,
+      createdBy: webhookUserId
+    }).sort({ updatedAt: -1 });
+
+    if (activeWorkflow) {
+      await ivrWorkflowEngine.startExecution(
+        activeWorkflow._id,
+        CallSid,
+        From,
+        To,
+        webhookUserId
+      );
+
+      const firstNodeId = activeWorkflow.nodes?.[0]?.id || null;
+      if (firstNodeId) {
+        const twiml = await ivrWorkflowEngine.generateTwiML(activeWorkflow._id, firstNodeId, null, CallSid);
+        return res.status(200).type('text/xml').send(twiml);
+      }
+    }
+
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    response.say({ voice: 'alice' }, 'Thank you for calling. Please hold while we connect you.');
+    response.hangup();
+
+    return res.status(200).type('text/xml').send(response.toString());
+  } catch (error) {
+    logger.error('Error handling inbound webhook:', error);
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    response.say({ voice: 'alice' }, 'We apologize, but our service is temporarily unavailable. Please try again later.');
+    response.hangup();
+    return res.status(200).type('text/xml').send(response.toString());
+  }
+});
+
 router.use((req, res, next) => {
+  if (req.path === '/inbound') return next();
   if (req.method === 'GET') return next();
   return verifyTwilioRequest(req, res, next);
 });
@@ -137,12 +242,22 @@ router.post('/workflow/:workflowId', async (req, res) => {
   try {
     const { workflowId } = req.params;
     const { Digits, SpeechResult, CallSid } = req.body;
-    const webhookUserId = req.tenantContext?.adminId || null;
+    const webhookUserId = await resolveWebhookUserId(req);
     
     logger.info(`Executing workflow ${workflowId} for call ${CallSid}`);
     
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for workflow callback ${workflowId} call ${CallSid}`);
+      return res.status(403).send('Forbidden: tenant context missing');
+    }
+
     // Determine user input
     const userInput = Digits || SpeechResult || null;
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: webhookUserId }).select('_id');
+    if (!workflow) {
+      logger.warn(`Workflow ${workflowId} not found for tenant ${webhookUserId}`);
+      return res.status(404).send('Workflow not found');
+    }
     
     // Use existing workflow engine first
     try {
@@ -208,10 +323,15 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
   try {
     const { workflowId, nodeId } = req.params;
     const { CallSid, Digits, SpeechResult } = req.body;
-    const webhookUserId = req.tenantContext?.adminId || null;
+    const webhookUserId = await resolveWebhookUserId(req);
     
     logger.info(`Executing node ${nodeId} in workflow ${workflowId} for call ${CallSid}`);
     
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for node callback ${workflowId}/${nodeId} call ${CallSid}`);
+      return res.status(403).send('Forbidden: tenant context missing');
+    }
+
     // Determine user input
     const userInput = Digits || SpeechResult || null;
     
@@ -275,6 +395,11 @@ router.post('/voicemail/complete', async (req, res) => {
   try {
     const recordingData = req.body;
     const { RecordingSid, RecordingUrl, Duration, callSid, workflowId, nodeId } = recordingData;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for voicemail completion call ${callSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`Voicemail recording completed: ${RecordingSid} for call ${callSid}`);
     
@@ -286,7 +411,10 @@ router.post('/voicemail/complete', async (req, res) => {
     const response = new VoiceResponse();
     
     // Continue to next node in workflow
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({
+      _id: workflowId,
+      ...(webhookUserId ? { createdBy: webhookUserId } : {})
+    });
     if (workflow) {
       const edge = workflow.edges.find(e => e.source === nodeId);
       if (edge) {
@@ -315,11 +443,19 @@ router.post('/voicemail/complete', async (req, res) => {
 router.post('/voicemail/status', async (req, res) => {
   try {
     const { RecordingSid, TranscriptionText, TranscriptionStatus, callSid } = req.body;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for voicemail status call ${callSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`Voicemail transcription update: ${RecordingSid} -> ${TranscriptionStatus}`);
     
     // Update transcription in database
-    const execution = await WorkflowExecution.findOne({ callSid: callSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: callSid,
+      userId: webhookUserId
+    });
     if (execution && TranscriptionText) {
       await execution.updateTranscription(RecordingSid, TranscriptionText);
       
@@ -350,6 +486,11 @@ router.post('/transfer/complete', async (req, res) => {
   try {
     const transferData = req.body;
     const { DialCallStatus, DialCallDuration, callSid, workflowId, nodeId } = transferData;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for transfer completion call ${callSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`Call transfer completed: ${callSid} -> ${DialCallStatus}`);
     
@@ -361,7 +502,10 @@ router.post('/transfer/complete', async (req, res) => {
     const response = new VoiceResponse();
     
     // Continue to next node based on transfer result
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({
+      _id: workflowId,
+      createdBy: webhookUserId
+    });
     if (workflow) {
       const handle = DialCallStatus === 'answered' ? 'answered' : 'failed';
       const edge = workflow.edges.find(e => 
@@ -394,11 +538,19 @@ router.post('/transfer/complete', async (req, res) => {
 router.post('/ai/complete', async (req, res) => {
   try {
     const { callSid, workflowId, nodeId, streamStatus } = req.body;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for AI completion call ${callSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`AI assistant session completed: ${callSid} -> ${streamStatus}`);
     
     // Update execution record
-    const execution = await WorkflowExecution.findOne({ callSid: callSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: callSid,
+      userId: webhookUserId
+    });
     if (execution) {
       // Record AI session completion
       await execution.setVariable(`ai_session_${nodeId}_status`, streamStatus);
@@ -410,7 +562,10 @@ router.post('/ai/complete', async (req, res) => {
     const response = new VoiceResponse();
     
     // Continue to next node
-    const workflow = await Workflow.findById(workflowId);
+    const workflow = await Workflow.findOne({
+      _id: workflowId,
+      createdBy: webhookUserId
+    });
     if (workflow) {
       const edge = workflow.edges.find(e => e.source === nodeId);
       if (edge) {
@@ -439,11 +594,19 @@ router.post('/ai/complete', async (req, res) => {
 router.post('/enqueue', async (req, res) => {
   try {
     const { CallSid, queueName } = req.body;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, CallSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for enqueue call ${CallSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`Call enqueued: ${CallSid} to queue ${queueName}`);
     
     // Update execution record
-    const execution = await WorkflowExecution.findOne({ callSid: CallSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: CallSid,
+      userId: webhookUserId
+    });
     if (execution) {
       await execution.setVariable('queue_name', queueName);
       await execution.setVariable('queue_timestamp', new Date());
@@ -473,11 +636,19 @@ router.post('/enqueue', async (req, res) => {
 router.post('/queue/wait', async (req, res) => {
   try {
     const { CallSid, QueueSid, QueuePosition, CurrentQueueSize, queueName } = req.body;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, CallSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for queue wait call ${CallSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`Queue position update: ${CallSid} -> position ${QueuePosition} of ${CurrentQueueSize}`);
     
     // Update execution record
-    const execution = await WorkflowExecution.findOne({ callSid: CallSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: CallSid,
+      userId: webhookUserId
+    });
     if (execution) {
       await execution.setVariable('queue_position', QueuePosition);
       await execution.setVariable('queue_size', CurrentQueueSize);
@@ -530,11 +701,19 @@ router.post('/queue/wait', async (req, res) => {
 router.post('/queue/leave', async (req, res) => {
   try {
     const { CallSid, QueueResult } = req.body;
+    const webhookUserId = await resolveWebhookUserIdForCall(req, CallSid);
+    if (!webhookUserId) {
+      logger.warn(`Tenant resolution failed for queue leave call ${CallSid}`);
+      return res.sendStatus(403);
+    }
     
     logger.info(`Call left queue: ${CallSid} -> ${QueueResult}`);
     
     // Update execution record
-    const execution = await WorkflowExecution.findOne({ callSid: CallSid });
+    const execution = await WorkflowExecution.findOne({
+      callSid: CallSid,
+      userId: webhookUserId
+    });
     if (execution) {
       await execution.setVariable('queue_result', QueueResult);
       await execution.setVariable('queue_leave_time', new Date());
@@ -585,4 +764,3 @@ router.get('/health', (req, res) => {
 });
 
 export default router;
-

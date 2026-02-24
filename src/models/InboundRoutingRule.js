@@ -2,6 +2,11 @@ import mongoose from 'mongoose';
 
 const inboundRoutingRuleSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      index: true
+    },
     name: {
       type: String,
       required: true,
@@ -49,6 +54,7 @@ const inboundRoutingRuleSchema = new mongoose.Schema(
 
 inboundRoutingRuleSchema.index({ priority: 1 });
 inboundRoutingRuleSchema.index({ updatedAt: -1 });
+inboundRoutingRuleSchema.index({ userId: 1, priority: 1, updatedAt: -1 });
 
 const InboundRoutingRule = mongoose.model('InboundRoutingRule', inboundRoutingRuleSchema);
 

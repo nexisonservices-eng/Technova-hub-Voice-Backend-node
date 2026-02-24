@@ -45,7 +45,8 @@ app.use('/api/ivr', IVRRoutes); // IVR management endpoints
 app.use('/ivr', IVRRoutes); // TwiML callback compatibility routes
 app.use('/api/workflow', workflowRoutes); // Workflow management endpoints
 app.use('/workflow', workflowRoutes); // Frontend compatibility endpoints
-app.use('/webhook/twilio', twilioWebhookRoutes); // Twilio webhooks
+app.use('/webhook/twilio', twilioWebhookRoutes); // Twilio webhooks (legacy singular path)
+app.use('/webhooks/twilio', twilioWebhookRoutes); // Twilio webhooks (exact path expected by Twilio console)
 app.use('/webhook/legacy', legacyWebhookRoutes); // Legacy compatibility webhooks
 app.use('/api/call-logs', CallLogRoutes); // Call log management
 app.use('/api/outbound-config', OutboundConfigRoutes); // Outbound configuration

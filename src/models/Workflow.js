@@ -5,7 +5,6 @@ const WorkflowSchema = new mongoose.Schema({
   promptKey: {
     type: String,
     required: true,
-    unique: true,
     index: true,
     trim: true,
     lowercase: true,
@@ -119,6 +118,10 @@ const WorkflowSchema = new mongoose.Schema({
 
 // Compound indexes for common queries
 WorkflowSchema.index({ promptKey: 1, isActive: 1 });
+WorkflowSchema.index(
+  { createdBy: 1, promptKey: 1 },
+  { unique: true, partialFilterExpression: { createdBy: { $exists: true } } }
+);
 WorkflowSchema.index({ status: 1, isActive: 1 });
 WorkflowSchema.index({ createdBy: 1, isActive: 1 });
 WorkflowSchema.index({ tags: 1, isActive: 1 });

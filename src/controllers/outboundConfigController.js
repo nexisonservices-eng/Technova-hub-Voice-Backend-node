@@ -5,13 +5,14 @@
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
+import { getUserObjectId } from '../utils/authContext.js';
 
 // Campaign Template Schema
 const campaignTemplateSchema = new mongoose.Schema({
     name: {
         type: String,
         required: true,
-        unique: true
+        trim: true
     },
     description: String,
     greeting: {
@@ -97,6 +98,9 @@ const contactListSchema = new mongoose.Schema({
     timestamps: true
 });
 
+campaignTemplateSchema.index({ createdBy: 1, name: 1 }, { unique: true });
+contactListSchema.index({ createdBy: 1, name: 1 }, { unique: true });
+
 // Create models
 const CampaignTemplate = mongoose.models.CampaignTemplate ||
     mongoose.model('CampaignTemplate', campaignTemplateSchema);
@@ -110,9 +114,13 @@ class OutboundConfigController {
      */
     async getTemplates(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
             const { page = 1, limit = 20, search } = req.query;
 
-            const filter = { isActive: true };
+            const filter = { isActive: true, createdBy: userId };
             if (search) {
                 filter.$or = [
                     { name: new RegExp(search, 'i') },
@@ -156,9 +164,13 @@ class OutboundConfigController {
      */
     async createTemplate(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
             const templateData = {
                 ...req.body,
-                createdBy: req.user?._id
+                createdBy: userId
             };
 
             const template = new CampaignTemplate(templateData);
@@ -185,9 +197,13 @@ class OutboundConfigController {
     async updateTemplate(req, res) {
         try {
             const { id } = req.params;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
-            const template = await CampaignTemplate.findByIdAndUpdate(
-                id,
+            const template = await CampaignTemplate.findOneAndUpdate(
+                { _id: id, createdBy: userId },
                 { $set: req.body },
                 { new: true, runValidators: true }
             );
@@ -217,9 +233,13 @@ class OutboundConfigController {
     async deleteTemplate(req, res) {
         try {
             const { id } = req.params;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
-            const template = await CampaignTemplate.findByIdAndUpdate(
-                id,
+            const template = await CampaignTemplate.findOneAndUpdate(
+                { _id: id, createdBy: userId },
                 { $set: { isActive: false } },
                 { new: true }
             );
@@ -251,20 +271,24 @@ class OutboundConfigController {
      */
     async getContactLists(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
             const { page = 1, limit = 20 } = req.query;
 
             const skip = (parseInt(page) - 1) * parseInt(limit);
             const limitNum = parseInt(limit);
 
             const [lists, total] = await Promise.all([
-                ContactList.find()
+                ContactList.find({ createdBy: userId })
                     .populate('createdBy', 'name email')
                     .select('-contacts') // Exclude contacts array for list view
                     .sort({ createdAt: -1 })
                     .skip(skip)
                     .limit(limitNum)
                     .lean(),
-                ContactList.countDocuments()
+                ContactList.countDocuments({ createdBy: userId })
             ]);
 
             logger.info(`Retrieved ${lists.length} contact lists`);
@@ -290,6 +314,10 @@ class OutboundConfigController {
      */
     async createContactList(req, res) {
         try {
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
             const { name, description, contacts } = req.body;
 
             const contactList = new ContactList({
@@ -297,7 +325,7 @@ class OutboundConfigController {
                 description,
                 contacts: contacts || [],
                 totalContacts: contacts?.length || 0,
-                createdBy: req.user?._id
+                createdBy: userId
             });
 
             await contactList.save();
@@ -324,6 +352,10 @@ class OutboundConfigController {
         try {
             const { id } = req.params;
             const { name, description, contacts } = req.body;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
             const update = { name, description };
             if (contacts) {
@@ -331,8 +363,8 @@ class OutboundConfigController {
                 update.totalContacts = contacts.length;
             }
 
-            const contactList = await ContactList.findByIdAndUpdate(
-                id,
+            const contactList = await ContactList.findOneAndUpdate(
+                { _id: id, createdBy: userId },
                 { $set: update },
                 { new: true, runValidators: true }
             );
@@ -362,8 +394,12 @@ class OutboundConfigController {
     async deleteContactList(req, res) {
         try {
             const { id } = req.params;
+            const userId = getUserObjectId(req);
+            if (!userId) {
+                return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
+            }
 
-            const contactList = await ContactList.findByIdAndDelete(id);
+            const contactList = await ContactList.findOneAndDelete({ _id: id, createdBy: userId });
 
             if (!contactList) {
                 return res.status(404).json(

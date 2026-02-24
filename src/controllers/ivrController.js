@@ -158,9 +158,16 @@ class IVRController {
    */
   async processService(req, res) {
     const { CallSid, workflowId, nodeId } = { ...req.body, ...req.query };
+    const tenantUserId = req.tenantContext?.adminId || null;
 
     try {
-      const workflow = await Workflow.findById(workflowId);
+      const workflow = await Workflow.findOne({
+        _id: workflowId,
+        ...(tenantUserId ? { createdBy: tenantUserId } : {})
+      });
+      if (!workflow) {
+        return this.send(res, TwiMLHelper.createErrorResponse());
+      }
       const node = workflow.nodes.find(n => n.id === nodeId);
 
       const result = await ivrWorkflowEngine.processIndustryService(

@@ -1,5 +1,4 @@
 import twilio from 'twilio';
-import axios from 'axios';
 
 import BroadcastCall from '../models/BroadcastCall.js';
 import Broadcast from '../models/Broadcast.js';
@@ -10,96 +9,88 @@ import { emitCallUpdate } from '../sockets/unifiedSocket.js';
 
 const { twiml: { VoiceResponse } } = twilio;
 
-/**
- * Utility: Validate that Twilio can access the audio
- */
-async function isAudioReachable(url) {
+function isPublicMediaUrl(urlString) {
   try {
-    const res = await axios.head(url, {
-      timeout: 3000,
-      validateStatus: status => status >= 200 && status < 400
-    });
+    const parsed = new URL(urlString);
+    const host = (parsed.hostname || '').toLowerCase();
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    if (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host.endsWith('.local')
+    ) {
+      return false;
+    }
+    if (/^10\./.test(host) || /^192\.168\./.test(host)) return false;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return false;
     return true;
-  } catch (err) {
-    logger.error('Audio URL unreachable:', {
-      url,
-      error: err.message
-    });
+  } catch {
     return false;
   }
 }
 
 class TwilioWebhooks {
-
   /**
    * ==========================================
    * Generate TwiML for Broadcast Call
-   * GET /webhook/broadcast/twiml
+   * POST /webhook/broadcast/twiml
    * ==========================================
    */
   async getBroadcastTwiML(req, res) {
     try {
-      const { audioUrl, disclaimer, messageText, voice, language } = req.query;
+      const {
+        audioUrl,
+        disclaimer,
+        messageText,
+        voice,
+        language,
+        enableOptOut
+      } = req.query;
+      const shouldOfferOptOut = String(enableOptOut ?? 'true').toLowerCase() !== 'false';
 
-      // 🔥 CRITICAL FIX: Set proper headers for Twilio
-      res.setHeader('Content-Type', 'text/xml');
-      res.setHeader('Cache-Control', 'no-cache');
+      const response = new VoiceResponse();
+      response.say(
+        { voice: 'alice', language: 'en-IN' },
+        disclaimer || 'This is an automated call'
+      );
 
-      // 🔥 CRITICAL FIX: Support both audio URL and text-to-speech
-      let audioSection = '';
-      
-      if (audioUrl && audioUrl !== 'null') {
-        // Use pre-recorded audio
-        try {
-          const audioOk = await isAudioReachable(audioUrl);
-          if (!audioOk) {
-            logger.warn('Audio URL verification failed (might still work for Twilio)', { audioUrl });
-          }
-        } catch (checkErr) {
-          logger.warn('Audio check skipped due to error', { error: checkErr.message });
-        }
-        
-        audioSection = `<Play>${audioUrl}</Play>`;
+      if (audioUrl && audioUrl !== 'null' && isPublicMediaUrl(audioUrl)) {
+        response.play(audioUrl);
         logger.info('Using pre-recorded audio for broadcast');
+      } else if (audioUrl && audioUrl !== 'null') {
+        logger.warn('Ignoring non-public or invalid media URL for broadcast', { audioUrl });
+        response.say(
+          { voice: voice || 'alice', language: language || 'en-IN' },
+          messageText || 'Broadcast audio is currently unavailable'
+        );
       } else if (messageText) {
-        // Use text-to-speech fallback
-        const voiceConfig = voice || 'alice';
-        const langConfig = language || 'en-IN';
-        audioSection = `<Say voice="${voiceConfig}" language="${langConfig}">${messageText}</Say>`;
+        response.say(
+          { voice: voice || 'alice', language: language || 'en-IN' },
+          messageText
+        );
         logger.info('Using text-to-speech fallback for broadcast');
       } else {
-        logger.error('Missing both audioUrl and messageText in TwiML request');
-        const errorTwiML = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice">Invalid broadcast configuration</Say>
-  <Hangup/>
-</Response>`;
-        return res.send(errorTwiML);
+        response.say({ voice: 'alice', language: 'en-IN' }, 'Invalid broadcast configuration');
       }
 
-      // 🔥 CRITICAL FIX: Proper TwiML with valid structure
-      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice" language="en-IN">
-    ${disclaimer || 'This is an automated call'}
-  </Say>
+      if (shouldOfferOptOut) {
+        // Gather only after the message/audio is played so playback is not interrupted.
+        const gather = response.gather({
+          numDigits: 1,
+          timeout: 5,
+          action: `${process.env.BASE_URL}/webhook/broadcast/keypress`,
+          method: 'POST'
+        });
+        gather.say({ voice: 'alice', language: 'en-IN' }, 'Press 9 to stop receiving these calls.');
+      }
 
-  <Gather numDigits="1"
-          timeout="3"
-          action="${process.env.BASE_URL}/webhook/broadcast/keypress"
-          method="POST">
-    <Say voice="alice" language="en-IN">
-      Press 9 to stop receiving these calls
-    </Say>
-  </Gather>
-
-  ${audioSection}
-
-  <Hangup/>
-</Response>`;
+      // If no key is pressed, Twilio continues to the next verb and ends the call.
+      response.say({ voice: 'alice', language: 'en-IN' }, 'Thank you. Goodbye.');
+      response.hangup();
 
       logger.info('TwiML generated successfully', { audioUrl, hasDisclaimer: !!disclaimer });
-      res.send(twiml);
+      return res.status(200).type('text/xml').send(response.toString());
 
     } catch (error) {
       logger.error('TwiML generation failed', {
@@ -107,14 +98,10 @@ class TwilioWebhooks {
         stack: error.stack
       });
 
-      // 🔥 CRITICAL FIX: Error response with proper headers
-      res.setHeader('Content-Type', 'text/xml');
-      const errorTwiML = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="alice">System error occurred</Say>
-  <Hangup/>
-</Response>`;
-      res.send(errorTwiML);
+      const response = new VoiceResponse();
+      response.say({ voice: 'alice', language: 'en-IN' }, 'System error occurred');
+      response.hangup();
+      return res.status(200).type('text/xml').send(response.toString());
     }
   }
 
@@ -157,9 +144,10 @@ class TwilioWebhooks {
         }
       }
 
+      // Do not return 404 to Twilio callbacks; acknowledge to prevent webhook errors.
       if (!call) {
         logger.warn('Status update for unknown call', { CallSid, callId });
-        return res.sendStatus(404);
+        return res.sendStatus(200);
       }
 
       const statusMap = {
@@ -197,7 +185,6 @@ class TwilioWebhooks {
 
       await call.save();
 
-      // 🔥 REAL-TIME FRONTEND UPDATE
       emitCallUpdate(call.broadcast.toString(), {
         callId: call._id,
         callSid: CallSid,
@@ -206,20 +193,20 @@ class TwilioWebhooks {
         duration: call.duration || 0
       });
 
-      // 🔥 Update broadcast aggregate stats
       const broadcast = await Broadcast.findById(call.broadcast);
       if (broadcast) {
         await this.updateBroadcastStats(broadcast);
       }
 
-      res.sendStatus(200);
+      return res.sendStatus(200);
 
     } catch (error) {
       logger.error('Call status webhook failed', {
         message: error.message,
         stack: error.stack
       });
-      res.sendStatus(500);
+      // Always ACK callback to avoid Twilio webhook retry/failure noise.
+      return res.sendStatus(200);
     }
   }
 
@@ -260,7 +247,12 @@ class TwilioWebhooks {
       const { CallSid, Digits } = req.body;
 
       const call = await BroadcastCall.findOne({ callSid: CallSid });
-      if (!call) return res.sendStatus(404);
+      if (!call) {
+        const response = new VoiceResponse();
+        response.say({ voice: 'alice', language: 'en-IN' }, 'Thank you.');
+        response.hangup();
+        return res.status(200).type('text/xml').send(response.toString());
+      }
 
       const response = new VoiceResponse();
 
@@ -282,18 +274,21 @@ class TwilioWebhooks {
           'You will no longer receive these calls. Thank you.'
         );
       } else {
-        response.say('Invalid option.');
+        response.say({ voice: 'alice', language: 'en-IN' }, 'Invalid option.');
       }
 
       response.hangup();
-      res.type('text/xml').send(response.toString());
+      return res.status(200).type('text/xml').send(response.toString());
 
     } catch (error) {
       logger.error('Keypress webhook failed', {
         message: error.message,
         stack: error.stack
       });
-      res.sendStatus(500);
+      const response = new VoiceResponse();
+      response.say({ voice: 'alice', language: 'en-IN' }, 'Thank you.');
+      response.hangup();
+      return res.status(200).type('text/xml').send(response.toString());
     }
   }
 }
