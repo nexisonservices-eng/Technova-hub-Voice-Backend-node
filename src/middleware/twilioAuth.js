@@ -22,18 +22,18 @@ const allowUnsignedInDev = () =>
   process.env.NODE_ENV !== 'production';
 
 const resolveAuthContext = async (req) => {
-  const toNumber = normalizePhone(req.body?.To || req.query?.To || '');
+  const fromNumber = normalizePhone(req.body?.From || req.query?.From || '');
   let authToken = '';
   let tenant = null;
 
-  if (toNumber) {
-    tenant = await adminCredentialsService.getTwilioCredentialsByPhoneNumber(toNumber);
+  if (fromNumber) {
+    tenant = await adminCredentialsService.getTwilioCredentialsByPhoneNumber(fromNumber);
     if (tenant?.twilioAuthToken) {
       authToken = tenant.twilioAuthToken;
     }
   }
 
-  return { authToken, toNumber, tenant };
+  return { authToken, fromNumber, tenant };
 };
 
 export const verifyTwilioRequest = async (req, res, next) => {
@@ -48,7 +48,7 @@ export const verifyTwilioRequest = async (req, res, next) => {
   }
 
   try {
-    const { authToken, toNumber, tenant } = await resolveAuthContext(req);
+    const { authToken, fromNumber, tenant } = await resolveAuthContext(req);
 
     if (!authToken) {
       logger.error('Twilio auth token is not configured');
@@ -67,7 +67,7 @@ export const verifyTwilioRequest = async (req, res, next) => {
     if (tenant) {
       req.tenantContext = {
         adminId: String(tenant.userId),
-        toNumber,
+        fromNumber,
         twilioAccountSid: tenant.twilioAccountSid || null,
       };
     }
