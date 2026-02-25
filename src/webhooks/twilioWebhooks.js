@@ -51,7 +51,7 @@ class TwilioWebhooks {
 
       const response = new VoiceResponse();
       response.say(
-        { voice: 'alice', language: 'en-IN' },
+        { voice: 'alice', language: 'en-GB' },
         disclaimer || 'This is an automated call'
       );
 
@@ -61,17 +61,17 @@ class TwilioWebhooks {
       } else if (audioUrl && audioUrl !== 'null') {
         logger.warn('Ignoring non-public or invalid media URL for broadcast', { audioUrl });
         response.say(
-          { voice: voice || 'alice', language: language || 'en-IN' },
+          { voice: voice || 'alice', language: language || 'en-GB' },
           messageText || 'Broadcast audio is currently unavailable'
         );
       } else if (messageText) {
         response.say(
-          { voice: voice || 'alice', language: language || 'en-IN' },
+          { voice: voice || 'alice', language: language || 'en-GB' },
           messageText
         );
         logger.info('Using text-to-speech fallback for broadcast');
       } else {
-        response.say({ voice: 'alice', language: 'en-IN' }, 'Invalid broadcast configuration');
+        response.say({ voice: 'alice', language: 'en-GB' }, 'Invalid broadcast configuration');
       }
 
       if (shouldOfferOptOut) {
@@ -82,11 +82,11 @@ class TwilioWebhooks {
           action: `${process.env.BASE_URL}/webhook/broadcast/keypress`,
           method: 'POST'
         });
-        gather.say({ voice: 'alice', language: 'en-IN' }, 'Press 9 to stop receiving these calls.');
+        gather.say({ voice: 'alice', language: 'en-GB' }, 'Press 9 to stop receiving these calls.');
       }
 
       // If no key is pressed, Twilio continues to the next verb and ends the call.
-      response.say({ voice: 'alice', language: 'en-IN' }, 'Thank you. Goodbye.');
+      response.say({ voice: 'alice', language: 'en-GB' }, 'Thank you. Goodbye.');
       response.hangup();
 
       logger.info('TwiML generated successfully', { audioUrl, hasDisclaimer: !!disclaimer });
@@ -99,7 +99,7 @@ class TwilioWebhooks {
       });
 
       const response = new VoiceResponse();
-      response.say({ voice: 'alice', language: 'en-IN' }, 'System error occurred');
+      response.say({ voice: 'alice', language: 'en-GB' }, 'System error occurred');
       response.hangup();
       return res.status(200).type('text/xml').send(response.toString());
     }
@@ -249,7 +249,7 @@ class TwilioWebhooks {
       const call = await BroadcastCall.findOne({ callSid: CallSid });
       if (!call) {
         const response = new VoiceResponse();
-        response.say({ voice: 'alice', language: 'en-IN' }, 'Thank you.');
+        response.say({ voice: 'alice', language: 'en-GB' }, 'Thank you.');
         response.hangup();
         return res.status(200).type('text/xml').send(response.toString());
       }
@@ -270,11 +270,11 @@ class TwilioWebhooks {
         );
 
         response.say(
-          { voice: 'alice', language: 'en-IN' },
+          { voice: 'alice', language: 'en-GB' },
           'You will no longer receive these calls. Thank you.'
         );
       } else {
-        response.say({ voice: 'alice', language: 'en-IN' }, 'Invalid option.');
+        response.say({ voice: 'alice', language: 'en-GB' }, 'Invalid option.');
       }
 
       response.hangup();
@@ -286,7 +286,7 @@ class TwilioWebhooks {
         stack: error.stack
       });
       const response = new VoiceResponse();
-      response.say({ voice: 'alice', language: 'en-IN' }, 'Thank you.');
+      response.say({ voice: 'alice', language: 'en-GB' }, 'Thank you.');
       response.hangup();
       return res.status(200).type('text/xml').send(response.toString());
     }
