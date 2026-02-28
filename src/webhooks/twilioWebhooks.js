@@ -5,7 +5,7 @@ import Broadcast from '../models/Broadcast.js';
 import OptOut from '../models/OptOut.js';
 
 import logger from '../utils/logger.js';
-import { emitCallUpdate } from '../sockets/unifiedSocket.js';
+import { emitCallUpdate, emitBroadcastUpdate } from '../sockets/unifiedSocket.js';
 
 const { twiml: { VoiceResponse } } = twilio;
 
@@ -177,7 +177,10 @@ class TwilioWebhooks {
           { maxAttempts, retryDelayMs }
         );
       } else {
-        call.status = mappedStatus;
+        // Preserve opt-out state if the caller already pressed 9.
+        if (!(call.status === 'opted_out' && mappedStatus === 'completed')) {
+          call.status = mappedStatus;
+        }
 
         if (CallStatus === 'completed') {
           call.duration = parseInt(CallDuration, 10) || 0;
@@ -217,6 +220,10 @@ class TwilioWebhooks {
 
       if (broadcast) {
         await this.updateBroadcastStats(broadcast);
+        emitBroadcastUpdate(call.broadcast.toString(), {
+          status: broadcast.status,
+          stats: broadcast.stats
+        });
       }
 
       return res.sendStatus(200);
@@ -251,7 +258,8 @@ class TwilioWebhooks {
       calling: statMap.calling || 0,
       answered: statMap.answered || 0,
       completed: statMap.completed || 0,
-      failed: statMap.failed || 0
+      failed: statMap.failed || 0,
+      opted_out: statMap.opted_out || 0
     };
 
     await broadcast.save();
@@ -294,6 +302,25 @@ class TwilioWebhooks {
           { voice: 'alice', language: 'en-GB' },
           'You will no longer receive these calls. Thank you.'
         );
+
+        // Push immediate realtime updates to monitor.
+        emitCallUpdate(call.broadcast.toString(), {
+          callId: call._id,
+          callSid: CallSid,
+          phone: call.contact.phone,
+          status: 'opted_out',
+          attempts: call.attempts,
+          duration: call.duration || 0
+        });
+
+        const broadcast = await Broadcast.findById(call.broadcast);
+        if (broadcast) {
+          await this.updateBroadcastStats(broadcast);
+          emitBroadcastUpdate(call.broadcast.toString(), {
+            status: broadcast.status,
+            stats: broadcast.stats
+          });
+        }
       } else {
         response.say({ voice: 'alice', language: 'en-GB' }, 'Invalid option.');
       }
