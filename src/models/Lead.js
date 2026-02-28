@@ -12,6 +12,15 @@ const leadSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    workflowId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Workflow',
+        index: true
+    },
+    workflowName: {
+        type: String,
+        trim: true
+    },
     caller: {
         phoneNumber: {
             type: String,

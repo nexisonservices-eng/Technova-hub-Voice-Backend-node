@@ -792,6 +792,17 @@ router.put('/:workflowId/status', authenticate, [
       });
     }
 
+    if (status === 'active') {
+      const validationErrors = ivrWorkflowEngine.validateWorkflowGraph(workflow);
+      if (validationErrors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Workflow validation failed. Fix configuration issues before activation.',
+          validationErrors
+        });
+      }
+    }
+
     // Update workflow status
     workflow.status = status;
 

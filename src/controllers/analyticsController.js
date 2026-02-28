@@ -1,10 +1,11 @@
 import Call from '../models/call.js';
+import BroadcastCall from '../models/BroadcastCall.js';
 import ExecutionLog from '../models/ExecutionLog.js';
 import Workflow from '../models/Workflow.js';
 import User from '../models/user.js';
 import logger from '../utils/logger.js';
 import { getIO } from '../sockets/unifiedSocket.js';
-import { getUserObjectId } from '../utils/authContext.js';
+import { getRawUserId, getUserObjectId } from '../utils/authContext.js';
 
 /**
  * Production-level Analytics Controller
@@ -15,6 +16,7 @@ class AnalyticsController {
     this.cache = new Map();
     this.CACHE_TTL = 5 * 60 * 1000; // 5 minutes
     this.ANALYTICS_ROOM = 'analytics_room';
+    this.ANALYTICS_ROOM_PREFIX = 'analytics_room:';
     this.broadcastDebounceMs = 500;
     this.broadcastTimer = null;
     this.pendingBroadcastPayload = null;
@@ -48,8 +50,129 @@ class AnalyticsController {
     }
   }
 
+  /**
+   * Get unified voice dashboard stats for today
+   * Includes inbound/ivr/outbound (Call model) + broadcast outbound (BroadcastCall model)
+   */
+  async getVoiceTodayStats(req, res) {
+    try {
+      const userId = getUserObjectId(req);
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+
+      const dateRange = this.getDateRange('today');
+      const callFilter = {
+        user: userId,
+        createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+      };
+      const broadcastFilter = {
+        userId,
+        $or: [
+          { createdAt: { $gte: dateRange.start, $lte: dateRange.end } },
+          { startTime: { $gte: dateRange.start, $lte: dateRange.end } },
+          { answerTime: { $gte: dateRange.start, $lte: dateRange.end } },
+          { endTime: { $gte: dateRange.start, $lte: dateRange.end } }
+        ]
+      };
+
+      const callActiveStatuses = ['initiated', 'ringing', 'in-progress'];
+      const broadcastActiveStatuses = ['calling', 'ringing', 'in_progress', 'answered'];
+
+      const [callStatsAgg, broadcastStatsAgg, activeCallCount, activeBroadcastCount] = await Promise.all([
+        this.getSummaryStats(dateRange, 'all', 'all', { user: userId }),
+        BroadcastCall.aggregate([
+          { $match: broadcastFilter },
+          {
+            $group: {
+              _id: null,
+              totalCalls: { $sum: 1 },
+              completedCalls: {
+                $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
+              },
+              failedCalls: {
+                $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no_answer', 'cancelled']] }, 1, 0] }
+              },
+              answeredCalls: {
+                $sum: { $cond: [{ $eq: ['$status', 'answered'] }, 1, 0] }
+              },
+              avgDuration: { $avg: '$duration' },
+              totalDuration: { $sum: '$duration' }
+            }
+          }
+        ]),
+        Call.countDocuments({ ...callFilter, status: { $in: callActiveStatuses } }),
+        BroadcastCall.countDocuments({ ...broadcastFilter, status: { $in: broadcastActiveStatuses } })
+      ]);
+
+      const callStats = callStatsAgg || {};
+      const broadcastStats = broadcastStatsAgg[0] || {
+        totalCalls: 0,
+        completedCalls: 0,
+        failedCalls: 0,
+        answeredCalls: 0,
+        avgDuration: 0,
+        totalDuration: 0
+      };
+
+      const totalCalls = (callStats.totalCalls || 0) + (broadcastStats.totalCalls || 0);
+      const completedCalls = (callStats.completedCalls || 0) + (broadcastStats.completedCalls || 0);
+      const failedCalls = (callStats.failedCalls || 0) + (broadcastStats.failedCalls || 0);
+      const totalDuration = (callStats.totalDuration || 0) + (broadcastStats.totalDuration || 0);
+
+      const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
+      const successRate = totalCalls > 0 ? Math.round((completedCalls / totalCalls) * 100) : 0;
+
+      return res.json({
+        success: true,
+        data: {
+          summary: {
+            totalCalls,
+            avgDuration,
+            successRate,
+            completedCalls,
+            failedCalls,
+            inboundCalls: callStats.inboundCalls || 0,
+            ivrCalls: callStats.ivrCalls || 0,
+            outboundCalls: (callStats.outboundCalls || 0) + (broadcastStats.totalCalls || 0),
+            broadcastCalls: broadcastStats.totalCalls || 0,
+            activeCalls: activeCallCount + activeBroadcastCount
+          },
+          breakdown: {
+            callModel: {
+              totalCalls: callStats.totalCalls || 0,
+              completedCalls: callStats.completedCalls || 0,
+              failedCalls: callStats.failedCalls || 0,
+              totalDuration: callStats.totalDuration || 0
+            },
+            broadcastModel: {
+              totalCalls: broadcastStats.totalCalls || 0,
+              completedCalls: broadcastStats.completedCalls || 0,
+              failedCalls: broadcastStats.failedCalls || 0,
+              answeredCalls: broadcastStats.answeredCalls || 0,
+              totalDuration: broadcastStats.totalDuration || 0
+            }
+          },
+          generatedAt: new Date().toISOString()
+        }
+      });
+    } catch (error) {
+      logger.error('[Analytics] Failed to get voice today stats:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to generate voice dashboard stats',
+        message: error.message
+      });
+    }
+  }
+
   buildCacheKey(period = 'today', callType = 'all', status = 'all', userId = 'anonymous') {
     return `analytics_${userId}_${period}_${callType}_${status}`;
+  }
+
+  getAnalyticsRoom(userId = null) {
+    const resolvedUserId = userId ? String(userId) : '';
+    return resolvedUserId ? `${this.ANALYTICS_ROOM_PREFIX}${resolvedUserId}` : this.ANALYTICS_ROOM;
   }
 
   async getOrGenerateInboundAnalytics({ period = 'today', callType = 'all', status = 'all', userId = null } = {}) {
@@ -460,7 +583,11 @@ class AnalyticsController {
         $match: {
           ...ownerFilter,
           createdAt: { $gte: dateRange.start, $lte: dateRange.end },
-          queued: true
+          $or: [
+            { queued: true },
+            { queueWaitTime: { $gt: 0 } },
+            { queuePosition: { $gt: 0 } }
+          ]
         }
       },
       {
@@ -510,7 +637,7 @@ class AnalyticsController {
     // Get current longest queue
     const currentQueue = await Call.countDocuments({
       ...ownerFilter,
-      status: 'queued',
+      queued: true,
       createdAt: { $gte: new Date(Date.now() - 3600000) }
     });
     result.longestQueue = currentQueue;
@@ -643,11 +770,13 @@ class AnalyticsController {
     try {
       const io = getIO();
       if (!io) return;
+      const userId = callData?.userId ? String(callData.userId) : null;
+      const analyticsRoom = this.getAnalyticsRoom(userId);
 
       this.clearCache();
 
       // Broadcast to analytics room
-      io.to(this.ANALYTICS_ROOM).emit('call_event', {
+      io.to(analyticsRoom).emit('call_event', {
         type: callData.event,
         call: callData,
         timestamp: new Date().toISOString()
@@ -657,7 +786,8 @@ class AnalyticsController {
       if (['call_ended', 'call_updated'].includes(callData.event)) {
         this.scheduleAnalyticsBroadcast({
           period: callData.period || 'today',
-          reason: callData.event
+          reason: callData.event,
+          userId
         });
       }
     } catch (error) {
@@ -677,13 +807,16 @@ class AnalyticsController {
     const period = payload.period || 'today';
     const callType = payload.callType || 'all';
     const status = payload.status || 'all';
-    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status });
+    const socketUserId = payload.userId || getRawUserId(socket.user);
+    const userId = socketUserId ? String(socketUserId) : null;
+    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
 
     socket.emit('call_analytics_update', {
       type: 'snapshot',
       period,
       callType,
       status,
+      userId,
       analytics,
       timestamp: new Date().toISOString()
     });
@@ -696,13 +829,16 @@ class AnalyticsController {
     const period = payload.period || 'today';
     const callType = payload.callType || 'all';
     const status = payload.status || 'all';
-    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status });
+    const userId = payload.userId ? String(payload.userId) : null;
+    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
+    const analyticsRoom = this.getAnalyticsRoom(userId);
 
-    io.to(this.ANALYTICS_ROOM).emit('call_analytics_update', {
+    io.to(analyticsRoom).emit('call_analytics_update', {
       type: 'snapshot',
       period,
       callType,
       status,
+      userId,
       reason: payload.reason || 'broadcast',
       analytics,
       timestamp: new Date().toISOString()

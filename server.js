@@ -3,7 +3,6 @@ import http from 'http';
 import { Server } from 'socket.io';
 import app from "./src/app.js";
 import { initializeSocketIO, shutdownSocketIO } from './src/sockets/unifiedSocket.js';
-import workflowRoutes from './src/routes/workflowRoutes.js';
 
 import { connectDB } from "./src/config/db.js";
 import logger from "./src/utils/logger.js";

@@ -26,6 +26,43 @@ if (isConfigured) {
 
 const CLOUDINARY_FOLDER = process.env.CLOUDINARY_FOLDER || 'audio broadcast';
 
+function extractPublicIdFromCloudinaryUrl(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.match(/\/video\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)(?:\?|$)/);
+  return match ? match[1] : null;
+}
+
+function stripAudioExtension(value) {
+  if (!value || typeof value !== 'string') return value;
+  return value.replace(/\.(mp3|wav|m4a|ogg)$/i, '');
+}
+
+function buildPublicIdVariants(publicIdOrUrl) {
+  const raw = typeof publicIdOrUrl === 'string' ? publicIdOrUrl.trim() : '';
+  if (!raw) return [];
+
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
+  })();
+
+  const extracted = extractPublicIdFromCloudinaryUrl(decoded);
+  const baseCandidates = [raw, decoded, extracted].filter(Boolean);
+
+  const variants = new Set();
+  for (const candidate of baseCandidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed) continue;
+    variants.add(trimmed);
+    variants.add(stripAudioExtension(trimmed));
+  }
+
+  return [...variants].filter(Boolean);
+}
+
 /**
  * Upload audio buffer to Cloudinary
  */
@@ -86,11 +123,33 @@ export async function deleteFromCloudinary(publicId) {
   }
 
   try {
-    await cloudinary.uploader.destroy(publicId, {
-      resource_type: 'video' // Use 'video' for audio files
-    });
+    const variants = buildPublicIdVariants(publicId);
+    if (variants.length === 0) {
+      logger.warn(`No valid Cloudinary public_id found for deletion input: ${publicId}`);
+      return;
+    }
 
-    logger.info(`File deleted from Cloudinary: ${publicId}`);
+    let anyDeleted = false;
+
+    for (const variant of variants) {
+      const result = await cloudinary.uploader.destroy(variant, {
+        resource_type: 'video', // Use 'video' for audio files
+        type: 'upload',
+        invalidate: true
+      });
+
+      if (result?.result === 'ok') {
+        anyDeleted = true;
+        logger.info(`File deleted from Cloudinary: ${variant}`);
+        break;
+      }
+
+      logger.warn(`Cloudinary delete miss for ${variant}: ${result?.result || 'unknown result'}`);
+    }
+
+    if (!anyDeleted) {
+      logger.warn(`Cloudinary delete did not remove asset for input: ${publicId}`);
+    }
   } catch (error) {
     logger.error(`Cloudinary delete failed for ${publicId}:`, error);
     throw error;

@@ -21,8 +21,6 @@ import callDetailsRoutes from "./routes/callDetailsRoutes.js";
 import path from 'path';
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // Middleware
 app.use(cors());

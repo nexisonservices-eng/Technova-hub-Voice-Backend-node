@@ -89,6 +89,24 @@ const callSchema = new mongoose.Schema(
       enum: ['default', 'ivr', 'sales', 'tech', 'billing', 'ai', 'voicemail', 'callback'],
       default: 'default'
     },
+    queued: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    queueName: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    queuePosition: {
+      type: Number,
+      default: 0
+    },
+    queueWaitTime: {
+      type: Number,
+      default: 0
+    },
     tags: [String],
     notes: String,
     deletedAt: {

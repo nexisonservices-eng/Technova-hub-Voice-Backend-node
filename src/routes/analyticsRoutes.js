@@ -13,6 +13,13 @@ const router = express.Router();
 router.get('/inbound', authenticate, resolveUserTwilioContext, analyticsController.getInboundAnalytics.bind(analyticsController));
 
 /**
+ * @route   GET /api/analytics/voice/today
+ * @desc    Get unified today's voice dashboard stats
+ * @access  Private
+ */
+router.get('/voice/today', authenticate, resolveUserTwilioContext, analyticsController.getVoiceTodayStats.bind(analyticsController));
+
+/**
  * @route   GET /api/analytics/export
  * @desc    Export analytics data as CSV
  * @access  Private

@@ -121,7 +121,7 @@ class WorkflowAudioService {
         const stream = cloudinary.uploader.upload_stream(
           {
             resource_type: 'video',
-            folder: process.env.CLOUDINARY_BROADCAST_AUDIO_FOLDER || 'broadcast-audio',
+            folder: process.env.CLOUDINARY_IVR_AUDIO_FOLDER || 'ivr-audio',
             public_id: message.uniqueKey
           },
           (error, result) => {

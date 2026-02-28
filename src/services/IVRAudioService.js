@@ -101,23 +101,24 @@ class IVRAudioService {
      * Delete audio from storage
      */
     async deleteAudio(publicId) {
-        if (publicId.startsWith('ivr-audio/')) {
-            // Cloudinary delete
+        const useCloudinary = !!process.env.CLOUDINARY_CLOUD_NAME;
+
+        if (useCloudinary) {
             return new Promise((resolve, reject) => {
                 cloudinary.uploader.destroy(publicId, { resource_type: 'video' }, (err, result) => {
                     if (err) return reject(err);
-                    resolve(result);
+                    // Keep delete API idempotent for repeated delete attempts.
+                    resolve(result || { result: 'not_found' });
                 });
             });
-        } else {
-            // Local delete
-            const filePath = path.join(this.uploadDir, publicId);
-            if (fs.existsSync(filePath)) {
-                await fs.promises.unlink(filePath);
-                return { result: 'deleted' };
-            }
-            return { result: 'not_found' };
         }
+
+        const filePath = path.join(this.uploadDir, publicId);
+        if (fs.existsSync(filePath)) {
+            await fs.promises.unlink(filePath);
+            return { result: 'deleted' };
+        }
+        return { result: 'not_found' };
     }
 }
 

@@ -22,6 +22,8 @@ const resolveUserId = (user) =>
   user?._id || user?.id || user?.sub || user?.userId || null;
 
 export const getUserRoom = (userId) => `${USER_ROOM_PREFIX}${String(userId)}`;
+const getAnalyticsRoom = (userId) =>
+  userId ? `${ANALYTICS_ROOM}:${String(userId)}` : ANALYTICS_ROOM;
 
 export function initializeSocketIO(socketIo) {
   if (initialized) {
@@ -76,8 +78,9 @@ export function initializeSocketIO(socketIo) {
 
     socket.on('join_analytics_room', async (payload = {}) => {
       try {
-        socket.join(ANALYTICS_ROOM);
-        logger.info(`Socket ${socket.id} joined ${ANALYTICS_ROOM}`);
+        const analyticsRoom = getAnalyticsRoom(socketUserId);
+        socket.join(analyticsRoom);
+        logger.info(`Socket ${socket.id} joined ${analyticsRoom}`);
         await analyticsController.emitAnalyticsSnapshotToSocket(socket, payload);
       } catch (error) {
         logger.error(`Failed analytics room join for ${socket.id}:`, error);
@@ -86,8 +89,9 @@ export function initializeSocketIO(socketIo) {
     });
 
     socket.on('leave_analytics_room', () => {
-      socket.leave(ANALYTICS_ROOM);
-      logger.info(`Socket ${socket.id} left ${ANALYTICS_ROOM}`);
+      const analyticsRoom = getAnalyticsRoom(socketUserId);
+      socket.leave(analyticsRoom);
+      logger.info(`Socket ${socket.id} left ${analyticsRoom}`);
     });
 
     socket.on('request_call_analytics', async (payload = {}) => {

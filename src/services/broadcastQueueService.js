@@ -90,7 +90,8 @@ class BroadcastQueueService {
       // Fetch calls ready to be made
       const callsToMake = await this._getNextCalls(
         broadcastId,
-        availableSlots
+        availableSlots,
+        broadcast.config?.maxRetries
       );
 
       if (callsToMake.length === 0) {
@@ -137,7 +138,7 @@ class BroadcastQueueService {
   /**
    * Get next batch of calls
    */
-  async _getNextCalls(broadcastId, limit) {
+  async _getNextCalls(broadcastId, limit, maxRetries = 2) {
     const freshCalls = await BroadcastCall.find({
       broadcast: broadcastId,
       userId: { $exists: true },
@@ -151,7 +152,11 @@ class BroadcastQueueService {
       return freshCalls;
     }
 
-    const retryCalls = await BroadcastCall.getRetryableCalls(broadcastId);
+    const retryCalls = await BroadcastCall.getRetryableCalls(
+      broadcastId,
+      maxRetries,
+      limit - freshCalls.length
+    );
 
     return [
       ...freshCalls,
@@ -176,6 +181,7 @@ class BroadcastQueueService {
         callId: call._id,
         phone: call.contact.phone,
         status: 'calling',
+        attempts: call.attempts + 1,
         duration: 0
       });
 
@@ -252,6 +258,7 @@ class BroadcastQueueService {
         callSid: twilioResponse.sid,
         phone: call.contact.phone,
         status: 'calling',
+        attempts: call.attempts,
         duration: 0
       });
 
@@ -274,6 +281,7 @@ class BroadcastQueueService {
           callId: call._id,
           phone: call.contact.phone,
           status: 'failed',
+          attempts: call.attempts,
           duration: 0
         });
       }

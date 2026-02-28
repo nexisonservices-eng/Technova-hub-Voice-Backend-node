@@ -6,6 +6,8 @@ import callbackService from './callbackService.js';
 import aiAssistantService from './aiAssistantService.js';
 import Call from '../models/call.js';
 import User from '../models/user.js';
+import InboundRoutingRule from '../models/InboundRoutingRule.js';
+import Workflow from '../models/Workflow.js';
 import { emitQueueUpdate, emitIVRUpdate } from '../sockets/unifiedSocket.js';
 import callDetailsController from '../controllers/callDetailsController.js';
 
@@ -155,6 +157,7 @@ class InboundCallService {
         direction: 'inbound',
         status: 'initiated',
         provider: 'twilio',
+        userId: call?.user || user?._id || userId || null,
         timestamp: new Date()
       }, 'inbound');
 
@@ -277,6 +280,36 @@ class InboundCallService {
   ========================== */
   async determineRouting(call, user) {
     const applicableRules = [];
+    const userId = call?.userId || call?.user || user?._id || null;
+
+    // Prefer persisted routing rules configured from Routing Rules UI.
+    if (userId) {
+      const dbRules = await InboundRoutingRule.find({ userId, enabled: true })
+        .sort({ priority: 1, updatedAt: -1 })
+        .lean();
+
+      for (const rule of dbRules) {
+        const matched = await this.evaluateRoutingExpression(rule?.condition, call, user);
+        if (!matched) continue;
+
+        let action = String(rule?.action || '').trim();
+        const actionType = String(rule?.actionType || '').trim().toLowerCase();
+        const ivrPromptKey = String(rule?.ivrPromptKey || '').trim();
+        if (!action && actionType === 'ivr' && ivrPromptKey) {
+          action = `ivr:${ivrPromptKey}`;
+        }
+        if (!action) continue;
+
+        return {
+          name: String(rule?.name || 'db_rule').trim() || 'db_rule',
+          priority: Number(rule?.priority || 1),
+          actions: [action],
+          actionType: actionType || 'custom',
+          ivrMenuId: String(rule?.ivrMenuId || '').trim(),
+          ivrPromptKey
+        };
+      }
+    }
 
     for (const [name, rule] of this.routingRules) {
       if (await this.evaluateConditions(rule.conditions, call, user)) {
@@ -292,6 +325,46 @@ class InboundCallService {
     logger.info(`ðŸ“ Routing call ${call.callSid} to: ${selectedRule.name}`);
 
     return selectedRule;
+  }
+
+  async evaluateRoutingExpression(condition, call, user) {
+    const expr = String(condition || '').trim();
+    if (!expr) return true;
+
+    const normalized = expr.toLowerCase();
+    if (['true', 'always', 'default'].includes(normalized)) return true;
+    if (normalized === 'business_hours') return this.isBusinessHours();
+    if (normalized === 'after_hours') return !this.isBusinessHours();
+
+    const values = {
+      caller_number: String(call?.phoneNumber || call?.callerNumber || '').trim(),
+      from: String(call?.phoneNumber || call?.callerNumber || '').trim(),
+      destination_number: String(call?.to || call?.destinationNumber || '').trim(),
+      to: String(call?.to || call?.destinationNumber || '').trim(),
+      user_vip: String(Boolean(user?.vip)).toLowerCase()
+    };
+
+    const comparators = [
+      { op: ' starts_with ', fn: (a, b) => String(a).startsWith(String(b)) },
+      { op: ' ends_with ', fn: (a, b) => String(a).endsWith(String(b)) },
+      { op: ' contains ', fn: (a, b) => String(a).includes(String(b)) },
+      { op: '==', fn: (a, b) => String(a) === String(b) },
+      { op: '!=', fn: (a, b) => String(a) !== String(b) }
+    ];
+
+    for (const { op, fn } of comparators) {
+      const idx = expr.indexOf(op);
+      if (idx === -1) continue;
+
+      const leftRaw = expr.slice(0, idx).trim().toLowerCase();
+      const rightRaw = expr.slice(idx + op.length).trim();
+      const leftValue = values[leftRaw] ?? '';
+      const rightValue = rightRaw.replace(/^['"]|['"]$/g, '');
+      return fn(leftValue, rightValue);
+    }
+
+    // Unknown expression syntax: avoid blocking by treating as not matched.
+    return false;
   }
 
   /* =========================
@@ -345,7 +418,7 @@ class InboundCallService {
     let twiml = '';
 
     for (const action of routing.actions) {
-      const result = await this.executeAction(action, callSid, callData);
+      const result = await this.executeAction(action, callSid, callData, routing);
       actions.push(action);
 
       if (result.twiml) {
@@ -359,13 +432,34 @@ class InboundCallService {
   /* =========================
      Execute Individual Action
   ========================== */
-  async executeAction(action, callSid, callData) {
-    switch (action) {
+  async executeAction(action, callSid, callData, routing = {}) {
+    const normalizedAction = String(action || '').trim();
+
+    if (normalizedAction.startsWith('ivr:')) {
+      const promptKeyFromAction = normalizedAction.slice(4).trim();
+      return this.routeToWorkflowIVR(callSid, {
+        userId: callData?.userId || null,
+        promptKey: routing?.ivrPromptKey || promptKeyFromAction,
+        menuId: routing?.ivrMenuId || null
+      });
+    }
+
+    switch (normalizedAction) {
       case 'ivr_main':
         return this.generateIVRTwiML('main', callSid);
 
       case 'route_to_ai':
         return this.routeToAI(callSid, callData);
+
+      case 'route_to_sales':
+      case 'route_to_tech':
+      case 'route_to_billing':
+        return this.routeToDepartment(normalizedAction.split('_')[2], callSid);
+
+      case 'queue_for_agent':
+      case 'add_to_queue':
+      case 'queue':
+        return this.addToQueue(callSid, 'general');
 
       case 'priority_queue':
         return this.addToPriorityQueue(callSid);
@@ -380,6 +474,31 @@ class InboundCallService {
         logger.warn(`Unknown action: ${action}`);
         return { twiml: '' };
     }
+  }
+
+  async routeToWorkflowIVR(callSid, { userId = null, promptKey = '', menuId = null } = {}) {
+    const query = { isActive: true };
+    if (userId) {
+      query.createdBy = userId;
+    }
+
+    let workflow = null;
+    if (menuId) {
+      workflow = await Workflow.findOne({ ...query, _id: menuId }).select('_id');
+    }
+    if (!workflow && promptKey) {
+      workflow = await Workflow.findOne({ ...query, promptKey }).select('_id');
+    }
+
+    if (!workflow) {
+      logger.warn(`No workflow found for routing rule IVR action (promptKey: ${promptKey}, menuId: ${menuId || ''})`);
+      return this.generateIVRTwiML('main', callSid);
+    }
+
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    response.redirect({ method: 'POST' }, `/webhook/twilio/workflow/${workflow._id}`);
+    return { twiml: response.toString() };
   }
 
   /* =========================
@@ -571,6 +690,11 @@ class InboundCallService {
     const queueEntry = {
       callSid,
       userId: String(callStateService.getCallState(callSid)?.user?._id || ''),
+      phoneNumber: String(
+        callStateService.getCallState(callSid)?.call?.phoneNumber ||
+        callStateService.getCallState(callSid)?.call?.from ||
+        ''
+      ).trim(),
       queuedAt: new Date(),
       position,
       priority,
@@ -626,6 +750,64 @@ class InboundCallService {
     return { twiml: response.toString() };
   }
 
+  syncQueueFromWebhook({
+    callSid,
+    queueName = 'General',
+    userId = null,
+    phoneNumber = '',
+    position = null,
+    queuedAt = null,
+    priority = 'normal',
+    estimatedWaitTime = null
+  } = {}) {
+    const normalizedQueueName = String(queueName || 'General').trim() || 'General';
+    if (!callSid) return null;
+
+    if (!this.callQueues.has(normalizedQueueName)) {
+      this.callQueues.set(normalizedQueueName, []);
+    }
+
+    const queue = this.callQueues.get(normalizedQueueName);
+    const existingIndex = queue.findIndex((entry) => String(entry.callSid) === String(callSid));
+    const resolvedPosition = Number.isFinite(Number(position))
+      ? Math.max(1, Number(position))
+      : (existingIndex >= 0
+        ? Math.max(1, Number(queue[existingIndex]?.position || existingIndex + 1))
+        : queue.length + 1);
+
+    const baseEntry = existingIndex >= 0 ? queue[existingIndex] : {};
+    const nextEntry = {
+      ...baseEntry,
+      callSid: String(callSid),
+      userId: userId ? String(userId) : String(baseEntry?.userId || ''),
+      phoneNumber: String(phoneNumber || baseEntry?.phoneNumber || '').trim(),
+      queuedAt: queuedAt ? new Date(queuedAt) : (baseEntry?.queuedAt || new Date()),
+      position: resolvedPosition,
+      priority: String(priority || baseEntry?.priority || 'normal'),
+      estimatedWaitTime: Number.isFinite(Number(estimatedWaitTime))
+        ? Math.max(0, Number(estimatedWaitTime))
+        : this.calculateEstimatedWaitTime(normalizedQueueName, resolvedPosition)
+    };
+
+    if (existingIndex >= 0) {
+      queue[existingIndex] = nextEntry;
+    } else {
+      queue.push(nextEntry);
+    }
+
+    queue.sort((a, b) => Number(a.position || 0) - Number(b.position || 0));
+    queue.forEach((entry, index) => {
+      entry.position = index + 1;
+      entry.estimatedWaitTime = this.calculateEstimatedWaitTime(normalizedQueueName, entry.position);
+    });
+
+    return {
+      queueName: normalizedQueueName,
+      queueLength: queue.length,
+      entry: queue.find((entry) => String(entry.callSid) === String(callSid)) || nextEntry
+    };
+  }
+
   calculateEstimatedWaitTime(queueName, position) {
     const queue = this.callQueues.get(queueName) || [];
     if (queue.length === 0) return 0;
@@ -663,6 +845,32 @@ class InboundCallService {
     });
 
     return true;
+  }
+
+  removeFromAnyQueue(callSid) {
+    if (!callSid) return false;
+
+    for (const [queueName, queue] of this.callQueues.entries()) {
+      const index = queue.findIndex((entry) => String(entry.callSid) === String(callSid));
+      if (index === -1) continue;
+
+      queue.splice(index, 1);
+      queue.forEach((entry, idx) => {
+        entry.position = idx + 1;
+        entry.estimatedWaitTime = this.calculateEstimatedWaitTime(queueName, entry.position);
+      });
+
+      emitQueueUpdate({
+        queueName,
+        action: 'left',
+        callSid,
+        queueLength: queue.length
+      });
+
+      return true;
+    }
+
+    return false;
   }
 
   updateQueuePosition(callSid, queueName) {
@@ -942,6 +1150,7 @@ class InboundCallService {
       length: filteredQueue.length,
       calls: filteredQueue.map(call => ({
         callSid: call.callSid,
+        phoneNumber: call.phoneNumber || '',
         queuedAt: call.queuedAt,
         position: call.position
       }))

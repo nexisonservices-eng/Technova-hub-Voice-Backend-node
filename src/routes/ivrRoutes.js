@@ -52,21 +52,16 @@ const upload = multer({
  * Upload audio file for IVR nodes
  */
 router.post('/audio/upload', authenticate, upload.single('audio'), (req, res) => IVRAudioController.upload(req, res));
+router.delete('/audio/delete', authenticate, (req, res) => IVRAudioController.deleteByPublicId(req, res));
 
 /**
  * DELETE /ivr/audio/:publicId
- * Delete custom uploaded audio file (handles Cloudinary paths with forward slashes)
+ * Delete custom uploaded audio file
  */
 router.delete('/audio/:publicId', authenticate, (req, res) => {
-  // Only handle if publicId contains forward slashes (Cloudinary path)
   const publicId = decodeURIComponent(req.params.publicId);
-  if (publicId.includes('/')) {
-    console.log('Deleting custom audio:', publicId);
-    return IVRAudioController.delete(req, res);
-  } else {
-    // Let TTS route handle simple promptKey/language format
-    return res.status(404).json({ success: false, error: 'Not found' });
-  }
+  console.log('Deleting custom audio:', publicId);
+  return IVRAudioController.delete(req, res);
 });
 
 /**
@@ -1003,12 +998,12 @@ router.put('/menus/:id', [
           ...menu.workflowConfig,
           nodes: menu.workflowConfig?.nodes?.map(node => ({
             ...node,
-            audioUrl: node.audioUrl || menu.greeting?.audioUrl || null,
-            audioAssetId: node.audioAssetId || menu.greeting?.audioAssetId || null,
+            audioUrl: node.audioUrl || null,
+            audioAssetId: node.audioAssetId || null,
             data: {
               ...node.data,
-              audioUrl: node.data?.audioUrl || node.audioUrl || menu.greeting?.audioUrl || null,
-              audioAssetId: node.data?.audioAssetId || node.audioAssetId || menu.greeting?.audioAssetId || null
+              audioUrl: node.data?.audioUrl || node.audioUrl || null,
+              audioAssetId: node.data?.audioAssetId || node.audioAssetId || null
             }
           })) || []
         },
@@ -1060,9 +1055,50 @@ router.delete('/menus/:id', async (req, res) => {
     // New workflow shape
     (menu.nodes || []).forEach((node) => {
       const nodeData = node?.data || {};
-      const nodeLevelIds = [node.audioAssetId, node.cloudinaryPublicId, node.publicId];
-      const dataLevelIds = [nodeData.audioAssetId, nodeData.cloudinaryPublicId, nodeData.publicId];
+      const nodeLevelIds = [
+        node.audioPublicId,
+        node.audio_public_id,
+        node.audioAssetId,
+        node.audio_asset_id,
+        node.cloudinaryPublicId,
+        node.publicId
+      ];
+      const dataLevelIds = [
+        nodeData.audioPublicId,
+        nodeData.audio_public_id,
+        nodeData.audioAssetId,
+        nodeData.audio_asset_id,
+        nodeData.cloudinaryPublicId,
+        nodeData.publicId
+      ];
       [...nodeLevelIds, ...dataLevelIds]
+        .filter((pid) => typeof pid === 'string' && pid.trim())
+        .forEach((pid) => publicIds.add(pid.trim()));
+
+      [node.audioUrl, node.audio_url, nodeData.audioUrl, nodeData.audio_url]
+        .filter((url) => typeof url === 'string' && url.includes('/upload/'))
+        .forEach((url) => {
+          const match = url.match(/\/(?:image|video|raw)\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)?(?:\?|$)/)
+            || url.match(/\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)?(?:\?|$)/);
+          if (match?.[1]) {
+            publicIds.add(match[1]);
+          }
+        });
+    });
+
+    // Optional legacy nested workflow shape
+    (menu.workflowConfig?.nodes || []).forEach((node) => {
+      const nodeData = node?.data || {};
+      [
+        node.audioPublicId,
+        node.audio_public_id,
+        node.audioAssetId,
+        node.audio_asset_id,
+        nodeData.audioPublicId,
+        nodeData.audio_public_id,
+        nodeData.audioAssetId,
+        nodeData.audio_asset_id
+      ]
         .filter((pid) => typeof pid === 'string' && pid.trim())
         .forEach((pid) => publicIds.add(pid.trim()));
     });

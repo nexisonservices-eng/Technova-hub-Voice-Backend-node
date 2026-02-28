@@ -529,7 +529,8 @@ class CallDetailsController {
       await analyticsController.handleCallEvent({
         event: 'call_started',
         callSid: callData.callSid,
-        callType
+        callType,
+        userId: callData.userId || callData.user || null
       });
 
       logger.info(`📡 Socket.IO: Call created notification sent [${callType}] ${callData.callSid}`);
@@ -583,7 +584,8 @@ class CallDetailsController {
       await analyticsController.handleCallEvent({
         event: 'call_updated',
         callSid: callId,
-        callType
+        callType,
+        userId: updateData.userId || updateData.user || null
       });
 
       logger.info(`📡 Socket.IO: Call updated notification sent [${callType}] ${callId}`);
@@ -644,7 +646,8 @@ class CallDetailsController {
       await analyticsController.handleCallEvent({
         event: 'call_ended',
         callSid: callId,
-        callType
+        callType,
+        userId: callData.userId || callData.user || null
       });
 
       logger.info(`📡 Socket.IO: Call ended notification sent [${callType}] ${callId}`);

@@ -7,7 +7,7 @@ class LeadService {
      */
     async createLead(leadData) {
         try {
-            logger.info(`Creating new lead for caller: ${leadData.caller.phoneNumber}`);
+            logger.info(`Creating new lead for caller: ${leadData?.caller?.phoneNumber || 'unknown'}`);
             const lead = new Lead(leadData);
             await lead.save();
             logger.info(`Lead created successfully: ${lead._id}`);
@@ -125,6 +125,47 @@ class LeadService {
             return lead;
         } catch (error) {
             logger.error(`Error adding recording to lead ${leadId}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Upsert lead by callSid (+ user when available)
+     * Guarantees one lead record per call for a tenant/user.
+     */
+    async upsertLeadByCallSid(leadData = {}) {
+        try {
+            const callSid = String(leadData.callSid || '').trim();
+            if (!callSid) {
+                throw new Error('callSid is required for lead upsert');
+            }
+
+            const filter = { callSid };
+            if (leadData.user) {
+                filter.user = leadData.user;
+            }
+
+            const update = {
+                $set: {
+                    ...leadData
+                }
+            };
+
+            const lead = await Lead.findOneAndUpdate(
+                filter,
+                update,
+                {
+                    new: true,
+                    upsert: true,
+                    runValidators: true,
+                    setDefaultsOnInsert: true
+                }
+            );
+
+            logger.info(`Lead upserted for callSid: ${callSid}`);
+            return lead;
+        } catch (error) {
+            logger.error(`Error upserting lead for callSid ${leadData?.callSid || 'unknown'}:`, error);
             throw error;
         }
     }

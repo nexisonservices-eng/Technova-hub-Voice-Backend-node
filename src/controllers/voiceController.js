@@ -3,6 +3,7 @@ import telephonyService from '../services/telephonyService.js';
 import callStateService from '../services/callStateService.js';
 import logger from '../utils/logger.js';
 import Call from '../models/call.js';
+import BroadcastCall from '../models/BroadcastCall.js';
 import { getUserIdString } from '../utils/authContext.js';
 
 class CallController {
@@ -71,13 +72,47 @@ class CallController {
   async getActiveCalls(req, res) {
     try {
       const userId = getUserIdString(req);
-      const activeCalls = await Call.find({
-        user: userId,
-        status: { $in: ['initiated', 'ringing', 'in-progress'] }
-      })
-        .populate('user', 'name email')
-        .sort({ createdAt: -1 })
-        .limit(100);
+      const [activeVoiceCalls, activeBroadcastCalls] = await Promise.all([
+        Call.find({
+          user: userId,
+          status: { $in: ['initiated', 'ringing', 'in-progress'] }
+        })
+          .populate('user', 'name email')
+          .sort({ createdAt: -1 })
+          .limit(100)
+          .lean(),
+        BroadcastCall.find({
+          userId,
+          status: { $in: ['calling', 'ringing', 'in_progress', 'answered'] }
+        })
+          .sort({ createdAt: -1 })
+          .limit(100)
+          .select('callSid status contact startTime createdAt duration')
+          .lean()
+      ]);
+
+      const normalizedBroadcastCalls = activeBroadcastCalls.map((call) => ({
+        callSid: call.callSid || null,
+        call_sid: call.callSid || null,
+        status: call.status === 'in_progress' ? 'in-progress' : call.status,
+        connected: ['in_progress', 'answered'].includes(call.status),
+        phoneNumber: call?.contact?.phone || '',
+        direction: 'outbound',
+        source: 'broadcast',
+        createdAt: call.createdAt,
+        startTime: call.startTime,
+        duration: call.duration || 0
+      }));
+
+      const normalizedVoiceCalls = activeVoiceCalls.map((call) => ({
+        ...call,
+        connected: call.status === 'in-progress',
+        source: call.direction === 'outbound' ? 'outbound' : 'inbound'
+      }));
+
+      const activeCalls = [...normalizedVoiceCalls, ...normalizedBroadcastCalls]
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+        .slice(0, 100);
 
       res.json({
         success: true,

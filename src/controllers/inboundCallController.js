@@ -11,6 +11,7 @@ import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import mongoose from 'mongoose';
 import { getUserRoom } from '../sockets/unifiedSocket.js';
+import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 
 // Import Socket.IO instance for real-time events
 let io = null;
@@ -77,6 +78,99 @@ class InboundCallController {
       textHash,
       generatedAt: new Date()
     };
+  }
+
+  extractCloudinaryPublicIdFromUrl(audioUrl) {
+    if (!audioUrl || typeof audioUrl !== 'string') return null;
+    const match = audioUrl.match(/\/video\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)(?:\?|$)/);
+    return match ? match[1] : null;
+  }
+
+  normalizeCloudinaryAssetId(candidate) {
+    if (!candidate || typeof candidate !== 'string') return null;
+    const trimmed = candidate.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return this.extractCloudinaryPublicIdFromUrl(trimmed);
+    }
+    return trimmed;
+  }
+
+  collectNodeAudioAssetIds(nodes = []) {
+    const ids = new Set();
+    for (const node of nodes || []) {
+      const nodeData = node?.data || {};
+      const candidates = [
+        node?.audioPublicId,
+        node?.audio_public_id,
+        node?.audioAssetId,
+        node?.audio_asset_id,
+        node?.cloudinaryPublicId,
+        node?.publicId,
+        nodeData?.audioPublicId,
+        nodeData?.audio_public_id,
+        nodeData?.audioAssetId,
+        nodeData?.audio_asset_id,
+        nodeData?.cloudinaryPublicId,
+        nodeData?.publicId,
+        node?.audioUrl,
+        node?.audio_url,
+        nodeData?.audioUrl,
+        nodeData?.audio_url,
+        this.extractCloudinaryPublicIdFromUrl(node?.audioUrl),
+        this.extractCloudinaryPublicIdFromUrl(node?.audio_url),
+        this.extractCloudinaryPublicIdFromUrl(nodeData?.audioUrl),
+        this.extractCloudinaryPublicIdFromUrl(nodeData?.audio_url)
+      ];
+
+      for (const candidate of candidates) {
+        const normalized = this.normalizeCloudinaryAssetId(candidate);
+        if (normalized) {
+          ids.add(normalized);
+        }
+      }
+    }
+    return ids;
+  }
+
+  collectLegacyAudioAssetIds(audioFiles = []) {
+    const ids = new Set();
+    for (const file of audioFiles || []) {
+      const candidates = [
+        file?.audioAssetId,
+        file?.cloudinaryPublicId,
+        file?.publicId,
+        file?.key,
+        this.extractCloudinaryPublicIdFromUrl(file?.audioUrl),
+        this.extractCloudinaryPublicIdFromUrl(file?.url)
+      ];
+      for (const candidate of candidates) {
+        const normalized = this.normalizeCloudinaryAssetId(candidate);
+        if (normalized) {
+          ids.add(normalized);
+        }
+      }
+    }
+    return ids;
+  }
+
+  collectMenuOptionAudioAssetIds(menuOptions = []) {
+    const ids = new Set();
+    for (const option of menuOptions || []) {
+      const candidates = [
+        option?.audioAssetId,
+        option?.cloudinaryPublicId,
+        option?.publicId,
+        this.extractCloudinaryPublicIdFromUrl(option?.audioUrl)
+      ];
+      for (const candidate of candidates) {
+        const normalized = this.normalizeCloudinaryAssetId(candidate);
+        if (normalized) {
+          ids.add(normalized);
+        }
+      }
+    }
+    return ids;
   }
 
   /**
@@ -191,7 +285,7 @@ class InboundCallController {
       const mappedStatus = statusMap[CallStatus] || CallStatus;
 
       // Update call in database
-      await callStateService.updateCallStatus(CallSid, mappedStatus, {
+      const updatedCall = await callStateService.updateCallStatus(CallSid, mappedStatus, {
         endTime: CallStatus === 'completed' ? new Date() : null,
         duration: CallDuration ? parseInt(CallDuration) : null,
         providerData: {
@@ -201,8 +295,28 @@ class InboundCallController {
       });
 
       // If call completed, clean up
-      if (CallStatus === 'completed' || CallStatus === 'failed') {
+      if (CallStatus === 'completed') {
         await callStateService.endCall(CallSid);
+      } else if (['failed', 'busy', 'no-answer'].includes(CallStatus)) {
+        callStateService.activeCalls.delete(CallSid);
+      }
+
+      if (updatedCall) {
+        const callType = updatedCall.direction === 'outbound'
+          ? 'outbound'
+          : (updatedCall.routing && updatedCall.routing !== 'default' ? 'ivr' : 'inbound');
+
+        if (['completed', 'failed', 'busy', 'no-answer'].includes(CallStatus)) {
+          await callDetailsController.notifyCallEnded(CallSid, {
+            ...updatedCall.toObject(),
+            userId: updatedCall.user || null
+          }, callType);
+        } else {
+          await callDetailsController.notifyCallUpdated(CallSid, {
+            ...updatedCall.toObject(),
+            userId: updatedCall.user || null
+          }, callType);
+        }
       }
 
       res.type('text/xml');
@@ -644,6 +758,8 @@ class InboundCallController {
 
       // Centralized defaults
       const { voiceId, language } = this.getVoiceAndLanguageConfig(config.voice || config.voiceId);
+      let selectedVoiceId = voiceId;
+      let selectedLanguage = language;
       const defaultConfig = {
         voiceId,
         language,
@@ -825,12 +941,40 @@ class InboundCallController {
 
       // Track whether this is a create or update operation
       const wasExistingMenu = !!menu;
+      const skipAutoSeedForNewWorkflow = !wasExistingMenu && isWorkflowBased;
+      let deletedNodeAudioAssetIds = [];
+
+      // If nodes were removed from an existing workflow, delete their Cloudinary assets.
+      if (menu && isWorkflowBased) {
+        try {
+          const existingNodeAudioIds = this.collectNodeAudioAssetIds(menu.nodes || []);
+          const incomingNodeAudioIds = this.collectNodeAudioAssetIds(config.nodes || []);
+          const removedNodeAudioIds = [...existingNodeAudioIds].filter((id) => !incomingNodeAudioIds.has(id));
+
+          if (removedNodeAudioIds.length > 0) {
+            const { deleteFromCloudinary } = await import('../utils/cloudinaryUtils.js');
+            for (const publicId of removedNodeAudioIds) {
+              try {
+                await deleteFromCloudinary(publicId);
+                deletedNodeAudioAssetIds.push(publicId);
+                logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted removed node audio from Cloudinary: ${publicId}`);
+              } catch (deleteError) {
+                logger.warn(`âš ï¸ Failed to delete removed node audio ${publicId}: ${deleteError.message}`);
+              }
+            }
+          }
+        } catch (nodeCleanupError) {
+          logger.warn(`âš ï¸ Node audio cleanup skipped for ${menuName}: ${nodeCleanupError.message}`);
+        }
+      }
 
       // Generate TTS audio for greeting/audio nodes via Python service
       let audioData = null;
       let greetingText = null;
 
-      if (!isWorkflowBased) {
+      if (skipAutoSeedForNewWorkflow) {
+        logger.info(`Skipping default greeting/audio generation for new workflow IVR ${menuName}`);
+      } else if (!isWorkflowBased) {
         // Traditional IVR - use config.greeting
         greetingText = config.greeting;
 
@@ -848,16 +992,34 @@ class InboundCallController {
 
         if (audioNode) {
           // Audio node takes precedence
+          const nodeVoice = audioNode?.data?.voice || audioNode?.data?.voiceId;
+          const nodeLanguage = audioNode?.data?.language;
+          if (nodeVoice) {
+            selectedVoiceId = nodeVoice;
+            if (!nodeLanguage) {
+              selectedLanguage = this.getVoiceAndLanguageConfig(nodeVoice).language;
+            }
+          }
+          if (nodeLanguage) {
+            selectedLanguage = nodeLanguage;
+          }
           greetingText = audioNode.data.mode === 'tts' ? audioNode.data.messageText : null;
           logger.info(`Ã°Å¸â€Â§ Using audio node for workflow ${menuName}: "${greetingText}"`);
         } else if (greetingNode) {
           // Fallback to greeting node for backward compatibility
+          const nodeVoice = greetingNode?.data?.voice || greetingNode?.data?.voiceId;
+          const nodeLanguage = greetingNode?.data?.language;
+          if (nodeVoice) {
+            selectedVoiceId = nodeVoice;
+            if (!nodeLanguage) {
+              selectedLanguage = this.getVoiceAndLanguageConfig(nodeVoice).language;
+            }
+          }
+          if (nodeLanguage) {
+            selectedLanguage = nodeLanguage;
+          }
           greetingText = greetingNode.data.text || 'Welcome to our service!';
           logger.info(`Ã°Å¸â€Â§ Using greeting node for workflow ${menuName}: "${greetingText}"`);
-        } else {
-          // No greeting or audio node found
-          greetingText = 'Welcome to our service!';
-          logger.info(`Ã°Å¸â€Â§ Using default greeting for workflow ${menuName}: "${greetingText}"`);
         }
       }
 
@@ -890,8 +1052,8 @@ class InboundCallController {
           logger.info(`Generating TTS audio for IVR menu: ${menuName}`);
           audioData = await workflowAudioService.generateSingleAudio(
             greetingText,
-            voiceId,
-            language
+            selectedVoiceId,
+            selectedLanguage
           );
           
           // Validate audio data was actually generated
@@ -912,7 +1074,7 @@ class InboundCallController {
             error: audioError.message,
             stack: audioError.stack,
             greetingText,
-            voiceId,
+            selectedVoiceId,
             audioData: audioData
           });
           // Don't set audioData to null here - keep any partial data for debugging
@@ -939,29 +1101,32 @@ class InboundCallController {
       if (!isWorkflowBased) {
         menuData.text = config.greeting;
       } else {
-        // For workflow-based IVRs, ensure there is a start audio node, and avoid duplicate default-greeting IDs.
-        menuData.nodes = (menuData.nodes || []).filter((node, index, arr) => {
-          if (!node?.id) return true;
-          if (node.id !== 'default-greeting') return true;
-          return arr.findIndex((n) => n?.id === 'default-greeting') === index;
-        });
-
-        const hasStartAudioNode = menuData.nodes.some(
-          (node) => node?.type === 'greeting' || node?.type === 'audio'
-        );
-
-        if (!hasStartAudioNode) {
-          logger.info(`Adding default greeting node to workflow ${menuName} - no greeting/audio node found`);
-          menuData.nodes.push({
-            id: 'default-greeting',
-            type: 'greeting',
-            data: {
-              text: 'Welcome to our service!',
-              voiceId,
-              language
-            },
-            position: { x: 100, y: 100 }
+        // For existing workflow IVRs, keep legacy safeguard that removes duplicate default-greeting IDs
+        // and auto-seeds a start greeting node when missing.
+        if (!skipAutoSeedForNewWorkflow) {
+          menuData.nodes = (menuData.nodes || []).filter((node, index, arr) => {
+            if (!node?.id) return true;
+            if (node.id !== 'default-greeting') return true;
+            return arr.findIndex((n) => n?.id === 'default-greeting') === index;
           });
+
+          const hasStartAudioNode = menuData.nodes.some(
+            (node) => node?.type === 'greeting' || node?.type === 'audio'
+          );
+
+          if (!hasStartAudioNode) {
+            logger.info(`Adding default greeting node to workflow ${menuName} - no greeting/audio node found`);
+            menuData.nodes.push({
+              id: 'default-greeting',
+              type: 'greeting',
+              data: {
+                text: 'Welcome to our service!',
+                voiceId,
+                language
+              },
+              position: { x: 100, y: 100 }
+            });
+          }
         }
       }
 
@@ -978,12 +1143,12 @@ class InboundCallController {
           if (existingAudioFile) {
             logger.info(`Ã°Å¸â€â€ž Audio file with same text already exists, skipping generation. Hash: ${newTextHash}`);
           } else {
-            const audioFileData = this.createAudioFileData(audioData, greetingText, voiceId);
+            const audioFileData = this.createAudioFileData(audioData, greetingText, selectedVoiceId);
             menuData.audioFiles = (menu.audioFiles || []).concat(audioFileData);
           }
         } else {
           // New menu - always add audio
-          menuData.audioFiles = [this.createAudioFileData(audioData, greetingText, voiceId)];
+          menuData.audioFiles = [this.createAudioFileData(audioData, greetingText, selectedVoiceId)];
         }
       }
 
@@ -1059,11 +1224,11 @@ class InboundCallController {
           promptKey: menu.promptKey,
           displayName: menu.displayName,
           greeting: {
-            text: config.greeting,
+            text: greetingText || config.greeting || menu.text || null,
             audioUrl: audioData?.audioUrl || null,
             audioAssetId: audioData?.publicId || null,
-            voice: menu.config?.voiceId || 'en-GB-SoniaNeural',
-            language: menu.config?.language || 'en-GB'
+            voice: isWorkflowBased ? (selectedVoiceId || null) : (menu.config?.voiceId || null),
+            language: isWorkflowBased ? (selectedLanguage || null) : (menu.config?.language || null)
           },
           menuOptions: (config.menu || []).map(opt => ({
             digit: opt.digit || opt.key,
@@ -1094,6 +1259,7 @@ class InboundCallController {
           menuId: menu._id,
           menuName: menu.promptKey,
           ivrMenu: completeIVRData,
+          deletedNodeAudioAssetIds,
           timestamp: new Date().toISOString()
         };
 
@@ -1141,7 +1307,12 @@ class InboundCallController {
             text: menu.text,
             audioUrl: responseAudioUrl,
             audioAssetId: responseAudioAssetId,
-            voice: config.voiceId || config.voice || menu.menuConfig?.voiceId || 'en-GB-SoniaNeural'
+            voice: isWorkflowBased
+              ? (selectedVoiceId || null)
+              : (config.voiceId || config.voice || menu.menuConfig?.voiceId || menu.config?.voiceId || null),
+            language: isWorkflowBased
+              ? (selectedLanguage || null)
+              : (menu.config?.language || null)
           },
 
           menuOptions: (menu.menuConfig?.options || []).map(opt => ({
@@ -1167,6 +1338,7 @@ class InboundCallController {
           createdAt: menu.createdAt,
           updatedAt: menu.updatedAt
         },
+        deletedNodeAudioAssetIds,
         ...(workflowValidationErrors.length > 0 ? { workflowValidationErrors } : {})
       });
 
@@ -1201,9 +1373,8 @@ class InboundCallController {
         });
       }
 
-      // Import Workflow model and Cloudinary utils
+      // Import Workflow model
       const { default: Workflow } = await import('../models/Workflow.js');
-      const { default: cloudinaryUtils } = await import('../utils/cloudinaryUtils.js');
 
       // Find menu by ID (safer than name-based deletion)
       let menu = null;
@@ -1245,28 +1416,23 @@ class InboundCallController {
       const deletedAudioAssetIds = []; // Track deleted asset IDs for response
 
       try {
-        // NOTE: Greeting audio is stored in audioFiles array, not as separate menu.greeting object
-        // This ensures consistency with the update flow where all audio goes to audioFiles
+        // Gather ALL possible Cloudinary public IDs from legacy + current schema.
+        const allAudioAssetIds = new Set([
+          ...this.collectLegacyAudioAssetIds(menu.audioFiles || []),
+          ...this.collectMenuOptionAudioAssetIds(menu.menuOptions || []),
+          ...this.collectMenuOptionAudioAssetIds(menu.config?.options || []),
+          ...this.collectNodeAudioAssetIds(menu.nodes || []),
+          ...this.collectNodeAudioAssetIds(menu.workflowConfig?.nodes || [])
+        ]);
 
-        // Delete workflow audio files if they exist (includes greeting audio)
-        if (menu.audioFiles && Array.isArray(menu.audioFiles)) {
-          for (const audioFile of menu.audioFiles) {
-            if (audioFile.audioAssetId) {
-              await cloudinaryUtils.deleteFile(audioFile.audioAssetId);
-              deletedAudioAssetIds.push(audioFile.audioAssetId);
-              logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted audio from Cloudinary: ${audioFile.audioAssetId}`);
-            }
-          }
-        }
-
-        // Delete any additional audio assets in menuOptions
-        if (menu.menuOptions && Array.isArray(menu.menuOptions)) {
-          for (const option of menu.menuOptions) {
-            if (option.audioAssetId) {
-              await cloudinaryUtils.deleteFile(option.audioAssetId);
-              deletedAudioAssetIds.push(option.audioAssetId);
-              logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted option audio from Cloudinary: ${option.audioAssetId}`);
-            }
+        for (const audioAssetId of allAudioAssetIds) {
+          try {
+            await deleteFromCloudinary(audioAssetId);
+            deletedAudioAssetIds.push(audioAssetId);
+            logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted audio from Cloudinary: ${audioAssetId}`);
+          } catch (deleteError) {
+            // Continue deleting others even if one fails.
+            logger.warn(`âš ï¸ Failed deleting Cloudinary asset ${audioAssetId}: ${deleteError.message}`);
           }
         }
 
@@ -1384,7 +1550,8 @@ class InboundCallController {
 
         // Validate input nodes and filter out incomplete ones
         const validInputNodes = inputNodes.filter(node => {
-          if (!node.data?.digit) {
+          const digit = String(node?.data?.digit ?? '').trim();
+          if (!digit) {
             logger.warn(`Ã¢Å¡Â Ã¯Â¸Â Input node missing digit in menu ${menu.promptKey}, skipping node`);
             return false;
           }

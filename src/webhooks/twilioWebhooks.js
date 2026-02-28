@@ -50,10 +50,6 @@ class TwilioWebhooks {
       const shouldOfferOptOut = String(enableOptOut ?? 'true').toLowerCase() !== 'false';
 
       const response = new VoiceResponse();
-      response.say(
-        { voice: 'alice', language: 'en-GB' },
-        disclaimer || 'This is an automated call'
-      );
 
       if (audioUrl && audioUrl !== 'null' && isPublicMediaUrl(audioUrl)) {
         response.play(audioUrl);
@@ -73,6 +69,11 @@ class TwilioWebhooks {
       } else {
         response.say({ voice: 'alice', language: 'en-GB' }, 'Invalid broadcast configuration');
       }
+
+      response.say(
+        { voice: 'alice', language: 'en-GB' },
+        disclaimer || 'This is an automated call'
+      );
 
       if (shouldOfferOptOut) {
         // Gather only after the message/audio is played so playback is not interrupted.
@@ -161,11 +162,29 @@ class TwilioWebhooks {
         canceled: 'cancelled'
       };
 
-      call.status = statusMap[CallStatus] || CallStatus;
+      const mappedStatus = statusMap[CallStatus] || CallStatus;
+      const retryableStatuses = new Set(['busy', 'no-answer', 'failed', 'canceled']);
 
-      if (CallStatus === 'completed') {
-        call.duration = parseInt(CallDuration, 10) || 0;
-        call.endTime = new Date();
+      const broadcast = await Broadcast.findById(call.broadcast);
+      const maxAttempts = Math.max(1, Number(broadcast?.config?.maxRetries) || 2);
+      const retryDelayMs = Math.max(0, Number(broadcast?.config?.retryDelay) || 30000);
+
+      if (retryableStatuses.has(CallStatus)) {
+        await call.markFailed(
+          ErrorCode || null,
+          ErrorMessage || `Call ended with status: ${CallStatus}`,
+          true,
+          { maxAttempts, retryDelayMs }
+        );
+      } else {
+        call.status = mappedStatus;
+
+        if (CallStatus === 'completed') {
+          call.duration = parseInt(CallDuration, 10) || 0;
+          call.endTime = new Date();
+        }
+
+        await call.save();
       }
 
       if (AnsweredBy) {
@@ -183,17 +202,19 @@ class TwilioWebhooks {
         };
       }
 
-      await call.save();
+      if (AnsweredBy || ErrorCode || ErrorMessage) {
+        await call.save();
+      }
 
       emitCallUpdate(call.broadcast.toString(), {
         callId: call._id,
         callSid: CallSid,
         phone: call.contact.phone,
         status: call.status,
+        attempts: call.attempts,
         duration: call.duration || 0
       });
 
-      const broadcast = await Broadcast.findById(call.broadcast);
       if (broadcast) {
         await this.updateBroadcastStats(broadcast);
       }

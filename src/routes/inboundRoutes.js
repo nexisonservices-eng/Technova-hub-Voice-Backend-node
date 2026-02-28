@@ -148,6 +148,31 @@ router.post('/routing/rules', async (req, res) => {
       if (!payload.action) {
         payload.action = `ivr:${payload.ivrPromptKey}`;
       }
+
+      let linkedWorkflow = null;
+      if (payload.ivrMenuId && mongoose.Types.ObjectId.isValid(payload.ivrMenuId)) {
+        linkedWorkflow = await Workflow.findOne({
+          _id: payload.ivrMenuId,
+          isActive: true,
+          createdBy: userId
+        }).select('_id promptKey');
+      }
+      if (!linkedWorkflow) {
+        linkedWorkflow = await Workflow.findOne({
+          promptKey: payload.ivrPromptKey,
+          isActive: true,
+          createdBy: userId
+        }).select('_id promptKey');
+      }
+
+      if (!linkedWorkflow) {
+        return res.status(400).json({ success: false, error: 'Linked IVR workflow not found or inactive' });
+      }
+
+      // Normalize persisted identifiers to avoid stale menu links.
+      payload.ivrMenuId = String(linkedWorkflow._id);
+      payload.ivrPromptKey = String(linkedWorkflow.promptKey || payload.ivrPromptKey || '').trim();
+      payload.action = `ivr:${payload.ivrPromptKey}`;
     } else if (!payload.action) {
       return res.status(400).json({ success: false, error: 'action is required for custom actions' });
     }

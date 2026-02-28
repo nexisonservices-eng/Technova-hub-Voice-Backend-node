@@ -126,7 +126,8 @@ broadcastCallSchema.methods.markCompleted = async function (duration) {
 broadcastCallSchema.methods.markFailed = async function (
   errorCode,
   errorMsg,
-  shouldRetry = true
+  shouldRetry = true,
+  retryConfig = {}
 ) {
   this.status = 'failed';
   this.endTime = new Date();
@@ -136,13 +137,15 @@ broadcastCallSchema.methods.markFailed = async function (
   };
 
   // Schedule retry if eligible
-  if (shouldRetry && this.attempts < 2) {
-    const Broadcast = mongoose.model('Broadcast');
-    const broadcast = await Broadcast.findById(this.broadcast);
+  const maxAttempts = Number.isFinite(Number(retryConfig.maxAttempts))
+    ? Number(retryConfig.maxAttempts)
+    : 2;
+  const retryDelayMs = Number.isFinite(Number(retryConfig.retryDelayMs))
+    ? Number(retryConfig.retryDelayMs)
+    : 300000;
 
-    this.retryAfter = new Date(
-      Date.now() + (broadcast?.config?.retryDelay || 300000)
-    );
+  if (shouldRetry && this.attempts < maxAttempts) {
+    this.retryAfter = new Date(Date.now() + retryDelayMs);
     this.status = 'queued';
   }
 
@@ -157,13 +160,13 @@ broadcastCallSchema.methods.markOptedOut = async function () {
 };
 
 // Static methods
-broadcastCallSchema.statics.getRetryableCalls = async function (broadcastId) {
+broadcastCallSchema.statics.getRetryableCalls = async function (broadcastId, maxAttempts = 2, limit = 50) {
   return this.find({
     broadcast: broadcastId,
     status: 'queued',
-    attempts: { $lt: 2 },
+    attempts: { $lt: Math.max(1, Number(maxAttempts) || 2) },
     retryAfter: { $lte: new Date() }
-  }).limit(50);
+  }).limit(Math.max(1, Number(limit) || 50));
 };
 
 const BroadcastCall = mongoose.model('BroadcastCall', broadcastCallSchema);

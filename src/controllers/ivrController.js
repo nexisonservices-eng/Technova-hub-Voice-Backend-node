@@ -113,7 +113,7 @@ class IVRController {
         return this.send(res, TwiMLHelper.createErrorResponse());
       }
 
-      const nextNodeId = await ivrWorkflowEngine.handleUserInput(workflowId, currentNodeId, Digits);
+      const nextNodeId = await ivrWorkflowEngine.handleUserInput(workflowId, currentNodeId, Digits, CallSid);
 
       if (!nextNodeId) {
         logger.warn(`No matching path for input ${Digits} at node ${currentNodeId}`);
@@ -134,7 +134,7 @@ class IVRController {
    * Handles transitions between non-blocking nodes
    */
   async nextStep(req, res) {
-    const { CallSid, workflowId, currentNodeId, status } = { ...req.body, ...req.query };
+    const { CallSid, workflowId, currentNodeId, status, fallbackNodeId } = { ...req.body, ...req.query };
 
     try {
       if (status) {
@@ -143,6 +143,15 @@ class IVRController {
           const twiml = await ivrWorkflowEngine.generateTwiML(workflowId, nextNodeId, null, CallSid);
           return this.send(res, twiml);
         }
+        if (fallbackNodeId) {
+          const twiml = await ivrWorkflowEngine.generateTwiML(workflowId, fallbackNodeId, null, CallSid);
+          return this.send(res, twiml);
+        }
+
+        const response = new VoiceResponse();
+        response.say('Thank you for your message. Goodbye.');
+        response.hangup();
+        return this.send(res, response.toString());
       }
 
       const twiml = await ivrWorkflowEngine.generateTwiML(workflowId, currentNodeId, null, CallSid);
