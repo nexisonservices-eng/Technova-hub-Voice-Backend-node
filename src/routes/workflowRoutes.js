@@ -9,7 +9,6 @@ import { body, validationResult } from 'express-validator';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
 import IVRExecutionEngine from '../services/ivrExecutionEngine.js';
-import { IndustryNodeHandlers } from '../services/industryNodeHandlers.js';
 import workflowNodeService from '../services/workflowNodeService.js';
 import { NODE_TYPES, NODE_CONFIGS } from '../config/workflowNodeConfig.js';
 import { authenticate } from '../middleware/auth.js';
@@ -1016,134 +1015,6 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
 });
 
 /**
- * POST /ivr/hotel/booking
- * Handle hotel booking requests
- */
-router.post('/hotel/booking', async (req, res) => {
-  try {
-    const { SpeechResult, CallSid } = req.body;
-
-    // Parse booking information from speech
-    const bookingInfo = await _parseBookingInfo(SpeechResult);
-
-    // In production, integrate with hotel booking system
-    logger.info(`Hotel booking request for call ${CallSid}:`, bookingInfo);
-
-    const response = new VoiceResponse();
-    response.say({ voice: 'alice' }, `I understand you want to book ${bookingInfo.guests} guests from ${bookingInfo.checkIn} to ${bookingInfo.checkOut}. Is this correct?`);
-
-    response.gather({
-      input: 'speech',
-      timeout: 5,
-      action: '/ivr/hotel/confirm_booking',
-      method: 'POST'
-    });
-
-    res.type('text/xml');
-    res.send(response.toString());
-  } catch (error) {
-    logger.error('Hotel booking error:', error);
-    res.type('text/xml');
-    res.send(_createErrorResponse());
-  }
-});
-
-/**
- * POST /ivr/insurance/claims
- * Handle insurance claims
- */
-router.post('/insurance/claims', async (req, res) => {
-  try {
-    const { SpeechResult, CallSid } = req.body;
-
-    // Process claim information
-    const claimInfo = await _parseClaimInfo(SpeechResult);
-
-    logger.info(`Insurance claim for call ${CallSid}:`, claimInfo);
-
-    const response = new VoiceResponse();
-    response.say({ voice: 'alice' }, 'Thank you for providing your claim information. Our claims department will review it and contact you within 24 hours. Is there anything else I can help you with?');
-
-    response.gather({
-      input: 'speech',
-      timeout: 5,
-      action: '/ivr/main_menu',
-      method: 'POST'
-    });
-
-    res.type('text/xml');
-    res.send(response.toString());
-  } catch (error) {
-    logger.error('Insurance claims error:', error);
-    res.type('text/xml');
-    res.send(_createErrorResponse());
-  }
-});
-
-/**
- * POST /ivr/healthcare/appointment
- * Handle healthcare appointments
- */
-router.post('/healthcare/appointment', async (req, res) => {
-  try {
-    const { SpeechResult, CallSid } = req.body;
-
-    const appointmentInfo = await _parseAppointmentInfo(SpeechResult);
-
-    logger.info(`Healthcare appointment for call ${CallSid}:`, appointmentInfo);
-
-    const response = new VoiceResponse();
-    response.say({ voice: 'alice' }, `I have your appointment request for ${appointmentInfo.dateTime} in the ${appointmentInfo.department} department. We will send a confirmation SMS. Is there anything else you need?`);
-
-    response.gather({
-      input: 'speech',
-      timeout: 5,
-      action: '/ivr/main_menu',
-      method: 'POST'
-    });
-
-    res.type('text/xml');
-    res.send(response.toString());
-  } catch (error) {
-    logger.error('Healthcare appointment error:', error);
-    res.type('text/xml');
-    res.send(_createErrorResponse());
-  }
-});
-
-/**
- * POST /ivr/retail/product_lookup
- * Handle retail product inquiries
- */
-router.post('/retail/product_lookup', async (req, res) => {
-  try {
-    const { SpeechResult, CallSid } = req.body;
-
-    const productInfo = await _parseProductInfo(SpeechResult);
-
-    logger.info(`Retail product inquiry for call ${CallSid}:`, productInfo);
-
-    // In production, integrate with product catalog
-    const response = new VoiceResponse();
-    response.say({ voice: 'alice' }, `${productInfo.product} is currently ${productInfo.availability}. The price is ${productInfo.price}. Would you like to place an order?`);
-
-    response.gather({
-      input: 'speech',
-      timeout: 5,
-      action: '/ivr/retail/order',
-      method: 'POST'
-    });
-
-    res.type('text/xml');
-    res.send(response.toString());
-  } catch (error) {
-    logger.error('Retail product lookup error:', error);
-    res.type('text/xml');
-    res.send(_createErrorResponse());
-  }
-});
-
-/**
  * POST /ivr/ai/assistant
  * Handle AI assistant interactions
  */
@@ -1184,8 +1055,7 @@ router.get('/workflows/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     services: {
-      executionEngine: 'active',
-      industryHandlers: Object.keys(IndustryNodeHandlers).length
+      executionEngine: 'active'
     }
   });
 });
@@ -1204,38 +1074,6 @@ function _createErrorResponse() {
   response.say({ voice: 'alice' }, 'We apologize, but our service is temporarily unavailable. Please try again later.');
   response.hangup();
   return response.toString();
-}
-
-async function _parseBookingInfo(speech) {
-  // Simple parsing - in production, use NLP service
-  return {
-    checkIn: 'tomorrow',
-    checkOut: 'in 3 days',
-    guests: 2
-  };
-}
-
-async function _parseClaimInfo(speech) {
-  return {
-    policyNumber: 'POL123456',
-    claimType: 'auto',
-    description: speech
-  };
-}
-
-async function _parseAppointmentInfo(speech) {
-  return {
-    department: 'general',
-    dateTime: 'tomorrow at 10 AM'
-  };
-}
-
-async function _parseProductInfo(speech) {
-  return {
-    product: 'iPhone 15',
-    availability: 'in stock',
-    price: '$999'
-  };
 }
 
 async function _getAIResponse(input) {

@@ -281,6 +281,12 @@ class IVRWorkflowEngine extends EventEmitter {
      */
     async startExecution(workflowId, callSid, callerNumber, destinationNumber, userId = null) {
         try {
+            const existingState = this.activeExecutions.get(callSid);
+            if (existingState && String(existingState.workflowId) === String(workflowId)) {
+                logger.info(`Reusing active execution for call ${callSid} and workflow ${workflowId}`);
+                return await ExecutionLog.findById(existingState.executionLogId);
+            }
+
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) throw new Error('Workflow not found');
 
@@ -1707,22 +1713,6 @@ class IVRWorkflowEngine extends EventEmitter {
         return errors;
     }
 
-    /**
-     * Process industry-specific service request
-     */
-    async processIndustryService(industry, serviceType, requestData, callSid) {
-        logger.info(`Processing ${industry} ${serviceType} request for call ${callSid}`);
-
-        // Simulate industry processing
-        return {
-            success: true,
-            message: `${serviceType} processed successfully for ${industry}`,
-            data: {
-                reference: `REF-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
-                timestamp: new Date()
-            }
-        };
-    }
 }
 
 export default new IVRWorkflowEngine();

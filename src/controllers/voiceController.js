@@ -87,11 +87,12 @@ class CallController {
         })
           .sort({ createdAt: -1 })
           .limit(100)
-          .select('callSid status contact startTime createdAt duration')
+          .select('_id callSid status contact startTime createdAt duration')
           .lean()
       ]);
 
       const normalizedBroadcastCalls = activeBroadcastCalls.map((call) => ({
+        callId: String(call._id),
         callSid: call.callSid || null,
         call_sid: call.callSid || null,
         status: call.status === 'in_progress' ? 'in-progress' : call.status,
@@ -107,7 +108,13 @@ class CallController {
       const normalizedVoiceCalls = activeVoiceCalls.map((call) => ({
         ...call,
         connected: call.status === 'in-progress',
-        source: call.direction === 'outbound' ? 'outbound' : 'inbound'
+        source: call.direction === 'outbound'
+          ? 'outbound'
+          : call.direction === 'outbound-local'
+            ? 'outbound_quick_call'
+            : call.routing && call.routing !== 'default'
+              ? 'ivr'
+              : 'inbound'
       }));
 
       const activeCalls = [...normalizedVoiceCalls, ...normalizedBroadcastCalls]
@@ -181,3 +188,4 @@ class CallController {
 }
 
 export default new CallController();
+

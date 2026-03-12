@@ -269,18 +269,24 @@ class AnalyticsController {
         $addFields: {
           computedCallType: {
             $cond: [
-              { $eq: ['$direction', 'outbound'] },
-              'outbound',
+              { $eq: ['$direction', 'outbound-local'] },
+              'outbound_quickcalls',
               {
                 $cond: [
+                  { $eq: ['$direction', 'outbound'] },
+                  'outbound',
                   {
-                    $and: [
-                      { $eq: ['$direction', 'inbound'] },
-                      { $ne: [{ $ifNull: ['$routing', 'default'] }, 'default'] }
+                    $cond: [
+                      {
+                        $and: [
+                          { $eq: ['$direction', 'inbound'] },
+                          { $ne: [{ $ifNull: ['$routing', 'default'] }, 'default'] }
+                        ]
+                      },
+                      'ivr',
+                      'inbound'
                     ]
-                  },
-                  'ivr',
-                  'inbound'
+                  }
                 ]
               }
             ]
@@ -290,7 +296,11 @@ class AnalyticsController {
     ];
 
     if (callType && callType !== 'all') {
-      pipeline.push({ $match: { computedCallType: callType } });
+      if (callType === 'outbound') {
+        pipeline.push({ $match: { computedCallType: { $in: ['outbound', 'outbound_quickcalls'] } } });
+      } else {
+        pipeline.push({ $match: { computedCallType: callType } });
+      }
     }
 
     pipeline.push(
@@ -305,7 +315,38 @@ class AnalyticsController {
             $sum: { $cond: [{ $eq: ['$computedCallType', 'ivr'] }, 1, 0] }
           },
           outboundCalls: {
-            $sum: { $cond: [{ $eq: ['$computedCallType', 'outbound'] }, 1, 0] }
+            $sum: { $cond: [{ $in: ['$computedCallType', ['outbound', 'outbound_quickcalls']] }, 1, 0] }
+          },
+          outboundCompletedCalls: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $in: ['$computedCallType', ['outbound', 'outbound_quickcalls']] },
+                    { $eq: ['$status', 'completed'] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          outboundFailedCalls: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $in: ['$computedCallType', ['outbound', 'outbound_quickcalls']] },
+                    { $eq: ['$status', 'failed'] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          quickCalls: {
+            $sum: { $cond: [{ $eq: ['$computedCallType', 'outbound_quickcalls'] }, 1, 0] }
           },
           completedCalls: {
             $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
@@ -355,6 +396,9 @@ class AnalyticsController {
         inboundCalls: 0,
         ivrCalls: 0,
         outboundCalls: 0,
+        outboundCompletedCalls: 0,
+        outboundFailedCalls: 0,
+        quickCalls: 0,
         completedCalls: 0,
         failedCalls: 0,
         missedCalls: 0,
@@ -797,6 +841,7 @@ class AnalyticsController {
 
   resolveCallType(call) {
     if (!call) return 'inbound';
+    if (call.direction === 'outbound-local') return 'outbound_quickcalls';
     if (call.direction === 'outbound') return 'outbound';
     if (call.routing && call.routing !== 'default') return 'ivr';
     return 'inbound';
@@ -1005,3 +1050,4 @@ class AnalyticsController {
 }
 
 export default new AnalyticsController();
+

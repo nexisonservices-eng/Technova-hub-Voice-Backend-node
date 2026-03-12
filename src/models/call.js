@@ -18,7 +18,7 @@ const callSchema = new mongoose.Schema(
     },
     direction: {
       type: String,
-      enum: ['inbound', 'outbound'],
+      enum: ['inbound', 'outbound', 'outbound-local'],
       required: true
     },
     status: {
@@ -76,8 +76,24 @@ const callSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['twilio'],
+      enum: ['twilio', 'exotel'],
       required: true
+    },
+    exotelCallSid: {
+      type: String,
+      default: ''
+    },
+    retryAttempt: {
+      type: Number,
+      default: 0
+    },
+    maxRetryAttempts: {
+      type: Number,
+      default: 3
+    },
+    nextRetryAt: {
+      type: Date,
+      default: null
     },
     providerData: mongoose.Schema.Types.Mixed,
     error: {
@@ -180,3 +196,4 @@ callSchema.methods.updateAIMetrics = async function (metrics) {
 
 const Call = mongoose.model('Call', callSchema);
 export default Call;
+

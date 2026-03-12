@@ -27,7 +27,6 @@ router.post('/welcome', (req, res) => ivrController.welcome(req, res));
 router.post('/select-language', (req, res) => ivrController.selectLanguage(req, res));
 router.post('/handle-input', (req, res) => ivrController.handleInput(req, res));
 router.post('/next-step', (req, res) => ivrController.nextStep(req, res));
-router.post('/process-service', (req, res) => ivrController.processService(req, res));
 router.post('/call-status', (req, res) => ivrController.handleCallStatus(req, res));
 
 /**

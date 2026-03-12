@@ -92,7 +92,7 @@ const callLogFilterSchema = {
     direction: {
         type: 'string',
         required: false,
-        enum: ['inbound', 'outbound'],
+        enum: ['inbound', 'outbound', 'outbound-local'],
         message: 'Direction must be inbound or outbound'
     },
     phoneNumber: {
@@ -190,11 +190,14 @@ function validateField(value, fieldSchema, fieldName) {
             });
         }
     } else if (actualType !== fieldSchema.type) {
-        errors.push({
-            field: fieldName,
-            message: `${fieldName} must be of type ${fieldSchema.type}`
-        });
-        return errors;
+        // Query params arrive as strings; allow numeric strings for number fields.
+        if (!(fieldSchema.type === 'number' && actualType === 'string' && value !== '' && !isNaN(Number(value)))) {
+            errors.push({
+                field: fieldName,
+                message: `${fieldName} must be of type ${fieldSchema.type}`
+            });
+            return errors;
+        }
     }
 
     // String validations
@@ -391,3 +394,4 @@ export default {
     validatePhoneNumber,
     validateSchema
 };
+

@@ -16,7 +16,6 @@ class IVRController {
     this.selectLanguage = this.selectLanguage.bind(this);
     this.handleInput = this.handleInput.bind(this);
     this.nextStep = this.nextStep.bind(this);
-    this.processService = this.processService.bind(this);
   }
 
   /* =========================
@@ -158,49 +157,6 @@ class IVRController {
       this.send(res, twiml);
     } catch (err) {
       logger.error("Next step error:", err);
-      this.send(res, TwiMLHelper.createErrorResponse());
-    }
-  }
-
-  /**
-   * Handles industry-specific service execution
-   */
-  async processService(req, res) {
-    const { CallSid, workflowId, nodeId } = { ...req.body, ...req.query };
-    const tenantUserId = req.tenantContext?.adminId || null;
-
-    try {
-      const workflow = await Workflow.findOne({
-        _id: workflowId,
-        ...(tenantUserId ? { createdBy: tenantUserId } : {})
-      });
-      if (!workflow) {
-        return this.send(res, TwiMLHelper.createErrorResponse());
-      }
-      const node = workflow.nodes.find(n => n.id === nodeId);
-
-      const result = await ivrWorkflowEngine.processIndustryService(
-        node.industry || 'custom',
-        node.type,
-        node.data,
-        CallSid
-      );
-
-      const response = new VoiceResponse();
-      const voice = workflow.config?.voice || 'alice';
-      const language = workflow.config?.language || 'en-US';
-
-      if (result.success) {
-        response.say({ voice, language }, `Your request has been processed. Reference number is ${result.data.reference.split('').join(' ')}`);
-        ivrWorkflowEngine.appendNextStep(response, workflow, nodeId);
-      } else {
-        response.say({ voice, language }, "We were unable to process your request at this time.");
-        ivrWorkflowEngine.appendNextStep(response, workflow, nodeId, 'error');
-      }
-
-      this.send(res, response.toString());
-    } catch (err) {
-      logger.error("Process service error:", err);
       this.send(res, TwiMLHelper.createErrorResponse());
     }
   }

@@ -114,6 +114,73 @@ const broadcastSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true
+    },
+
+    outboundCampaigns: [
+      {
+        campaignId: {
+          type: String,
+          trim: true
+        },
+        name: {
+          type: String,
+          trim: true
+        },
+        provider: {
+          type: String,
+          enum: ['exotel'],
+          default: 'exotel'
+        },
+        total: {
+          type: Number,
+          default: 0
+        },
+        initiated: {
+          type: Number,
+          default: 0
+        },
+        failed: {
+          type: Number,
+          default: 0
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now
+        }
+      }
+    ],
+
+    scheduleConfig: {
+      enabled: { type: Boolean, default: false },
+      cronExpression: { type: String, trim: true, default: '' },
+      recurrence: {
+        type: String,
+        enum: ['once', 'daily', 'weekly'],
+        default: 'once'
+      },
+      timezone: { type: String, default: 'Asia/Kolkata' },
+      lastScheduledAt: Date
+    },
+
+    retryConfig: {
+      enabled: { type: Boolean, default: true },
+      maxRetries: { type: Number, default: 3 },
+      retryGapHours: { type: Number, default: 2 },
+      lastRetryRunAt: Date
+    },
+
+    abTestConfig: {
+      enabled: { type: Boolean, default: false },
+      autoWinner: { type: Boolean, default: true },
+      winnerTemplate: { type: String, trim: true, default: '' },
+      groups: [
+        {
+          key: { type: String, trim: true },
+          template: { type: String, trim: true },
+          initiated: { type: Number, default: 0 },
+          failed: { type: Number, default: 0 }
+        }
+      ]
     }
   },
   {

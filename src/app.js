@@ -11,11 +11,13 @@ import IVRRoutes from "./routes/ivrRoutes.js";
 import workflowRoutes from "./routes/workflowRoutes.js";
 import twilioWebhookRoutes from './routes/twilioWebhookRoutes.js';
 import legacyWebhookRoutes from './routes/legacyWebhookRoutes.js';
+import exotelWebhookRoutes from './routes/exotelWebhookRoutes.js';
 import CallLogRoutes from "./routes/callLogRoutes.js";
 import OutboundConfigRoutes from "./routes/outboundConfigRoutes.js";
 import LeadRoutes from "./routes/leadRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
 import callDetailsRoutes from "./routes/callDetailsRoutes.js";
+import voiceOutboundRoutes from "./routes/voiceOutboundRoutes.js";
 
 
 import path from 'path';
@@ -38,6 +40,7 @@ app.use('/webhook/broadcast', BroadcastRoutes); // Add webhook prefix for Twilio
 app.use('/ai', AIRoutes);
 app.use('/health', OptimizedHealthRoutes);
 app.use('/webhook', InboundRoutes); // Inbound call webhooks
+app.use('/webhook', exotelWebhookRoutes); // Exotel outbound local call flow webhooks
 app.use('/inbound', InboundRoutes); // Management endpoints
 app.use('/api/ivr', IVRRoutes); // IVR management endpoints
 app.use('/ivr', IVRRoutes); // TwiML callback compatibility routes
@@ -51,6 +54,7 @@ app.use('/api/outbound-config', OutboundConfigRoutes); // Outbound configuration
 app.use('/api/leads', LeadRoutes); // Lead management (semi-automated bookings)
 app.use('/api/analytics', analyticsRoutes); // Analytics endpoints
 app.use('/api/calls', callDetailsRoutes); // Call details endpoints
+app.use('/api/voice', voiceOutboundRoutes); // Exotel outbound local endpoints
 
 // Health check
 app.get('/', (req, res) => {
@@ -63,3 +67,4 @@ app.get('/', (req, res) => {
 });
 
 export default app;
+

@@ -199,7 +199,6 @@ class IVRExecutionEngine {
         case 'ai_assistant':
           return await this._handleAiAssistant(response, node, context, workflowConfig);
 
-        // Industry Service Nodes (delegated)
         case 'audio':
           return await this._handleAudio(response, node, workflowConfig, context);
         default:
@@ -627,7 +626,7 @@ class IVRExecutionEngine {
 
       // Success Path
       this._appendNextStep(response, node.id, config.edges, config._id, 'success');
-
+    
     } catch (error) {
       logger.error('API Call Failed:', error.message);
       // Error Path
@@ -722,14 +721,6 @@ class IVRExecutionEngine {
       this._appendNextStep(response, node.id, config.edges, config._id);
     }
 
-    return response.toString();
-  }
-
-  async _handleIndustryService(response, node, config) {
-    const { edges } = config;
-    // Generic redirect to the controller's service processor
-    response.say('Processing service request...');
-    response.redirect(`/ivr/process-service?workflowId=${config._id}&nodeId=${node.id}`);
     return response.toString();
   }
 

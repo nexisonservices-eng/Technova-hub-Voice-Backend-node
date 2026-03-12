@@ -18,6 +18,7 @@ import Workflow from '../models/Workflow.js';
 import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
+import outboundCampaignService from '../services/outboundCampaignService.js';
 
 const router = express.Router();
 
@@ -316,6 +317,11 @@ router.post('/status', async (req, res) => {
         });
       }
     }
+
+    const mappedStatus = String(CallStatus || '').toLowerCase() === 'answered'
+      ? 'answered'
+      : String(CallStatus || '').toLowerCase();
+    await outboundCampaignService.syncCallUpdate(CallSid, mappedStatus);
     
     res.sendStatus(200);
   } catch (error) {

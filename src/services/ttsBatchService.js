@@ -1,8 +1,6 @@
 import axios from 'axios';
 import { uploadToCloudinary, isCloudinaryConfigured } from "../../src/utils/cloudinaryUtils.js";
 import logger from '../utils/logger.js';
-import fs from 'fs';
-import path from 'path';
 
 class TTSBatchService {
   constructor() {
@@ -80,23 +78,14 @@ class TTSBatchService {
         voiceConfig.provider
       )}`;
 
-      let uploadResult;
-
-      // Try Cloudinary first, fallback to local storage
-      if (isCloudinaryConfigured()) {
-        try {
-          uploadResult = await uploadToCloudinary(audioBuffer, fileName, {
-            format: this._getAudioFormat(voiceConfig.provider)
-          });
-          logger.info(`Audio uploaded to Cloudinary: ${fileName}`);
-        } catch (cloudinaryError) {
-          logger.warn(`Cloudinary upload failed, using local storage: ${cloudinaryError.message}`);
-          uploadResult = await this._saveLocal(audioBuffer, fileName);
-        }
-      } else {
-        logger.info(`Cloudinary not configured, using local storage for: ${fileName}`);
-        uploadResult = await this._saveLocal(audioBuffer, fileName);
+      if (!isCloudinaryConfigured()) {
+        throw new Error('Cloudinary is required for TTS audio storage, but it is not configured.');
       }
+
+      const uploadResult = await uploadToCloudinary(audioBuffer, fileName, {
+        format: this._getAudioFormat(voiceConfig.provider)
+      });
+      logger.info(`Audio uploaded to Cloudinary: ${fileName}`);
 
       return {
         success: true,

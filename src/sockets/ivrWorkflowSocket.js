@@ -195,39 +195,6 @@ export function setupIVRWorkflowHandlers(io) {
       }
     });
 
-    // Industry-specific service requests
-    socket.on('industry_service_request', async (data) => {
-      const { industry, serviceType, requestData, callSid } = data;
-
-      try {
-        const serviceResponse = await IVRWorkflowEngine.processIndustryService(
-          industry, serviceType, requestData, callSid
-        );
-
-        socket.emit('industry_service_response', {
-          industry,
-          serviceType,
-          response: serviceResponse,
-          callSid,
-          timestamp: new Date()
-        });
-
-        io.emit('industry_service_processed', {
-          industry,
-          serviceType,
-          callSid,
-          success: serviceResponse.success,
-          timestamp: new Date()
-        });
-
-      } catch (error) {
-        socket.emit('industry_service_error', {
-          error: error.message,
-          industry,
-          serviceType
-        });
-      }
-    });
   });
 }
 

@@ -574,6 +574,61 @@ export function emitStatsUpdate(stats) {
   io.emit('stats_update', stats);
 }
 
+export function emitOutboundMetrics(userId, metrics) {
+  if (!io) return;
+  const payload = {
+    timestamp: new Date(),
+    ...metrics
+  };
+
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('outbound_metrics', payload);
+    return;
+  }
+
+  io.emit('outbound_metrics', payload);
+}
+
+export function emitCampaignUpdate(userId, payload) {
+  if (!io) return;
+  const eventPayload = { timestamp: new Date(), ...payload };
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('campaign_update', eventPayload);
+    return;
+  }
+  io.emit('campaign_update', eventPayload);
+}
+
+export function emitRetryStats(userId, payload) {
+  if (!io) return;
+  const eventPayload = { timestamp: new Date(), ...payload };
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('retry_stats', eventPayload);
+    return;
+  }
+  io.emit('retry_stats', eventPayload);
+}
+
+export function emitAbTestResults(userId, payload) {
+  if (!io) return;
+  const eventPayload = { timestamp: new Date(), ...payload };
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('abtest_results', eventPayload);
+    return;
+  }
+  io.emit('abtest_results', eventPayload);
+}
+
+export function emitOutboundTemplateUpdate(userId, payload) {
+  if (!io) return;
+  const eventPayload = { timestamp: new Date(), ...payload };
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('outbound_template_update', eventPayload);
+    return;
+  }
+  io.emit('outbound_template_update', eventPayload);
+}
+
 export function emitHealthUpdate(health) {
   if (!io) return;
   io.emit('health_update', health);

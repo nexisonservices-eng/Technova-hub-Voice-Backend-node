@@ -3,6 +3,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import app from "./src/app.js";
 import { initializeSocketIO, shutdownSocketIO } from './src/sockets/unifiedSocket.js';
+import campaignAutomationService from './src/services/campaignAutomationService.js';
 
 import { connectDB } from "./src/config/db.js";
 import logger from "./src/utils/logger.js";
@@ -13,7 +14,9 @@ logger.info(' Starting Technovo Voice Backend...');
 // 1. Connect to MongoDB
 logger.info('📡 Connecting to MongoDB...');
 await connectDB();
-logger.info('✅ MongoDB connected');
+logger.info('MongoDB connected');
+const restoredSchedules = await campaignAutomationService.initializeScheduledTasks();
+logger.info(`Restored ${restoredSchedules} active campaign schedule(s)`);
 
 // 2. Initialize Twilio (lazy initialization - will log when first used)
 logger.info('📞 Initializing Twilio Service...');
@@ -87,3 +90,4 @@ server.listen(process.env.PORT || 5000, () => {
     throw err;
   }
 });
+

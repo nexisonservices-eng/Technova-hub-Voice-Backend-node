@@ -8,7 +8,6 @@ import { body, validationResult } from 'express-validator';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
 import IVRExecutionEngine from '../services/ivrExecutionEngine.js';
-import { IndustryNodeHandlers } from '../services/industryNodeHandlers.js';
 import workflowNodeService from '../services/workflowNodeService.js';
 import { NODE_TYPES, NODE_CONFIGS } from '../config/workflowNodeConfig.js';
 import { authenticate } from '../middleware/auth.js';
@@ -37,7 +36,6 @@ router.post('/welcome', verifyTwilioRequest, (req, res) => ivrController.welcome
 router.post('/select-language', verifyTwilioRequest, (req, res) => ivrController.selectLanguage(req, res));
 router.post('/handle-input', verifyTwilioRequest, (req, res) => ivrController.handleInput(req, res));
 router.post('/next-step', verifyTwilioRequest, (req, res) => ivrController.nextStep(req, res));
-router.post('/process-service', verifyTwilioRequest, (req, res) => ivrController.processService(req, res));
 router.post('/call-status', verifyTwilioRequest, (req, res) => ivrController.handleCallStatus(req, res));
 
 // Multer configuration for audio uploads

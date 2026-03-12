@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -39,8 +39,8 @@ class PythonTTSService {
 
     // Voice to language mapping
     this.VOICE_LANGUAGE = {
-      "English (GB) â€“ Female": "en-GB",
-      "English (US) â€“ Female": "en-GB",
+      "English (GB) – Female": "en-GB",
+      "English (US) – Female": "en-GB",
       "en-GB-SoniaNeural": "en-GB",
       "en-GB-RyanNeural": "en-GB",
       "en-GB-LibbyNeural": "en-GB",
@@ -62,16 +62,16 @@ class PythonTTSService {
   async getAvailableVoices(language = null) {
     try {
       const response = await axios.get(`${this.pythonServiceUrl}/tts/voices`);
-      logger.info('ðŸ” Available voices from Python service:', response.data);
+      logger.info('🔍 Available voices from Python service:', response.data);
       
       // Extract voices array from response (Python returns {voices: [...], count: N})
       const voices = response.data?.voices || response.data || [];
       
-      logger.info(`ðŸ” Extracted voices type: ${typeof voices}, isArray: ${Array.isArray(voices)}, length: ${voices?.length || 'N/A'}`);
-      logger.info(`ðŸ” Full voices object:`, JSON.stringify(voices, null, 2));
+      logger.info(`🔍 Extracted voices type: ${typeof voices}, isArray: ${Array.isArray(voices)}, length: ${voices?.length || 'N/A'}`);
+      logger.info(`🔍 Full voices object:`, JSON.stringify(voices, null, 2));
       
       if (!Array.isArray(voices)) {
-        logger.error('âŒ Invalid voices response from Python service:', response.data);
+        logger.error('❌ Invalid voices response from Python service:', response.data);
         return this.allowedVoices; // Use allowed voices as fallback
       }
       
@@ -89,7 +89,7 @@ class PythonTTSService {
         return locale.startsWith(language) || shortName.startsWith(language);
       });
     } catch (error) {
-      logger.error('âŒ Failed to get available voices:', error.message);
+      logger.error('❌ Failed to get available voices:', error.message);
       return this.allowedVoices;
     }
   }
@@ -110,8 +110,8 @@ class PythonTTSService {
     // Extract the actual voices array from Python response
     const extractedVoices = availableVoices.voices || availableVoices;
     
-    logger.info(`ðŸ” Available voices type: ${typeof extractedVoices}, isArray: ${Array.isArray(extractedVoices)}, length: ${extractedVoices?.length || 'N/A'}`);
-    logger.info(`ðŸ” First few voices:`, JSON.stringify(extractedVoices.slice(0, 3), null, 2));
+    logger.info(`🔍 Available voices type: ${typeof extractedVoices}, isArray: ${Array.isArray(extractedVoices)}, length: ${extractedVoices?.length || 'N/A'}`);
+    logger.info(`🔍 First few voices:`, JSON.stringify(extractedVoices.slice(0, 3), null, 2));
     
     let voice =
       voiceOverride ||
@@ -120,7 +120,7 @@ class PythonTTSService {
 
     const payload = { text, voice, language };
     
-    logger.info(`ðŸŽ™ TTS Request Details:`, {
+    logger.info(`🎙 TTS Request Details:`, {
       text: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
       voice: voice,
       language: language,
@@ -135,7 +135,7 @@ class PythonTTSService {
       );
 
       const audioBuffer = Buffer.from(response.data || []);
-      logger.info(`âœ… TTS completed in ${Date.now() - startTime}ms (${audioBuffer.length} bytes)`);
+      logger.info(`✅ TTS completed in ${Date.now() - startTime}ms (${audioBuffer.length} bytes)`);
       if (!audioBuffer.length) {
         throw new Error(`TTS returned empty audio buffer for voice=${voice}, language=${language}`);
       }
@@ -143,7 +143,7 @@ class PythonTTSService {
     } catch (error) {
       // Retry once for timeout errors
       if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-        logger.warn(`âš ï¸ TTS timeout, retrying once for voice=${voice}, language=${language}`);
+        logger.warn(`⚠️ TTS timeout, retrying once for voice=${voice}, language=${language}`);
         try {
           const retryResponse = await axios.post(
             `${this.pythonServiceUrl}/tts/broadcast`,
@@ -152,17 +152,17 @@ class PythonTTSService {
           );
           
           const retryBuffer = Buffer.from(retryResponse.data || []);
-          logger.info(`âœ… TTS retry completed in ${Date.now() - startTime}ms (${retryBuffer.length} bytes)`);
+          logger.info(`✅ TTS retry completed in ${Date.now() - startTime}ms (${retryBuffer.length} bytes)`);
           if (!retryBuffer.length) {
             throw new Error(`TTS retry returned empty audio buffer for voice=${voice}, language=${language}`);
           }
           return retryBuffer;
         } catch (retryError) {
-          logger.error(`âŒ TTS retry failed for voice=${voice}, language=${language}:`, retryError.message);
+          logger.error(`❌ TTS retry failed for voice=${voice}, language=${language}:`, retryError.message);
           throw retryError;
         }
       } else {
-        logger.error(`âŒ TTS failed for voice=${voice}, language=${language}:`, {
+        logger.error(`❌ TTS failed for voice=${voice}, language=${language}:`, {
           message: error.message,
           status: error.response?.status,
           data: error.response?.data,
@@ -174,9 +174,9 @@ class PythonTTSService {
         if (error.response?.data) {
           try {
             const errorData = JSON.parse(error.response.data.toString());
-            logger.error('âŒ Parsed TTS error:', errorData);
+            logger.error('❌ Parsed TTS error:', errorData);
           } catch (e) {
-            logger.error('âŒ Raw TTS error response:', error.response.data.toString());
+            logger.error('❌ Raw TTS error response:', error.response.data.toString());
           }
         }
         
@@ -318,12 +318,12 @@ class PythonTTSService {
   }
 
   /**
-   * ðŸ”¥ MAIN FIXED METHOD
+   * 🔥 MAIN FIXED METHOD
    * Recursively generate audio for ALL IVR text
    */
   async populateWorkflowAudio(workflow, forceRegenerate = false, workflowId) {
     const workflowName = workflow.ivrName || workflow.name || workflow.promptKey || 'Unknown';
-    logger.info(`ðŸŽ™ Generating audio for IVR: ${workflowName}`);
+    logger.info(`🎙 Generating audio for IVR: ${workflowName}`);
 
     // Initialize workflow structure  
     workflow.nodes = workflow.nodes || [];
@@ -348,7 +348,7 @@ class PythonTTSService {
             item?.message?.trim() ||
             item?.text?.trim();
           logger.info(
-            `ðŸ”¤ End node text extraction: data.messageText="${item?.data?.messageText}", data.message="${item?.data?.message}", data.text="${item?.data?.text}", messageText="${item?.messageText}", message="${item?.message}", text="${item?.text}" -> "${text}"`
+            `🔤 End node text extraction: data.messageText="${item?.data?.messageText}", data.message="${item?.data?.message}", data.text="${item?.data?.text}", messageText="${item?.messageText}", message="${item?.message}", text="${item?.text}" -> "${text}"`
           );
         } else {
           text =
@@ -359,12 +359,12 @@ class PythonTTSService {
             item?.message?.trim() ||
             item?.text?.trim();
           logger.info(
-            `ðŸ”¤ ${type} node text extraction: data.messageText="${item?.data?.messageText}", data.message="${item?.data?.message}", data.text="${item?.data?.text}", messageText="${item?.messageText}", message="${item?.message}", text="${item?.text}" -> "${text}"`
+            `🔤 ${type} node text extraction: data.messageText="${item?.data?.messageText}", data.message="${item?.data?.message}", data.text="${item?.data?.text}", messageText="${item?.messageText}", message="${item?.message}", text="${item?.text}" -> "${text}"`
           );
         }
 
         if (!text) {
-          logger.warn(`âš ï¸ No text content found for node ${type} (${id}), skipping`);
+          logger.warn(`⚠️ No text content found for node ${type} (${id}), skipping`);
           return;
         }
 
@@ -374,7 +374,7 @@ class PythonTTSService {
           // Generate unique promptKey with timestamp
           promptKey = `${type}_${id}_${Date.now()}`;
           logger.warn(
-            `âš ï¸ Generated missing promptKey for node ${type} (${id}): ${promptKey}` 
+            `⚠️ Generated missing promptKey for node ${type} (${id}): ${promptKey}` 
           );
           
           // Update node data with generated promptKey
@@ -395,7 +395,7 @@ class PythonTTSService {
         // Language is already declared above
 
         // Log TTS payload for debugging
-        logger.info('ðŸŽ™ TTS payload:', {
+        logger.info('🎙 TTS payload:', {
           text: text,
           voice: voice,
           promptKey: promptKey,
@@ -407,13 +407,13 @@ class PythonTTSService {
         const requiredLanguage = this.VOICE_LANGUAGE[voice];
         
         if (!requiredLanguage) {
-          logger.error(`âŒ Unsupported voice: ${voice}. Falling back to en-GB-SoniaNeural`);
+          logger.error(`❌ Unsupported voice: ${voice}. Falling back to en-GB-SoniaNeural`);
           const fallbackVoice = 'en-GB-SoniaNeural';
           const fallbackLanguage = this.VOICE_LANGUAGE[fallbackVoice];
           if (fallbackLanguage) {
             voice = fallbackVoice;
             language = fallbackLanguage;
-            logger.info(`âœ… Using fallback voice: ${voice} with language: ${language}`);
+            logger.info(`✅ Using fallback voice: ${voice} with language: ${language}`);
           } else {
             throw new Error(`Both primary and fallback voices failed. Original: ${voice}`);
           }
@@ -421,17 +421,17 @@ class PythonTTSService {
         
         if (language !== requiredLanguage) {
           logger.warn(
-            `âš ï¸ Voice "${voice}" requires "${requiredLanguage}", overriding "${language}"` 
+            `⚠️ Voice "${voice}" requires "${requiredLanguage}", overriding "${language}"` 
           );
           language = requiredLanguage;
         }
 
         if (!forceRegenerate && (item.audioUrl || item?.data?.audioUrl)) {
-          logger.info(`ðŸŽµ Audio already exists for node ${type} (${id}), skipping`);
+          logger.info(`🎵 Audio already exists for node ${type} (${id}), skipping`);
           return;
         }
         
-        logger.info(`ðŸŽ™ Generating audio for node ${type} (${id}), promptKey: ${promptKey}`);
+        logger.info(`🎙 Generating audio for node ${type} (${id}), promptKey: ${promptKey}`);
         
         try {
           const audioBuffer = await this.generateSpeech(text, language, voice);
@@ -439,7 +439,7 @@ class PythonTTSService {
 
           const upload = await this.uploadToCloudinary(audioBuffer, publicId, language);
 
-          // âœ… WRITE AUDIO EVERYWHERE
+          // ✅ WRITE AUDIO EVERYWHERE
           item.audioUrl = upload.audioUrl;
           item.audioAssetId = upload.publicId;
 
@@ -457,9 +457,9 @@ class PythonTTSService {
             }
           }
 
-          logger.info(`âœ… Audio generated: ${type} â†’ ${upload.audioUrl}`);
+          logger.info(`✅ Audio generated: ${type} → ${upload.audioUrl}`);
         } catch (ttsError) {
-          logger.error(`âŒ TTS generation failed for ${type} (${id}):`, {
+          logger.error(`❌ TTS generation failed for ${type} (${id}):`, {
             message: ttsError.message,
             status: ttsError.response?.status,
             data: ttsError.response?.data,
@@ -475,7 +475,7 @@ class PythonTTSService {
           throw ttsError;
         }
       } catch (error) {
-        logger.error(`âŒ Failed to generate audio for ${type} item ${id}:`, {
+        logger.error(`❌ Failed to generate audio for ${type} item ${id}:`, {
           message: error.message,
           status: error.response?.status,
           data: error.response?.data,
@@ -494,7 +494,7 @@ class PythonTTSService {
 
     // Greeting
     if (workflow.greeting) {
-      logger.info('ðŸ” Processing greeting:', JSON.stringify(workflow.greeting, null, 2));
+      logger.info('🔍 Processing greeting:', JSON.stringify(workflow.greeting, null, 2));
       await processItem(
         workflow.greeting,
         'greeting',
@@ -505,21 +505,21 @@ class PythonTTSService {
 
     // Menu options
     if (Array.isArray(workflow.menuOptions)) {
-      logger.info('ðŸ” Processing menu options:', JSON.stringify(workflow.menuOptions, null, 2));
+      logger.info('🔍 Processing menu options:', JSON.stringify(workflow.menuOptions, null, 2));
       for (const opt of workflow.menuOptions) {
-        logger.info('ðŸ” Processing menu option:', JSON.stringify(opt, null, 2));
+        logger.info('🔍 Processing menu option:', JSON.stringify(opt, null, 2));
         await processItem(opt, opt._id || opt.digit, 'menu', workflow.config?.voiceId || workflow.settings?.voice);
       }
     }
 
     // Workflow nodes
     if (Array.isArray(workflow.nodes)) {
-      logger.info(`ðŸ” Processing ${workflow.nodes.length} workflow nodes`);
-      logger.info(`ðŸ” Full workflow structure:`, JSON.stringify(workflow, null, 2));
+      logger.info(`🔍 Processing ${workflow.nodes.length} workflow nodes`);
+      logger.info(`🔍 Full workflow structure:`, JSON.stringify(workflow, null, 2));
       
       for (const node of workflow.nodes) {
-        logger.info(`ðŸ” Processing node: ${node.type} (${node.id})`);
-        logger.info(`ðŸ” Node data:`, JSON.stringify(node.data, null, 2));
+        logger.info(`🔍 Processing node: ${node.type} (${node.id})`);
+        logger.info(`🔍 Node data:`, JSON.stringify(node.data, null, 2));
         await processItem(
           node,
           node.id,
@@ -528,11 +528,11 @@ class PythonTTSService {
         );
       }
     } else {
-      logger.warn(`âš ï¸ No nodes found. Available keys:`, Object.keys(workflow));
+      logger.warn(`⚠️ No nodes found. Available keys:`, Object.keys(workflow));
       if (workflow.nodes && Array.isArray(workflow.nodes)) {
-        logger.info(`ðŸ” Fallback: Processing ${workflow.nodes.length} direct nodes`);
+        logger.info(`🔍 Fallback: Processing ${workflow.nodes.length} direct nodes`);
         for (const node of workflow.nodes) {
-          logger.info(`ðŸ” Processing node: ${node.type} (${node.id})`);
+          logger.info(`🔍 Processing node: ${node.type} (${node.id})`);
           await processItem(
             node,
             node.id,
@@ -557,7 +557,7 @@ class PythonTTSService {
       }
       
       if (failedNodes.length > 0) {
-        logger.error(`âŒ Workflow save blocked due to ${failedNodes.length} failed audio generations:`, failedNodes);
+        logger.error(`❌ Workflow save blocked due to ${failedNodes.length} failed audio generations:`, failedNodes);
         const error = new Error(`Audio generation failed for nodes: ${failedNodes.map(n => n.id).join(', ')}`);
         error.code = 'AUDIO_GENERATION_FAILED';
         error.failedNodes = failedNodes;
@@ -565,9 +565,9 @@ class PythonTTSService {
       }
       
       await workflow.save();
-      logger.info(`ðŸ’¾ Saved workflow with updated audio URLs`);
+      logger.info(`💾 Saved workflow with updated audio URLs`);
     } catch (error) {
-      logger.error(`âŒ Failed to save workflow:`, {
+      logger.error(`❌ Failed to save workflow:`, {
         message: error.message,
         code: error.code,
         failedNodes: error.failedNodes
@@ -582,14 +582,15 @@ class PythonTTSService {
     return {
       'en-GB': { name: 'English (United Kingdom)', voice: this.languageMappings['en-GB'].voice },
       'en-US': { name: 'English (United States)', voice: this.languageMappings['en-US'].voice },
-      'ta-IN': { name: 'Tamil (India)', voice: this.languageMappings['ta-IN'].voice },
-      'hi-IN': { name: 'Hindi (India)', voice: this.languageMappings['hi-IN'].voice }
+      'ta-IN': { name: 'Tamil', voice: this.languageMappings['ta-IN'].voice },
+      'hi-IN': { name: 'Hindi', voice: this.languageMappings['hi-IN'].voice }
     };
   }
 }
 
-// âœ… SINGLETON
+// ✅ SINGLETON
 const pythonTTSService = new PythonTTSService();
 export default pythonTTSService;
+
 
 
