@@ -4,6 +4,7 @@ import BroadcastCall from '../models/BroadcastCall.js';
 import { validateTemplate } from '../utils/messagePersonalizer.js';
 import logger from '../utils/logger.js';
 import { getUserObjectId } from '../utils/authContext.js';
+import { reportUsage } from '../services/usageService.js';
 
 /**
  * Helper function to extract user ID from request
@@ -64,6 +65,13 @@ class BroadcastController {
         },
         userId
       );
+
+      reportUsage({
+        companyId: req.user?.companyId,
+        userId,
+        usageType: 'voice_call',
+        count: Array.isArray(contacts) ? contacts.length : 1
+      });
 
       // Start broadcast asynchronously
       broadcastService.startBroadcast(broadcast._id, userId).catch(error => {

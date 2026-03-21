@@ -5,6 +5,7 @@ import logger from '../utils/logger.js';
 import Call from '../models/call.js';
 import BroadcastCall from '../models/BroadcastCall.js';
 import { getUserIdString } from '../utils/authContext.js';
+import { reportUsage } from '../services/usageService.js';
 
 class CallController {
   async startOutboundCall(req, res) {
@@ -24,7 +25,15 @@ class CallController {
         direction: 'outbound',
         provider: telephonyService.provider,
         scenario: scenario || null,
-        userId
+        userId,
+        companyId: req.user?.companyId || null
+      });
+
+      reportUsage({
+        companyId: req.user?.companyId,
+        userId,
+        usageType: 'voice_call',
+        count: 1
       });
 
       res.status(200).json({

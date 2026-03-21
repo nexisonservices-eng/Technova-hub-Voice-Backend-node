@@ -4,11 +4,12 @@ import CallController from '../controllers/voiceController.js';
 import { authenticate } from '../middleware/auth.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
+import { requirePlanFeature } from '../middleware/planGuard.js';
 
 const router = express.Router();
 
 // 🔒 Protected routes
-router.post('/call/outbound', authenticate, resolveUserTwilioContext, CallController.startOutboundCall);
+router.post('/call/outbound', authenticate, requirePlanFeature('outboundVoice'), resolveUserTwilioContext, CallController.startOutboundCall);
 router.get('/calls/active', authenticate, resolveUserTwilioContext, CallController.getActiveCalls);
 router.post('/call/:callSid/end', authenticate, resolveUserTwilioContext, CallController.endCall);
 

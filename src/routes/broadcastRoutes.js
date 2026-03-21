@@ -5,11 +5,12 @@ import twilioWebhooks from '../webhooks/twilioWebhooks.js';
 import { authenticate } from '../middleware/auth.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
+import { requirePlanFeature } from '../middleware/planGuard.js';
 
 const router = express.Router();
 
 // 🔒 Protected broadcast routes (require authentication)
-router.post('/start', authenticate, resolveUserTwilioContext, broadcastController.startBroadcast);
+router.post('/start', authenticate, requirePlanFeature('voiceCampaign'), resolveUserTwilioContext, broadcastController.startBroadcast);
 router.get('/status/:id', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastStatus);
 router.post('/:id/cancel', authenticate, resolveUserTwilioContext, broadcastController.cancelBroadcast);
 router.get('/:id/calls', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastCalls);

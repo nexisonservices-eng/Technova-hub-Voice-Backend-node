@@ -13,6 +13,7 @@ import { emitOutboundMetrics, emitOutboundTemplateUpdate } from '../sockets/unif
 import { getUserIdString, getUserObjectId } from '../utils/authContext.js';
 import mongoose from 'mongoose';
 import outboundCampaignService from '../services/outboundCampaignService.js';
+import { reportUsage } from '../services/usageService.js';
 
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
 const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
@@ -512,6 +513,13 @@ class OutboundLocalController {
         ...buildMetrics(1, 0, 1)
       });
 
+      reportUsage({
+        companyId: req.user?.companyId,
+        userId,
+        usageType: 'voice_call',
+        count: 1
+      });
+
       return res.status(200).json({
         success: true,
         callSid: providerResult.callSid,
@@ -623,6 +631,20 @@ class OutboundLocalController {
       const campaign = await outboundCampaignService.createCampaign(req.body || {}, userObjectId, {
         autoExecute: true,
         createSchedule: true
+      });
+
+      const bulkNumbersCount = Array.isArray(req.body?.numbers) && req.body.numbers.length > 0
+        ? req.body.numbers.length
+        : String(req.body?.csvData || req.body?.csv || '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean).length;
+
+      reportUsage({
+        companyId: req.user?.companyId,
+        userId: getUserIdString(req),
+        usageType: 'voice_call',
+        count: bulkNumbersCount > 0 ? bulkNumbersCount : 1
       });
 
       return res.status(200).json({

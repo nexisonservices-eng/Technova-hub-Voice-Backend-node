@@ -1,5 +1,6 @@
 import express from 'express';
 import { authenticate } from '../middleware/auth.js';
+import { requirePlanFeature } from '../middleware/planGuard.js';
 import outboundLocalController from '../controllers/OutboundController.js';
 
 const router = express.Router();
@@ -182,6 +183,7 @@ const validateTemplatePayload = (req, res, next) => {
 
 router.use(authenticate);
 router.use(rateLimitOutboundLocal);
+router.use(requirePlanFeature('outboundVoice'));
 
 router.post('/outbound-local', validateQuickCallPayload, (req, res) =>
   outboundLocalController.quickCall(req, res)

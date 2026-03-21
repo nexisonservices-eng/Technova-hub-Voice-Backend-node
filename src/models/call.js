@@ -12,6 +12,11 @@ const callSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
     },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'company',
+      index: true
+    },
     phoneNumber: {
       type: String,
       required: true
@@ -139,7 +144,7 @@ const callSchema = new mongoose.Schema(
    Indexes
 ====================== */
 
-callSchema.index({ user: 1, createdAt: -1 });
+callSchema.index({ companyId: 1, user: 1, createdAt: -1 });
 callSchema.index({ phoneNumber: 1 });
 callSchema.index({ status: 1 });
 callSchema.index({ direction: 1 });

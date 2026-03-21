@@ -7,10 +7,11 @@ class CallStateService {
   }
 
   async createCall(callData) {
-    const { callSid, phoneNumber, direction, provider, userId = null } = callData;
+    const { callSid, phoneNumber, direction, provider, userId = null, companyId = null } = callData;
     const call = await Call.create({
       callSid,
       user: userId,
+      companyId,
       phoneNumber,
       direction,
       provider,
