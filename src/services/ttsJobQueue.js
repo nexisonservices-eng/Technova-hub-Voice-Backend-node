@@ -3,6 +3,7 @@ import axios from 'axios';
 import logger from '../utils/logger.js';
 import Workflow from '../models/Workflow.js';
 import cloudinary from 'cloudinary';
+import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 
 
 class TTSJobQueue {
@@ -512,7 +513,13 @@ class TTSJobQueue {
     let uploadResult;
     try {
       const uniqueKey = `ivr_${workflow.promptKey || workflow._id}_${node.id}_${Date.now()}`;
-      const folder = process.env.CLOUDINARY_IVR_AUDIO_FOLDER || 'ivr-audio';
+      const folder = await resolveCloudinaryAudioFolder(
+        {
+          userId: String(workflow?.createdBy || ''),
+          username: ''
+        },
+        'ivr'
+      );
       
       logger.info(`☁️ Uploading to Cloudinary: ${folder}/${uniqueKey}`);
       

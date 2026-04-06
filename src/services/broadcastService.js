@@ -8,6 +8,7 @@ import ttsBatchService from "./ttsBatchService.js";
 import broadcastQueueService from './broadcastQueueService.js';
 import aiAssistantService from './aiAssistantService.js';
 import { emitStatsUpdate, emitBroadcastListUpdate, emitCallsCreated } from '../sockets/unifiedSocket.js';
+import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 
 class BroadcastService {
   /**
@@ -50,7 +51,7 @@ class BroadcastService {
   /**
    * Start broadcast - prepare audio assets and queue calls
    */
-  async startBroadcast(broadcastId, userId = null) {
+  async startBroadcast(broadcastId, userId = null, userContext = null) {
     try {
       const query = userId ? { _id: broadcastId, createdBy: userId } : { _id: broadcastId };
       const broadcast = await Broadcast.findOne(query);
@@ -77,7 +78,10 @@ class BroadcastService {
       logger.info(`Generating TTS for single message to ${broadcast.contacts.length} contacts`);
 
       // Generate single TTS audio
-      const audioAssets = await this.generateSingleAudio(singleMessage, broadcast.voice);
+      const audioAssets = await this.generateSingleAudio(singleMessage, broadcast.voice, {
+        userId: String(broadcast.createdBy || userId || ''),
+        username: userContext?.username || ''
+      });
 
       const audioAssetsArray = [audioAssets];
       const personalizedMessages = broadcast.contacts.map(contact => ({
@@ -112,7 +116,7 @@ class BroadcastService {
   }
 
 
-  async generateSingleAudio(message, voice) {
+  async generateSingleAudio(message, voice, userContext = {}) {
     try {
       // Call Python TTS service
       const aiServiceUrl = process.env.AI_SERVICE_HTTP || 'http://localhost:4000';
@@ -133,11 +137,12 @@ class BroadcastService {
 
       // Upload to Cloudinary
       const audioBuffer = Buffer.from(ttsResponse.data);
+      const folder = await resolveCloudinaryAudioFolder(userContext, 'broadcast');
       const uploadResult = await new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
           {
             resource_type: 'video',
-            folder: process.env.CLOUDINARY_BROADCAST_AUDIO_FOLDER || 'broadcast-audio',
+            folder,
             public_id: message.uniqueKey
           },
           (error, result) => {
@@ -152,6 +157,7 @@ class BroadcastService {
         uniqueKey: message.uniqueKey,
         text: message.text,
         audioUrl: uploadResult.secure_url,
+        audioAssetId: uploadResult.public_id,
         duration: Math.ceil(message.text.split(' ').length / 2.5) // Estimate
       };
     } catch (error) {
@@ -270,7 +276,7 @@ class BroadcastService {
   /**
    * Delete broadcast and associated calls
    */
-  async deleteBroadcast(broadcastId, userId) {
+  async deleteBroadcast(broadcastId, userId, userContext = null) {
     const broadcast = await Broadcast.findOne({ _id: broadcastId, createdBy: userId });
 
     if (!broadcast) {
@@ -286,7 +292,13 @@ class BroadcastService {
     if (broadcast.audioAssets && broadcast.audioAssets.length > 0) {
       logger.info(`Deleting ${broadcast.audioAssets.length} audio assets for broadcast ${broadcastId}`);
 
-      const folder = process.env.CLOUDINARY_BROADCAST_AUDIO_FOLDER || 'broadcast-audio';
+      const folder = await resolveCloudinaryAudioFolder(
+        {
+          userId: String(broadcast.createdBy || userId || ''),
+          username: userContext?.username || ''
+        },
+        'broadcast'
+      );
 
       for (const asset of broadcast.audioAssets) {
         if (asset.uniqueKey) {

@@ -72,7 +72,11 @@ class IVRAudioController {
                 req.file.buffer || req.file.path, // handle memory or disk storage
                 publicId,
                 language,
-                req.file.originalname
+                req.file.originalname,
+                {
+                    userId: String(req.user?.userId || req.user?._id || req.user?.id || ''),
+                    username: req.user?.username || ''
+                }
             );
 
             const existingAssetId = this.normalizeCloudinaryAssetId(existingAudioAssetId);
@@ -112,7 +116,15 @@ class IVRAudioController {
 
             logger.info(`🔊 TTS Preview requested: "${text.substring(0, 30)}...", voice: ${voice}`);
 
-            const result = await IVRAudioService.generateAndUploadTTS(text, voice, language);
+            const result = await IVRAudioService.generateAndUploadTTS(
+                text,
+                voice,
+                language,
+                {
+                    userId: String(req.user?.userId || req.user?._id || req.user?.id || ''),
+                    username: req.user?.username || ''
+                }
+            );
 
             res.json({
                 success: true,

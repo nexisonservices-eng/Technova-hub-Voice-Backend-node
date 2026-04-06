@@ -194,7 +194,7 @@ class TwilioIntegrationService extends EventEmitter {
           break;
           
         case 'end':
-          await this.handleEndNode(response, data, settings);
+          await this.handleEndNode(response, data, settings, workflow);
           break;
           
         case 'ai_assistant':
@@ -239,7 +239,15 @@ class TwilioIntegrationService extends EventEmitter {
       try {
         const pythonTTSService = (await import('../services/pythonTTSService.js')).default;
         const promptKey = `workflow_${workflow._id}_node_${nodeId}`;
-        const audioResult = await pythonTTSService.getAudioForPrompt(promptKey, text, language, data.voice, workflow._id, { id: nodeId, type: 'audio' });
+        const audioResult = await pythonTTSService.getAudioForPrompt(
+          promptKey,
+          text,
+          language,
+          data.voice,
+          workflow._id,
+          { id: nodeId, type: 'audio' },
+          { userId: String(workflow?.createdBy || ''), username: '' }
+        );
         const audioUrl = audioResult?.audioUrl;
         
         if (audioUrl) {
@@ -282,7 +290,8 @@ class TwilioIntegrationService extends EventEmitter {
           language,
           data.voice,
           workflow._id,
-          { id: nodeId, type: 'input' }
+          { id: nodeId, type: 'input' },
+          { userId: String(workflow?.createdBy || ''), username: '' }
         );
         const audioUrl = audioResult?.audioUrl;
         
@@ -315,7 +324,15 @@ class TwilioIntegrationService extends EventEmitter {
       try {
         const pythonTTSService = (await import('../services/pythonTTSService.js')).default;
         const promptKey = `workflow_${workflow._id}_node_${nodeId}`;
-        const audioResult = await pythonTTSService.getAudioForPrompt(promptKey, text, language, data.voice, workflow._id, { id: nodeId, type: 'input' });
+        const audioResult = await pythonTTSService.getAudioForPrompt(
+          promptKey,
+          text,
+          language,
+          data.voice,
+          workflow._id,
+          { id: nodeId, type: 'input' },
+          { userId: String(workflow?.createdBy || ''), username: '' }
+        );
         const audioUrl = audioResult?.audioUrl;
         
         if (audioUrl) {
@@ -471,7 +488,7 @@ class TwilioIntegrationService extends EventEmitter {
   /**
    * Handle end node
    */
-  async handleEndNode(response, data, settings) {
+  async handleEndNode(response, data, settings, workflow) {
     const voice = this.normalizeTwilioVoice(data.voice || settings.voice || settings.voiceId);
     const language = data.language || settings.language || 'en-GB';
     
@@ -481,7 +498,15 @@ class TwilioIntegrationService extends EventEmitter {
       try {
         const pythonTTSService = (await import('../services/pythonTTSService.js')).default;
         const promptKey = `end_node_${Date.now()}`;
-        const audioResult = await pythonTTSService.getAudioForPrompt(promptKey, endMessage, language, data.voice);
+        const audioResult = await pythonTTSService.getAudioForPrompt(
+          promptKey,
+          endMessage,
+          language,
+          data.voice,
+          workflow?._id || null,
+          { id: 'end-node', type: 'end' },
+          { userId: String(workflow?.createdBy || ''), username: '' }
+        );
         const audioUrl = audioResult?.audioUrl;
         
         if (audioUrl) {

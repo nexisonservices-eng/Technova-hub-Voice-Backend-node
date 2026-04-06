@@ -3,6 +3,7 @@ import path from 'path';
 import cloudinary from "../utils/cloudinaryUtils.js";
 import pythonTTSService from "./pythonTTSService.js";
 import logger from '../utils/logger.js';
+import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 
 class IVRAudioService {
     constructor() {
@@ -24,27 +25,25 @@ class IVRAudioService {
      * @param {string} filename - Original filename (for local storage)
      * @returns {Promise<{audioUrl: string, publicId: string}>}
      */
-    async uploadAudio(fileContent, publicId, language = 'en-GB', filename = null) {
-        // Check if we should use Cloudinary (preferred for production)
+    async uploadAudio(fileContent, publicId, language = 'en-GB', filename = null, userContext = {}) {
         const useCloudinary = !!process.env.CLOUDINARY_CLOUD_NAME;
-
-        if (useCloudinary) {
-            return this.uploadToCloudinary(fileContent, publicId, language);
-        } else {
-            return this.uploadToLocal(fileContent, publicId, filename);
+        if (!useCloudinary) {
+            throw new Error('Cloudinary is required for IVR audio uploads.');
         }
+        return this.uploadToCloudinary(fileContent, publicId, language, userContext);
     }
 
     /**
      * Upload to Cloudinary
      */
-    async uploadToCloudinary(buffer, publicId, language) {
+    async uploadToCloudinary(buffer, publicId, language, userContext = {}) {
+        const folder = await resolveCloudinaryAudioFolder(userContext, 'ivr');
         return new Promise((resolve, reject) => {
             const uploadStream = cloudinary.uploader.upload_stream(
                 {
                     resource_type: 'video',
                     public_id: publicId,
-                    folder: 'ivr-audio',
+                    folder,
                     format: 'mp3',
                     tags: ['ivr', language]
                 },
@@ -87,14 +86,14 @@ class IVRAudioService {
     /**
      * Generate TTS and upload
      */
-    async generateAndUploadTTS(text, voice, language) {
+    async generateAndUploadTTS(text, voice, language, userContext = {}) {
         logger.info(`Generating TTS for upload: text="${text.substring(0, 30)}...", voice=${voice}`);
 
         // Generate buffer from TTS service
         const buffer = await pythonTTSService.generateSpeech(text, language, voice);
         const publicId = `tts_${Date.now()}_${Math.round(Math.random() * 1000)}`;
 
-        return this.uploadAudio(buffer, publicId, language);
+        return this.uploadAudio(buffer, publicId, language, null, userContext);
     }
 
     /**

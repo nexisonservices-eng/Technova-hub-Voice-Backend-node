@@ -86,6 +86,15 @@ class AdminCredentialsService {
       `user:${userId}`
     );
   }
+
+  async getUserProfileByUserId(userId) {
+    if (!userId) return null;
+    const encoded = encodeURIComponent(userId);
+    return this.fetchCredentials(
+      `/internal/user/credentials/${encoded}`,
+      `user_profile:${userId}`
+    );
+  }
 }
 
 export default new AdminCredentialsService();

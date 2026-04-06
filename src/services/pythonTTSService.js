@@ -4,6 +4,8 @@ import path from 'path';
 import crypto from 'crypto';
 import cloudinary from 'cloudinary';
 import logger from '../utils/logger.js';
+import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import Workflow from '../models/Workflow.js';
 
 class PythonTTSService {
   constructor() {
@@ -202,22 +204,23 @@ class PythonTTSService {
     }
   }
 
-  async generateAudio(text, language = 'en-GB', voiceOverride) {
+  async generateAudio(text, language = 'en-GB', voiceOverride, userContext = {}) {
     const voice = voiceOverride || this.languageMappings[language]?.voice || 'en-GB-SoniaNeural';
     const requiredLanguage = this.VOICE_LANGUAGE[voice] || language || 'en-GB';
     const audioBuffer = await this.generateSpeech(text, requiredLanguage, voice);
     const publicId = `adhoc_${Date.now()}`;
-    const upload = await this.uploadToCloudinary(audioBuffer, publicId, requiredLanguage);
+    const upload = await this.uploadToCloudinary(audioBuffer, publicId, requiredLanguage, userContext);
     return upload.audioUrl;
   }
 
-  async uploadToCloudinary(buffer, publicId, language) {
+  async uploadToCloudinary(buffer, publicId, language, userContext = {}) {
+    const folder = await resolveCloudinaryAudioFolder(userContext, 'ivr');
     return new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
         {
           resource_type: 'video',
           public_id: publicId,
-          folder: 'ivr-audio',
+          folder,
           format: 'mp3',
           tags: ['ivr', language]
         },
@@ -233,7 +236,7 @@ class PythonTTSService {
     });
   }
 
-  async getAudioForPrompt(promptKey, text, language = 'en-GB', voiceOverride, workflowId, node) {
+  async getAudioForPrompt(promptKey, text, language = 'en-GB', voiceOverride, workflowId, node, userContext = {}) {
   try {
     if (!text || !String(text).trim()) {
       throw new Error('Text is required to generate audio');
@@ -247,7 +250,29 @@ class PythonTTSService {
 
     const audioBuffer = await this.generateSpeech(text, requiredLanguage, voice);
     const publicId = `node_${nodeId}_${Date.now()}`;
-    const upload = await this.uploadToCloudinary(audioBuffer, publicId, requiredLanguage);
+    const resolvedUserContext = {
+      userId: String(
+        userContext?.userId ||
+        userContext?.id ||
+        userContext?._id ||
+        userContext?.sub ||
+        ''
+      ).trim(),
+      username: String(userContext?.username || '').trim()
+    };
+
+    if (!resolvedUserContext.userId && workflowId) {
+      try {
+        const workflow = await Workflow.findById(workflowId).select('createdBy').lean();
+        if (workflow?.createdBy) {
+          resolvedUserContext.userId = String(workflow.createdBy);
+        }
+      } catch (resolveError) {
+        logger.warn(`Unable to resolve workflow owner for audio folder (workflowId=${workflowId}): ${resolveError.message}`);
+      }
+    }
+
+    const upload = await this.uploadToCloudinary(audioBuffer, publicId, requiredLanguage, resolvedUserContext);
 
     logger.info(`Audio generated for ${nodeType} (${nodeId}): ${upload.audioUrl}`);
 
@@ -262,7 +287,7 @@ class PythonTTSService {
   }
 }
 
-  async generateAudioForAllLanguages(promptKey, text, forceRegenerate = false) {
+  async generateAudioForAllLanguages(promptKey, text, forceRegenerate = false, userContext = {}) {
     const results = {};
     const languages = Object.keys(this.languageMappings);
 
@@ -274,7 +299,8 @@ class PythonTTSService {
           language,
           undefined,
           undefined,
-          { id: `${promptKey}_${language}`, type: 'prompt', data: { promptKey } }
+          { id: `${promptKey}_${language}`, type: 'prompt', data: { promptKey } },
+          userContext
         );
 
         results[language] = {
@@ -293,11 +319,9 @@ class PythonTTSService {
     return results;
   }
 
-  async deleteAudio(promptKey, language) {
-    const candidateIds = [
-      `${promptKey}_${language}`,
-      `ivr-audio/${promptKey}_${language}`
-    ];
+  async deleteAudio(promptKey, language, userContext = {}) {
+    const audioFolder = await resolveCloudinaryAudioFolder(userContext, 'ivr');
+    const candidateIds = [`${promptKey}_${language}`, `${audioFolder}/${promptKey}_${language}`];
 
     const results = [];
     for (const id of candidateIds) {
@@ -437,7 +461,10 @@ class PythonTTSService {
           const audioBuffer = await this.generateSpeech(text, language, voice);
           const publicId = `node_${id}_${Date.now()}`;
 
-          const upload = await this.uploadToCloudinary(audioBuffer, publicId, language);
+          const upload = await this.uploadToCloudinary(audioBuffer, publicId, language, {
+            userId: String(workflow?.createdBy || ''),
+            username: String(workflow?.createdByUsername || '')
+          });
 
           // ✅ WRITE AUDIO EVERYWHERE
           item.audioUrl = upload.audioUrl;

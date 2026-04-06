@@ -276,6 +276,22 @@ class IVRWorkflowEngine extends EventEmitter {
         };
     }
 
+    normalizeEdgeHandle(value) {
+        if (value === undefined || value === null || value === '') return null;
+        return String(value);
+    }
+
+    isExactDuplicateEdge(existingEdge = {}, candidateEdge = {}, ignoreEdgeId = null) {
+        if (!existingEdge || !candidateEdge) return false;
+        if (ignoreEdgeId && String(existingEdge.id) === String(ignoreEdgeId)) return false;
+        return (
+            String(existingEdge.source || '') === String(candidateEdge.source || '') &&
+            String(existingEdge.target || '') === String(candidateEdge.target || '') &&
+            this.normalizeEdgeHandle(existingEdge.sourceHandle) === this.normalizeEdgeHandle(candidateEdge.sourceHandle) &&
+            this.normalizeEdgeHandle(existingEdge.targetHandle) === this.normalizeEdgeHandle(candidateEdge.targetHandle)
+        );
+    }
+
     /**
      * Start a new workflow execution
      */
@@ -838,6 +854,7 @@ class IVRWorkflowEngine extends EventEmitter {
                 settings.maxRetries ||
                 3;
             const attemptCount = this.getExecutionState(callSid)?.nodeAttempts?.[currentNodeId] || 0;
+            const endNodeId = (workflow.nodes || []).find((node) => node?.type === 'end')?.id || null;
 
             // Timeout (no digits)
             if (!userInput) {
@@ -848,11 +865,11 @@ class IVRWorkflowEngine extends EventEmitter {
                         state.lastInputReasonByNode[currentNodeId] = 'timeout';
                     }
                 }
-                const timeoutEdge = edges.find(e => e.sourceHandle === 'timeout');
-                if (timeoutEdge) return timeoutEdge.target;
+                // Retry-first behavior: timeout should not branch immediately.
                 if (attemptCount < maxRetries) return currentNodeId;
                 const fallback = edges.find(e => e.sourceHandle === 'no_match' || e.sourceHandle === 'default');
-                return fallback ? fallback.target : null;
+                if (fallback) return fallback.target;
+                return endNodeId;
             }
 
             // Find edge matching userInput (digit)
@@ -909,7 +926,8 @@ class IVRWorkflowEngine extends EventEmitter {
             }
             if (attemptCount < maxRetries) return currentNodeId;
             const fallbackEdge = edges.find(e => e.sourceHandle === 'no_match' || e.sourceHandle === 'default');
-            return fallbackEdge ? fallbackEdge.target : null;
+            if (fallbackEdge) return fallbackEdge.target;
+            return endNodeId;
         } catch (error) {
             logger.error('Error handling user input:', error);
             throw error;
@@ -1213,12 +1231,23 @@ class IVRWorkflowEngine extends EventEmitter {
             const workflow = await Workflow.findById(workflowId);
             if (!workflow) throw new Error('Workflow not found');
 
+            const candidateEdge = {
+                source: String(sourceNode || ''),
+                target: String(targetNode || ''),
+                sourceHandle: this.normalizeEdgeHandle(sourceHandle),
+                targetHandle: this.normalizeEdgeHandle(targetHandle)
+            };
+
+            const existingEdge = (workflow.edges || []).find((edge) =>
+                this.isExactDuplicateEdge(edge, candidateEdge)
+            );
+            if (existingEdge) {
+                return existingEdge;
+            }
+
             const newEdge = {
                 id: edgeId || `e-${sourceNode}-${targetNode}-${Date.now()}`,
-                source: sourceNode,
-                target: targetNode,
-                sourceHandle,
-                targetHandle
+                ...candidateEdge
             };
 
             workflow.edges.push(newEdge);
@@ -1258,9 +1287,21 @@ class IVRWorkflowEngine extends EventEmitter {
             const edgeIndex = workflow.edges.findIndex(e => e.id === edgeId);
             if (edgeIndex === -1) throw new Error('Edge not found');
 
-            workflow.edges[edgeIndex] = {
-                ...workflow.edges[edgeIndex],
+            const currentEdge = workflow.edges[edgeIndex];
+            const nextEdge = {
+                ...currentEdge,
                 ...updates
+            };
+
+            const duplicateEdge = (workflow.edges || []).find((edge) =>
+                this.isExactDuplicateEdge(edge, nextEdge, edgeId)
+            );
+            if (duplicateEdge) {
+                return currentEdge;
+            }
+
+            workflow.edges[edgeIndex] = {
+                ...nextEdge
             };
 
             await workflow.save();

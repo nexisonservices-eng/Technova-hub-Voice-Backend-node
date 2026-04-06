@@ -24,8 +24,6 @@ if (isConfigured) {
   });
 }
 
-const CLOUDINARY_FOLDER = process.env.CLOUDINARY_FOLDER || 'audio broadcast';
-
 function extractPublicIdFromCloudinaryUrl(value) {
   if (!value || typeof value !== 'string') return null;
   const match = value.match(/\/video\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)(?:\?|$)/);
@@ -75,10 +73,17 @@ export async function uploadToCloudinary(buffer, fileName, options = {}) {
   }
 
   try {
+    const folder = String(options.folder || '').trim();
+    if (!folder) {
+      const error = new Error('Cloudinary upload folder is required');
+      error.code = 'AUDIO_FOLDER_CONTEXT_MISSING';
+      throw error;
+    }
+
     return new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
-          folder: CLOUDINARY_FOLDER,
+          folder,
           resource_type: 'video', // Use 'video' for audio files
           format: options.format || 'mp3',
           public_id: fileName.replace(/\.[^/.]+$/, ""), // Remove extension

@@ -1053,7 +1053,11 @@ class InboundCallController {
           audioData = await workflowAudioService.generateSingleAudio(
             greetingText,
             selectedVoiceId,
-            selectedLanguage
+            selectedLanguage,
+            {
+              userId: String(userId || ''),
+              username: req.user?.username || ''
+            }
           );
           
           // Validate audio data was actually generated

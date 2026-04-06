@@ -245,7 +245,8 @@ class OutboundCampaignService {
         language,
         voiceId,
         null,
-        { id: `outbound_campaign_${hash}`, type: 'outbound-campaign' }
+        { id: `outbound_campaign_${hash}`, type: 'outbound-campaign' },
+        { userId: String(userId || ''), username: '' }
       );
 
       const result = {

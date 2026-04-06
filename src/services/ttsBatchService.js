@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { uploadToCloudinary, isCloudinaryConfigured } from "../../src/utils/cloudinaryUtils.js";
 import logger from '../utils/logger.js';
+import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 
 class TTSBatchService {
   constructor() {
@@ -14,7 +15,7 @@ class TTSBatchService {
   /**
    * Generate TTS audio for batch of unique messages
    */
-  async generateBatch(uniqueMessages, voiceConfig) {
+  async generateBatch(uniqueMessages, voiceConfig, userContext = {}) {
     try {
       logger.info(
         `Generating TTS batch: ${uniqueMessages.length} messages`
@@ -22,7 +23,7 @@ class TTSBatchService {
 
       const results = await Promise.all(
         uniqueMessages.map(msg =>
-          this._generateSingle(msg, voiceConfig)
+          this._generateSingle(msg, voiceConfig, userContext)
         )
       );
 
@@ -56,7 +57,7 @@ class TTSBatchService {
   /**
    * Generate single TTS audio
    */
-  async _generateSingle(message, voiceConfig) {
+  async _generateSingle(message, voiceConfig, userContext = {}) {
     try {
       const response = await axios.post(
         `${this.pythonServiceUrl}/tts/broadcast`,
@@ -83,7 +84,8 @@ class TTSBatchService {
       }
 
       const uploadResult = await uploadToCloudinary(audioBuffer, fileName, {
-        format: this._getAudioFormat(voiceConfig.provider)
+        format: this._getAudioFormat(voiceConfig.provider),
+        folder: await resolveCloudinaryAudioFolder(userContext, 'broadcast')
       });
       logger.info(`Audio uploaded to Cloudinary: ${fileName}`);
 

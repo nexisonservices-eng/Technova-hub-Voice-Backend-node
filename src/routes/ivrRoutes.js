@@ -179,7 +179,13 @@ router.post('/generate-audio', [
       promptKey,
       text,
       language,
-      forceRegenerate
+      forceRegenerate,
+      null,
+      { id: promptKey, type: 'prompt' },
+      {
+        userId: String(userId || ''),
+        username: req.user?.username || ''
+      }
     );
 
     res.json({
@@ -283,7 +289,10 @@ router.delete('/audio/:promptKey/:language', async (req, res) => {
 
     logger.info(`Deleting audio for prompt: ${promptKey}, language: ${language}`);
 
-    await pythonTTSService.deleteAudio(promptKey, language);
+    await pythonTTSService.deleteAudio(promptKey, language, {
+      userId: String(userId || ''),
+      username: req.user?.username || ''
+    });
 
     res.json({
       success: true,
@@ -554,7 +563,13 @@ router.post('/batch-generate', [
               prompt.promptKey,
               prompt.text,
               language,
-              forceRegenerate
+              forceRegenerate,
+              null,
+              { id: prompt.promptKey, type: 'prompt' },
+              {
+                userId: String(userId || ''),
+                username: req.user?.username || ''
+              }
             );
             promptResults[language] = { success: true, audioUrl };
           } catch (error) {

@@ -2,6 +2,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import logger from '../utils/logger.js';
 import cloudinary from "../utils/cloudinaryUtils.js";
+import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 
 const PYTHON_TTS_URL = process.env.PYTHON_TTS_URL || 'http://localhost:4000';
 const AUDIO_CACHE_TTL = 86400000; // 24 hours in milliseconds
@@ -90,7 +91,7 @@ class WorkflowAudioService {
    * @param {string} language - Language code
    * @returns {Promise<{audioUrl: string, audioAssetId: string}>}
    */
-  async generateSingleAudio(text, voiceId, language) {
+  async generateSingleAudio(text, voiceId, language, userContext = {}) {
     try {
       logger.info(`Generating TTS: voice=${voiceId}, lang=${language}, text length=${text.length}`);
 
@@ -116,12 +117,13 @@ class WorkflowAudioService {
 
       // Upload to Cloudinary (exact same as broadcastService)
       const audioBuffer = Buffer.from(ttsResponse.data);
+      const folder = await resolveCloudinaryAudioFolder(userContext, 'ivr');
 
       const uploadResult = await new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
           {
             resource_type: 'video',
-            folder: process.env.CLOUDINARY_IVR_AUDIO_FOLDER || 'ivr-audio',
+            folder,
             public_id: message.uniqueKey
           },
           (error, result) => {
@@ -153,7 +155,7 @@ class WorkflowAudioService {
    * @param {String} nodeId - Node ID for caching
    * @returns {Promise<Object>} Audio URL and asset ID
    */
-  async getOrGenerateAudio(text, voice, workflowId, nodeId) {
+  async getOrGenerateAudio(text, voice, workflowId, nodeId, userContext = {}) {
     try {
       // Generate cache key
       const cacheKey = this.generateCacheKey(text, voice);
@@ -183,7 +185,7 @@ class WorkflowAudioService {
 
       // Start new generation
       const language = this.getLanguageFromVoice(voice);
-      const generationPromise = this.generateSingleAudio(text, voice, language);
+      const generationPromise = this.generateSingleAudio(text, voice, language, userContext);
       this.processingQueue.set(cacheKey, generationPromise);
 
       try {
@@ -265,7 +267,11 @@ class WorkflowAudioService {
             item.text,
             item.voice,
             item.workflowId,
-            item.nodeId
+            item.nodeId,
+            {
+              userId: String(workflow?.createdBy || ''),
+              username: ''
+            }
           );
 
           // Find and update node
@@ -291,7 +297,11 @@ class WorkflowAudioService {
           workflow.greeting.text,
           workflow.greeting.voice || 'ta-IN-PallaviNeural',
           workflow._id.toString(),
-          'greeting'
+          'greeting',
+          {
+            userId: String(workflow?.createdBy || ''),
+            username: ''
+          }
         );
 
         workflow.greeting.audioUrl = greetingResult.audioUrl;

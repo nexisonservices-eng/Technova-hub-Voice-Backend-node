@@ -215,7 +215,8 @@ class OutboundLocalController {
         language,
         voice,
         null,
-        { id: `outbound_${hash}`, type: 'outbound' }
+        { id: `outbound_${hash}`, type: 'outbound' },
+        { userId: String(userObjectId || ''), username: '' }
       );
 
       const result = {

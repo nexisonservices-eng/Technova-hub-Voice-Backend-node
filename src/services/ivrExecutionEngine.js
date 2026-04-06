@@ -169,7 +169,7 @@ class IVRExecutionEngine {
     try {
       switch (node.type) {
         // Phone & Interaction Nodes
-        case 'greeting':
+        case 'greeting': 
           return await this._handleGreeting(response, node, edges, settings);
         case 'input':
           return await this._handleInput(response, node, workflowConfig, context);

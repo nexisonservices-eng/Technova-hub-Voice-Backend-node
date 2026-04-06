@@ -74,7 +74,7 @@ class BroadcastController {
       });
 
       // Start broadcast asynchronously
-      broadcastService.startBroadcast(broadcast._id, userId).catch(error => {
+      broadcastService.startBroadcast(broadcast._id, userId, req.user || {}).catch(error => {
         logger.error(
           `Failed to start broadcast ${broadcast._id}:`,
           error
@@ -271,7 +271,7 @@ class BroadcastController {
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
       }
-      await broadcastService.deleteBroadcast(id, userId);
+      await broadcastService.deleteBroadcast(id, userId, req.user || {});
 
       res.json({
         success: true,
