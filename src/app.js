@@ -36,18 +36,18 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 // Routes
 app.use('/voice', voiceRoutes);
 app.use('/broadcast', BroadcastRoutes);
+app.use('/webhook/twilio', twilioWebhookRoutes); // Twilio webhooks (legacy singular path)
+app.use('/webhooks/twilio', twilioWebhookRoutes); // Twilio webhooks (exact path expected by Twilio console)
+app.use('/webhook', exotelWebhookRoutes); // Exotel/Twilio outbound local call flow webhooks
 app.use('/webhook/broadcast', BroadcastRoutes); // Add webhook prefix for Twilio callbacks
 app.use('/ai', AIRoutes);
 app.use('/health', OptimizedHealthRoutes);
 app.use('/webhook', InboundRoutes); // Inbound call webhooks
-app.use('/webhook', exotelWebhookRoutes); // Exotel outbound local call flow webhooks
 app.use('/inbound', InboundRoutes); // Management endpoints
 app.use('/api/ivr', IVRRoutes); // IVR management endpoints
 app.use('/ivr', IVRRoutes); // TwiML callback compatibility routes
 app.use('/api/workflow', workflowRoutes); // Workflow management endpoints
 app.use('/workflow', workflowRoutes); // Frontend compatibility endpoints
-app.use('/webhook/twilio', twilioWebhookRoutes); // Twilio webhooks (legacy singular path)
-app.use('/webhooks/twilio', twilioWebhookRoutes); // Twilio webhooks (exact path expected by Twilio console)
 app.use('/webhook/legacy', legacyWebhookRoutes); // Legacy compatibility webhooks
 app.use('/api/call-logs', CallLogRoutes); // Call log management
 app.use('/api/outbound-config', OutboundConfigRoutes); // Outbound configuration

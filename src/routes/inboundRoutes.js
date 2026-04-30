@@ -73,6 +73,13 @@ router.post('/queue/status', requireWebhookContextOrAuth, verifyTwilioRequest, i
 router.post('/payment/status', requireWebhookContextOrAuth, verifyTwilioRequest, inboundWebhooks.handlePaymentStatus.bind(inboundWebhooks));
 
 // 🔒 Protected endpoints (JWT required) - for dashboard/management
+router.use((req, res, next) => {
+  if (req.baseUrl === '/webhook') {
+    return next('router');
+  }
+  return next();
+});
+
 router.use(authenticate);
 router.use(resolveUserTwilioContext);
 router.get('/analytics', inboundCallController.getInboundAnalytics.bind(inboundCallController));

@@ -5,6 +5,7 @@ import IVRController from '../controllers/ivrController.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import Workflow from '../models/Workflow.js';
 import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
+import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 
 const router = express.Router();
 const ivrController = new IVRController();
@@ -37,7 +38,7 @@ const rewriteWorkflowUrls = (xml = '') =>
 const sendWorkflowResponse = (res, xml = '') =>
   res.status(200).type('text/xml').send(rewriteWorkflowUrls(xml));
 
-router.post('/outbound-local/workflow/start/:workflowId', async (req, res) => {
+router.post('/outbound-local/workflow/start/:workflowId', verifyTwilioRequest, async (req, res) => {
   try {
     const { workflowId } = req.params;
     const { CallSid, From, To } = req.body || {};
@@ -66,7 +67,7 @@ router.post('/outbound-local/workflow/start/:workflowId', async (req, res) => {
   }
 });
 
-router.post('/outbound-local/workflow/handle-input', async (req, res) => {
+router.post('/outbound-local/workflow/handle-input', verifyTwilioRequest, async (req, res) => {
   try {
     await ivrController.handleInput(req, {
       type: () => {},
@@ -78,7 +79,7 @@ router.post('/outbound-local/workflow/handle-input', async (req, res) => {
   }
 });
 
-router.post('/outbound-local/workflow/next-step', async (req, res) => {
+router.post('/outbound-local/workflow/next-step', verifyTwilioRequest, async (req, res) => {
   try {
     await ivrController.nextStep(req, {
       type: () => {},

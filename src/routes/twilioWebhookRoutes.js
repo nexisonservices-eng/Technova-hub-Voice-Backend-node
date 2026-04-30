@@ -323,7 +323,7 @@ router.post('/status', async (req, res) => {
       : String(CallStatus || '').toLowerCase();
     await outboundCampaignService.syncCallUpdate(CallSid, mappedStatus);
     
-    res.sendStatus(200);
+    res.sendStatus(204);
   } catch (error) {
     logger.error('Error handling call status update:', error);
     res.sendStatus(500);

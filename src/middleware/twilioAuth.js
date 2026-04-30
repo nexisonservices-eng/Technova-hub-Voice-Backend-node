@@ -1,6 +1,7 @@
 import twilio from 'twilio';
 import logger from '../utils/logger.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
+import Call from '../models/call.js';
 
 const normalizePhone = (value) => {
   const digits = String(value || '').replace(/[^\d+]/g, '');
@@ -23,17 +24,46 @@ const allowUnsignedInDev = () =>
 
 const resolveAuthContext = async (req) => {
   const fromNumber = normalizePhone(req.body?.From || req.query?.From || '');
+  const toNumber = normalizePhone(req.body?.To || req.query?.To || '');
+  const queryUserId = String(req.query?.userId || '').trim();
+  const callSid = String(
+    req.body?.CallSid ||
+    req.query?.CallSid ||
+    req.body?.callSid ||
+    req.query?.callSid ||
+    ''
+  ).trim();
   let authToken = '';
   let tenant = null;
 
-  if (fromNumber) {
-    tenant = await adminCredentialsService.getTwilioCredentialsByPhoneNumber(fromNumber);
+  for (const phoneNumber of [fromNumber, toNumber]) {
+    if (!phoneNumber) continue;
+    tenant = await adminCredentialsService.getTwilioCredentialsByPhoneNumber(phoneNumber);
+    if (tenant?.twilioAuthToken) {
+      authToken = tenant.twilioAuthToken;
+      break;
+    }
+  }
+
+  if (!authToken && queryUserId) {
+    tenant = await adminCredentialsService.getTwilioCredentialsByUserId(queryUserId);
     if (tenant?.twilioAuthToken) {
       authToken = tenant.twilioAuthToken;
     }
   }
 
-  return { authToken, fromNumber, tenant };
+  if (!authToken && callSid) {
+    const call = await Call.findOne({ callSid }).select('user providerData.from').lean();
+    const callUserId = call?.user ? String(call.user) : '';
+    if (callUserId) {
+      tenant = await adminCredentialsService.getTwilioCredentialsByUserId(callUserId);
+      if (tenant?.twilioAuthToken) {
+        authToken = tenant.twilioAuthToken;
+      }
+    }
+  }
+
+  return { authToken, fromNumber: fromNumber || toNumber, tenant };
 };
 
 export const verifyTwilioRequest = async (req, res, next) => {
