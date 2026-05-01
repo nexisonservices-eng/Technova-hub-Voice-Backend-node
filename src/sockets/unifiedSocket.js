@@ -8,8 +8,16 @@ import { setupIVRWorkflowHandlers } from './ivrWorkflowSocket.js';
 import IVRWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import InboundCallController, { setSocketIO } from '../controllers/inboundCallController.js';
 import Workflow from '../models/Workflow.js';
+import InboundRoutingRule from '../models/InboundRoutingRule.js';
 import mongoose from 'mongoose';
 import { buildIVRMenuListPayload, formatIVRMenu } from '../services/ivrMenuSnapshotService.js';
+import {
+  buildInboundSnapshotPayload,
+  buildInboundOverviewPayload,
+  buildQueueSnapshotPayload,
+  buildRoutingRulesPayload,
+  mapRoutingRuleResponse
+} from '../services/inboundSnapshotService.js';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 
 let io;
@@ -71,6 +79,121 @@ const findWorkflowForUser = (menuId, userId) => {
     ? { _id: id, createdBy: userId }
     : { promptKey: id, createdBy: userId };
   return Workflow.findOne(query);
+};
+
+const emitInboundSnapshotToSocket = async (socket, userId, payload = {}) => {
+  const snapshot = await buildInboundSnapshotPayload(userId, payload);
+  socket.emit('inbound:snapshot', snapshot);
+  return snapshot;
+};
+
+const emitInboundOverviewToUser = async (userId, period = 'today') => {
+  if (!io || !userId) return null;
+  const overview = await buildInboundOverviewPayload(userId, period);
+  const payload = {
+    overview,
+    timestamp: new Date().toISOString()
+  };
+  io.to(getUserRoom(userId)).emit('inbound:call:update', payload);
+  return payload;
+};
+
+const emitInboundQueueSnapshotToUser = async (userId, queueName = '') => {
+  if (!io || !userId) return null;
+  const queues = await buildQueueSnapshotPayload(userId, queueName);
+  const payload = {
+    queueName,
+    queues,
+    queueStatus: queues,
+    timestamp: new Date().toISOString()
+  };
+  io.to(getUserRoom(userId)).emit('inbound:queue:update', payload);
+  io.to(getUserRoom(userId)).emit('queue_update', payload);
+  return payload;
+};
+
+const emitRoutingRulesToUser = async (userId, action = 'snapshot', rule = null) => {
+  if (!io || !userId) return null;
+  const routingRules = await buildRoutingRulesPayload(userId);
+  const payload = {
+    action,
+    rule,
+    routingRules,
+    timestamp: new Date().toISOString()
+  };
+  io.to(getUserRoom(userId)).emit('routing_rules:changed', payload);
+  io.to(getUserRoom(userId)).emit('inbound:routing_rules:update', payload);
+  return payload;
+};
+
+export const emitRoutingRulesSnapshot = async (userId, action = 'snapshot', rule = null) =>
+  emitRoutingRulesToUser(userId, action, rule);
+
+const validateAndPersistRoutingRule = async (incomingRule = {}, userId) => {
+  const payload = {
+    userId,
+    name: String(incomingRule.name || '').trim(),
+    priority: Number.isFinite(Number(incomingRule.priority)) ? Number(incomingRule.priority) : 1,
+    condition: String(incomingRule.condition || '').trim(),
+    action: String(incomingRule.action || '').trim(),
+    actionType: incomingRule.actionType === 'ivr' ? 'ivr' : 'custom',
+    ivrMenuId: String(incomingRule.ivrMenuId || '').trim(),
+    ivrPromptKey: String(incomingRule.ivrPromptKey || '').trim(),
+    enabled: typeof incomingRule.enabled === 'boolean' ? incomingRule.enabled : true
+  };
+
+  if (!payload.name || !payload.condition) {
+    throw new Error('name and condition are required');
+  }
+
+  if (payload.actionType === 'ivr') {
+    if (!payload.ivrPromptKey) {
+      throw new Error('ivrPromptKey is required for IVR actions');
+    }
+    if (!payload.action) {
+      payload.action = `ivr:${payload.ivrPromptKey}`;
+    }
+
+    let linkedWorkflow = null;
+    if (payload.ivrMenuId && mongoose.Types.ObjectId.isValid(payload.ivrMenuId)) {
+      linkedWorkflow = await Workflow.findOne({
+        _id: payload.ivrMenuId,
+        isActive: true,
+        status: 'active',
+        createdBy: userId
+      }).select('_id promptKey');
+    }
+    if (!linkedWorkflow) {
+      linkedWorkflow = await Workflow.findOne({
+        promptKey: payload.ivrPromptKey,
+        isActive: true,
+        status: 'active',
+        createdBy: userId
+      }).select('_id promptKey');
+    }
+    if (!linkedWorkflow) {
+      throw new Error('Linked IVR workflow not found or not active');
+    }
+
+    payload.ivrMenuId = String(linkedWorkflow._id);
+    payload.ivrPromptKey = String(linkedWorkflow.promptKey || payload.ivrPromptKey || '').trim();
+    payload.action = `ivr:${payload.ivrPromptKey}`;
+  } else if (!payload.action) {
+    throw new Error('action is required for custom actions');
+  }
+
+  const id = incomingRule.id || incomingRule._id;
+  if (id) {
+    const updated = await InboundRoutingRule.findOneAndUpdate(
+      { _id: id, userId },
+      { $set: payload },
+      { new: true, runValidators: true }
+    );
+    if (!updated) throw new Error('Routing rule not found');
+    return updated;
+  }
+
+  return InboundRoutingRule.create(payload);
 };
 
 const saveIVRMenuFromSocket = async (payload = {}, userId) => {
@@ -222,6 +345,126 @@ export function initializeSocketIO(socketIo) {
     if (socketUserId) {
       socket.join(getUserRoom(socketUserId));
     }
+
+    socket.on('inbound:subscribe', async (payload = {}, ack) => {
+      try {
+        if (!socketUserId) throw new Error('Unauthorized');
+        socket.join(getUserRoom(socketUserId));
+        const snapshot = await emitInboundSnapshotToSocket(socket, socketUserId, payload);
+        if (typeof ack === 'function') ack(snapshot);
+      } catch (error) {
+        const response = {
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+        socket.emit('inbound:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
+
+    socket.on('inbound:unsubscribe', () => {
+      if (socketUserId) {
+        socket.leave(getUserRoom(socketUserId));
+      }
+    });
+
+    socket.on('routing_rules:list', async (_payload = {}, ack) => {
+      try {
+        if (!socketUserId) throw new Error('Unauthorized');
+        const routingRules = await buildRoutingRulesPayload(socketUserId);
+        const response = {
+          success: true,
+          routingRules,
+          timestamp: new Date().toISOString()
+        };
+        socket.emit('inbound:routing_rules:update', response);
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        const response = {
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+        socket.emit('routing_rules:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
+
+    socket.on('routing_rules:create_or_update', async (data = {}, ack) => {
+      try {
+        if (!socketUserId) throw new Error('Unauthorized');
+        const savedRule = await validateAndPersistRoutingRule(data, socketUserId);
+        const rule = mapRoutingRuleResponse(savedRule);
+        await emitRoutingRulesToUser(socketUserId, data?.id || data?._id ? 'updated' : 'created', rule);
+        const response = {
+          success: true,
+          rule,
+          timestamp: new Date().toISOString()
+        };
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        const response = {
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+        socket.emit('routing_rules:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
+
+    socket.on('routing_rules:delete', async (data = {}, ack) => {
+      try {
+        if (!socketUserId) throw new Error('Unauthorized');
+        const ruleId = data.ruleId || data.id || data._id;
+        const deleted = await InboundRoutingRule.findOneAndDelete({ _id: ruleId, userId: socketUserId });
+        if (!deleted) throw new Error('Routing rule not found');
+        const rule = mapRoutingRuleResponse(deleted);
+        await emitRoutingRulesToUser(socketUserId, 'deleted', rule);
+        const response = {
+          success: true,
+          rule,
+          timestamp: new Date().toISOString()
+        };
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        const response = {
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+        socket.emit('routing_rules:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
+
+    socket.on('routing_rules:toggle', async (data = {}, ack) => {
+      try {
+        if (!socketUserId) throw new Error('Unauthorized');
+        const ruleId = data.ruleId || data.id || data._id;
+        const ruleDoc = await InboundRoutingRule.findOne({ _id: ruleId, userId: socketUserId });
+        if (!ruleDoc) throw new Error('Routing rule not found');
+        ruleDoc.enabled = !ruleDoc.enabled;
+        await ruleDoc.save();
+        const rule = mapRoutingRuleResponse(ruleDoc);
+        await emitRoutingRulesToUser(socketUserId, 'updated', rule);
+        const response = {
+          success: true,
+          rule,
+          timestamp: new Date().toISOString()
+        };
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        const response = {
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+        socket.emit('routing_rules:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
 
     socket.on('join_analytics_room', async (payload = {}) => {
       try {
@@ -726,6 +969,14 @@ export function initializeSocketIO(socketIo) {
               workflowData: formattedWorkflow,
               timestamp: new Date().toISOString()
             });
+            io.to(getUserRoom(userId)).emit('ivr_menu:changed', {
+              action: 'updated',
+              menuId: updatedWorkflow._id,
+              menuName: updatedWorkflow.promptKey,
+              ivrMenu: formattedWorkflow,
+              timestamp: new Date().toISOString()
+            });
+            await emitIVRMenuSnapshotToUser(userId);
 
             logger.info(`📡 Broadcasted workflow update to owner room for workflow ${workflowId}`);
           }
@@ -791,6 +1042,21 @@ export function emitCallUpdate(broadcastId, callData) {
     timestamp: new Date(),
     ...callData
   });
+}
+
+export function emitOutboundCallUpdate(userId, callData = {}) {
+  if (!io) return;
+  const payload = {
+    timestamp: new Date(),
+    ...callData
+  };
+
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('outbound_call_update', payload);
+    return;
+  }
+
+  io.emit('outbound_call_update', payload);
 }
 
 export function emitCallsCreated(broadcastId) {
@@ -888,14 +1154,23 @@ export function emitHealthUpdate(health) {
 // 🔹 Inbound call emit helpers
 export function emitInboundCallUpdate(callData) {
   if (!io) return;
-  io.emit('inbound_call_update', {
+  const payload = {
     timestamp: new Date(),
     ...callData
-  });
-  io.emit('inbound_data_updated', {
-    timestamp: new Date(),
-    ...callData
-  });
+  };
+  const userId = callData?.userId || callData?.user || callData?.createdBy || null;
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('inbound_call_update', payload);
+    io.to(getUserRoom(userId)).emit('inbound:call:update', payload);
+    io.to(getUserRoom(userId)).emit('inbound_data_updated', payload);
+    emitInboundOverviewToUser(userId).catch((error) => {
+      logger.error(`Failed emitting inbound overview for ${userId}:`, error);
+    });
+    return;
+  }
+  io.emit('inbound_call_update', payload);
+  io.emit('inbound:call:update', payload);
+  io.emit('inbound_data_updated', payload);
 }
 
 export function emitLeadUpdate(userId, payload = {}) {
@@ -919,14 +1194,23 @@ export function emitLeadUpdate(userId, payload = {}) {
 
 export function emitQueueUpdate(queueData) {
   if (!io) return;
-  io.emit('queue_update', {
+  const payload = {
     timestamp: new Date(),
     ...queueData
-  });
-  io.emit('queue_status_updated', {
-    timestamp: new Date(),
-    ...queueData
-  });
+  };
+  const userId = queueData?.userId || queueData?.user || null;
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('queue_update', payload);
+    io.to(getUserRoom(userId)).emit('queue_status_updated', payload);
+    io.to(getUserRoom(userId)).emit('inbound:queue:update', payload);
+    emitInboundQueueSnapshotToUser(userId, queueData?.queueName || '').catch((error) => {
+      logger.error(`Failed emitting queue snapshot for ${userId}:`, error);
+    });
+    return;
+  }
+  io.emit('queue_update', payload);
+  io.emit('queue_status_updated', payload);
+  io.emit('inbound:queue:update', payload);
 }
 
 export function emitIVRUpdate(callSid, ivrData) {

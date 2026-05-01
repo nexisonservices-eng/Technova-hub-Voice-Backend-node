@@ -17,6 +17,7 @@ import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
+import { emitOutboundCallUpdate, emitQueueUpdate } from '../sockets/unifiedSocket.js';
 
 const router = express.Router();
 
@@ -72,6 +73,63 @@ const resolveWebhookUserIdForCall = async (req, callSid) => {
   };
 
   return String(execution.userId);
+};
+
+const TERMINAL_OUTBOUND_STATUSES = new Set(['completed', 'failed', 'busy', 'no-answer', 'cancelled', 'canceled']);
+
+const mapTwilioOutboundStatus = (status = '') => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'canceled') return 'cancelled';
+  return normalized;
+};
+
+const buildOutboundCallPayload = (call, status, duration = 0) => {
+  const providerData = call?.providerData || {};
+  const updatedAt = call?.updatedAt || new Date();
+  return {
+    _id: call?._id,
+    callSid: call?.callSid || '',
+    status,
+    phoneNumber: call?.phoneNumber || '',
+    provider: call?.provider || providerData.provider || '',
+    duration: Number(call?.duration || duration || 0),
+    campaignId: providerData.campaignId || '',
+    campaignDbId: providerData.campaignDbId || '',
+    campaignName: providerData.campaignName || '',
+    contactId: providerData.contactId || '',
+    workflowId: providerData.workflowId || '',
+    voiceId: providerData.voiceId || '',
+    createdAt: call?.createdAt || updatedAt,
+    updatedAt,
+    ended: TERMINAL_OUTBOUND_STATUSES.has(String(status || '').toLowerCase())
+  };
+};
+
+const persistAndEmitOutboundCallStatus = async ({ callSid, status, duration = 0 }) => {
+  if (!callSid || !status) return null;
+
+  const ended = TERMINAL_OUTBOUND_STATUSES.has(status);
+  const update = {
+    status,
+    ...(duration > 0 ? { duration } : {}),
+    ...(ended ? { endTime: new Date() } : {})
+  };
+
+  const call = await Call.findOneAndUpdate(
+    {
+      callSid,
+      direction: 'outbound-local',
+      deletedAt: null
+    },
+    { $set: update },
+    { new: true }
+  ).lean();
+
+  if (!call) return null;
+
+  const payload = buildOutboundCallPayload(call, status, duration);
+  emitOutboundCallUpdate(String(call.user || ''), payload);
+  return { call, payload };
 };
 
 /**
@@ -175,7 +233,8 @@ router.post('/status', async (req, res) => {
     const mockReq = { body: callData };
     const mockRes = {
       status: () => {},
-      send: () => {}
+      send: () => {},
+      sendStatus: () => {}
     };
     
     // Use existing status handling
@@ -196,10 +255,22 @@ router.post('/status', async (req, res) => {
       }
     }
 
-    const mappedStatus = String(CallStatus || '').toLowerCase() === 'answered'
-      ? 'answered'
-      : String(CallStatus || '').toLowerCase();
-    await outboundCampaignService.syncCallUpdate(CallSid, mappedStatus);
+    const mappedStatus = mapTwilioOutboundStatus(CallStatus);
+    const duration = toPositiveInt(callData?.CallDuration || callData?.Duration || 0);
+    if (mappedStatus) {
+      await persistAndEmitOutboundCallStatus({
+        callSid: CallSid,
+        status: mappedStatus,
+        duration
+      });
+      const campaignStatus =
+        mappedStatus === 'cancelled' || mappedStatus === 'canceled'
+          ? 'failed'
+          : mappedStatus === 'in-progress'
+            ? 'answered'
+            : mappedStatus;
+      await outboundCampaignService.syncCallUpdate(CallSid, campaignStatus, duration);
+    }
     
     res.sendStatus(204);
   } catch (error) {
@@ -692,37 +763,14 @@ router.post('/queue/wait', async (req, res) => {
       }
     );
     
-    // Emit queue update via Socket.IO
-    const io = req.app.get('io');
-    if (io) {
-      const queueStatus = inboundCallService.getAllQueueStatus(webhookUserId || null);
-
-      io.emit('queue_position_update', {
-        callSid: CallSid,
-        queueSid: QueueSid,
-        queueName: normalizedQueueName,
-        position: toPositiveInt(queueEntry?.position, toPositiveInt(QueuePosition, 1)),
-        queueSize: toPositiveInt(CurrentQueueSize, syncResult?.queueLength || 0)
-      });
-      io.emit('caller_joined_queue', {
-        queueName: normalizedQueueName,
-        callSid: CallSid,
-        caller: {
-          callSid: CallSid,
-          phoneNumber: queueEntry?.phoneNumber || phoneNumber || '',
-          queuedAt: queueEntry?.queuedAt || new Date().toISOString(),
-          position: toPositiveInt(queueEntry?.position, toPositiveInt(QueuePosition, 1))
-        },
-        position: toPositiveInt(queueEntry?.position, toPositiveInt(QueuePosition, 1))
-      });
-      io.emit('queue_update', {
-        queueName: normalizedQueueName,
-        callSid: CallSid,
-        position: toPositiveInt(queueEntry?.position, toPositiveInt(QueuePosition, 1)),
-        queueSize: toPositiveInt(CurrentQueueSize, syncResult?.queueLength || 0),
-        queueStatus
-      });
-    }
+    emitQueueUpdate({
+      userId: webhookUserId || null,
+      queueName: normalizedQueueName,
+      callSid: CallSid,
+      position: toPositiveInt(queueEntry?.position, toPositiveInt(QueuePosition, 1)),
+      queueSize: toPositiveInt(CurrentQueueSize, syncResult?.queueLength || 0),
+      queueStatus: inboundCallService.getAllQueueStatus(webhookUserId || null)
+    });
     
     // Generate wait TwiML
     const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -803,22 +851,14 @@ router.post('/queue/leave', async (req, res) => {
       }
     );
 
-    // Emit queue leave event via Socket.IO
-    const io = req.app.get('io');
-    if (io) {
-      const queueStatus = inboundCallService.getAllQueueStatus(webhookUserId || null);
-      io.emit('caller_left_queue', {
-        queueName: normalizedQueueName,
-        callSid: CallSid,
-        result: QueueResult
-      });
-      io.emit('queue_update', {
-        queueName: normalizedQueueName,
-        callSid: CallSid,
-        action: removed ? 'left' : 'left_noop',
-        queueStatus
-      });
-    }
+    emitQueueUpdate({
+      userId: webhookUserId || null,
+      queueName: normalizedQueueName,
+      callSid: CallSid,
+      action: removed ? 'left' : 'left_noop',
+      result: QueueResult,
+      queueStatus: inboundCallService.getAllQueueStatus(webhookUserId || null)
+    });
     
     // Generate response based on queue result
     const VoiceResponse = twilio.twiml.VoiceResponse;

@@ -189,6 +189,26 @@ class OutboundLocalController {
     return xmlBody;
   }
 
+  buildTwilioIntroRedirectTwiML({ audioUrl = '', script = '', redirectUrl = '' }) {
+    const escapeXml = (value = '') =>
+      String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+
+    let xmlBody = '<?xml version="1.0" encoding="UTF-8"?><Response>';
+    if (audioUrl) {
+      xmlBody += `<Play>${escapeXml(audioUrl)}</Play>`;
+    } else if (script) {
+      xmlBody += `<Say voice="alice" language="en-IN">${escapeXml(script)}</Say>`;
+    }
+    xmlBody += `<Redirect method="POST">${escapeXml(redirectUrl)}</Redirect>`;
+    xmlBody += '</Response>';
+    return xmlBody;
+  }
+
   async resolveScriptAudioAsset({ script = '', userObjectId = null, voice = 'en-GB-SoniaNeural', language = 'en-GB' }) {
     const text = String(script || '').trim();
     if (!text) {
@@ -442,9 +462,25 @@ class OutboundLocalController {
           timeout: 25
         };
 
+        if (resolvedWorkflow && !baseUrl) {
+          return res.status(400).json({
+            success: false,
+            message: 'BASE_URL is required for Twilio outbound IVR callbacks. Configure a public backend URL before launching an IVR call.'
+          });
+        }
+
         if (resolvedWorkflow && baseUrl) {
-          callPayload.url = `${baseUrl}/webhook/outbound-local/workflow/start/${resolvedWorkflow.workflowId}?userId=${encodeURIComponent(String(userObjectId))}`;
-          callPayload.method = 'POST';
+          const workflowStartUrl = `${baseUrl}/webhook/outbound-local/workflow/start/${resolvedWorkflow.workflowId}?userId=${encodeURIComponent(String(userObjectId))}`;
+          if (resolvedAudioUrl || resolvedScript) {
+            callPayload.twiml = this.buildTwilioIntroRedirectTwiML({
+              audioUrl: resolvedAudioUrl || '',
+              script: resolvedScript || '',
+              redirectUrl: workflowStartUrl
+            });
+          } else {
+            callPayload.url = workflowStartUrl;
+            callPayload.method = 'POST';
+          }
         } else {
           const twiml = this.buildTwilioTwiML({
             audioUrl: resolvedAudioUrl || '',

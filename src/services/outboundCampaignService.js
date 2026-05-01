@@ -12,6 +12,7 @@ import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { emitCampaignUpdate, emitOutboundMetrics } from '../sockets/unifiedSocket.js';
+import { parseScheduledDateInTimezone } from '../utils/timezoneDate.js';
 
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
 const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
@@ -75,6 +76,7 @@ const parsePositiveInt = (value, fallback) => {
 };
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const isValidTimeWindow = (value = '') => /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(value || '').trim());
 
@@ -126,6 +128,7 @@ class OutboundCampaignService {
   constructor() {
     this.audioCache = new Map();
     this.executionLocks = new Map();
+    this.metricRefreshTimers = new Map();
   }
 
   toCampaignPayload(campaign = {}) {
@@ -227,6 +230,19 @@ class OutboundCampaignService {
     return response.toString();
   }
 
+  buildTwilioCampaignIntroRedirectTwiML({ audioUrl = '', script = '', redirectUrl = '' }) {
+    const response = new twilio.twiml.VoiceResponse();
+
+    if (audioUrl) {
+      response.play(audioUrl);
+    } else if (script) {
+      response.say({ voice: 'alice', language: 'en-IN' }, script);
+    }
+
+    response.redirect({ method: 'POST' }, redirectUrl);
+    return response.toString();
+  }
+
   async resolveScriptAudioAsset({ script = '', voiceId = 'en-GB-SoniaNeural', language = 'en-GB' }) {
     const text = String(script || '').trim();
     if (!text) {
@@ -290,8 +306,8 @@ class OutboundCampaignService {
     const timezone = String(payload?.timezone || payload?.schedule?.timezone || DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE;
     const allowedWindowStart = String(payload?.allowedWindowStart || payload?.schedule?.allowedWindowStart || DEFAULT_ALLOWED_WINDOW_START).trim();
     const allowedWindowEnd = String(payload?.allowedWindowEnd || payload?.schedule?.allowedWindowEnd || DEFAULT_ALLOWED_WINDOW_END).trim();
-    const scheduledAtRaw = payload?.scheduledAt || payload?.schedule?.scheduledAt || null;
-    const scheduledAt = scheduledAtRaw ? new Date(scheduledAtRaw) : null;
+    const scheduledAtRaw = payload?.scheduledAt || payload?.scheduledAtLocal || payload?.schedule?.scheduledAt || null;
+    const scheduledAt = parseScheduledDateInTimezone(scheduledAtRaw, timezone);
 
     return {
       scheduleType,
@@ -501,6 +517,7 @@ class OutboundCampaignService {
             workflowId: workflow?.workflowId ? String(workflow.workflowId) : '',
             provider,
             scheduledAt: scheduledAt && !Number.isNaN(scheduledAt.getTime()) ? scheduledAt.toISOString() : '',
+            scheduledAtLocal: String(payload?.scheduledAtLocal || payload?.scheduledAt || '').trim(),
             allowedWindowStart,
             allowedWindowEnd
           }
@@ -683,14 +700,26 @@ class OutboundCampaignService {
         throw new Error('BASE_URL is required for outbound IVR callbacks.');
       }
 
+      const workflowStartUrl = workflow?.workflowId
+        ? `${baseUrl}/webhook/outbound-local/workflow/start/${workflow.workflowId}?campaignId=${encodeURIComponent(campaign.campaignId)}&contactId=${encodeURIComponent(String(contact._id))}`
+        : '';
+      const hasIntroMessage = Boolean(audioAsset.audioUrl || campaign.message);
       const callPayload = {
         to: contact.phone,
         from: fromNumber,
         ...(workflow?.workflowId
-          ? {
-              url: `${baseUrl}/webhook/outbound-local/workflow/start/${workflow.workflowId}?campaignId=${encodeURIComponent(campaign.campaignId)}&contactId=${encodeURIComponent(String(contact._id))}`,
-              method: 'POST'
-            }
+          ? hasIntroMessage
+            ? {
+                twiml: this.buildTwilioCampaignIntroRedirectTwiML({
+                  audioUrl: audioAsset.audioUrl || '',
+                  script: campaign.message || '',
+                  redirectUrl: workflowStartUrl
+                })
+              }
+            : {
+                url: workflowStartUrl,
+                method: 'POST'
+              }
           : {
               twiml: this.buildTwilioCampaignTwiML({
                 audioUrl: audioAsset.audioUrl || '',
@@ -823,6 +852,50 @@ class OutboundCampaignService {
     return updatedCampaign;
   }
 
+  scheduleCampaignMetricRefresh(campaignId, userId = '') {
+    const key = String(campaignId || '');
+    if (!key) return;
+
+    const existingTimer = this.metricRefreshTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(async () => {
+      this.metricRefreshTimers.delete(key);
+      try {
+        const campaign = await this.refreshCampaignMetrics(key);
+        if (campaign) {
+          emitOutboundMetrics(String(userId || campaign.userId || ''), {
+            mode: campaign.schedule?.enabled ? 'scheduled' : 'bulk',
+            campaignId: campaign.campaignId,
+            campaignName: campaign.name,
+            total: Number(campaign.contactSummary?.total || 0),
+            initiated: Number(campaign.metrics?.initiated || 0),
+            failed: Number(campaign.metrics?.failed || 0) + Number(campaign.metrics?.busy || 0) + Number(campaign.metrics?.noAnswer || 0),
+            successRate: Number(campaign.contactSummary?.total || 0) > 0
+              ? Math.round((Number(campaign.metrics?.initiated || 0) / Number(campaign.contactSummary?.total || 1)) * 100)
+              : 0,
+            progress: Number(campaign.contactSummary?.total || 0) > 0
+              ? Math.round((Number(campaign.contactSummary?.contacted || 0) / Number(campaign.contactSummary?.total || 1)) * 100)
+              : 0,
+            completed: ['completed', 'failed', 'partial'].includes(String(campaign.status || '').toLowerCase())
+          });
+        }
+      } catch (error) {
+        logger.warn('Throttled outbound campaign metrics refresh failed.', {
+          campaignId: key,
+          message: error.message
+        });
+      }
+    }, 500);
+
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    this.metricRefreshTimers.set(key, timer);
+  }
+
   async syncCallUpdate(callSid, status, duration = 0) {
     const call = await Call.findOne({ callSid }).select('providerData user').lean();
     if (!call?.providerData?.campaignDbId || !call?.providerData?.contactId) {
@@ -838,24 +911,7 @@ class OutboundCampaignService {
     });
 
     await this.syncResponsesFromExecution(callSid);
-    const campaign = await this.refreshCampaignMetrics(call.providerData.campaignDbId);
-    if (campaign) {
-      emitOutboundMetrics(String(call.user || campaign.userId || ''), {
-        mode: campaign.schedule?.enabled ? 'scheduled' : 'bulk',
-        campaignId: campaign.campaignId,
-        campaignName: campaign.name,
-        total: Number(campaign.contactSummary?.total || 0),
-        initiated: Number(campaign.metrics?.initiated || 0),
-        failed: Number(campaign.metrics?.failed || 0) + Number(campaign.metrics?.busy || 0) + Number(campaign.metrics?.noAnswer || 0),
-        successRate: Number(campaign.contactSummary?.total || 0) > 0
-          ? Math.round((Number(campaign.metrics?.initiated || 0) / Number(campaign.contactSummary?.total || 1)) * 100)
-          : 0,
-        progress: Number(campaign.contactSummary?.total || 0) > 0
-          ? Math.round((Number(campaign.contactSummary?.contacted || 0) / Number(campaign.contactSummary?.total || 1)) * 100)
-          : 0,
-        completed: ['completed', 'failed', 'partial'].includes(String(campaign.status || '').toLowerCase())
-      });
-    }
+    this.scheduleCampaignMetricRefresh(call.providerData.campaignDbId, call.user);
   }
 
   async syncResponsesFromExecution(callSid) {
@@ -889,14 +945,34 @@ class OutboundCampaignService {
     });
   }
 
-  async listCampaigns(userId, { page = 1, limit = 20 } = {}) {
+  async listCampaigns(userId, { page = 1, limit = 20, search = '', status = 'all', recurrence = 'all' } = {}) {
     const pageNum = Math.max(1, Number(page) || 1);
     const limitNum = Math.max(1, Math.min(100, Number(limit) || 20));
     const skip = (pageNum - 1) * limitNum;
+    const query = { userId };
+    const normalizedStatus = String(status || 'all').trim().toLowerCase();
+    const normalizedRecurrence = String(recurrence || 'all').trim().toLowerCase();
+    const searchText = String(search || '').trim();
+
+    if (normalizedStatus && normalizedStatus !== 'all') {
+      query.status = normalizedStatus;
+    }
+
+    if (normalizedRecurrence && normalizedRecurrence !== 'all') {
+      query['schedule.recurrence'] = normalizedRecurrence;
+    }
+
+    if (searchText) {
+      const pattern = new RegExp(escapeRegExp(searchText), 'i');
+      query.$or = [
+        { name: pattern },
+        { campaignId: pattern }
+      ];
+    }
 
     const [items, total] = await Promise.all([
-      OutboundCampaign.find({ userId }).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-      OutboundCampaign.countDocuments({ userId })
+      OutboundCampaign.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      OutboundCampaign.countDocuments(query)
     ]);
 
     return {

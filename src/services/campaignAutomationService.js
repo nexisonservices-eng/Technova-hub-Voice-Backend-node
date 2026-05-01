@@ -5,6 +5,7 @@ import Broadcast from '../models/Broadcast.js';
 import Call from '../models/call.js';
 import exotelService from './ExotelService.js';
 import logger from '../utils/logger.js';
+import { parseScheduledDateInTimezone } from '../utils/timezoneDate.js';
 import {
   emitCampaignUpdate,
   emitRetryStats,
@@ -159,10 +160,10 @@ class CampaignAutomationService {
 
     const recurrence = payload?.recurrence || 'daily';
     const metadata = payload?.metadata || {};
-    const scheduledAtRaw = metadata?.scheduledAt || payload?.scheduledAt || null;
-    const scheduledAt = scheduledAtRaw ? new Date(scheduledAtRaw) : null;
     const allowedWindowStart = metadata?.allowedWindowStart || payload?.allowedWindowStart || '09:00';
     const timezone = String(payload?.timezone || DEFAULT_TIMEZONE);
+    const scheduledAtRaw = metadata?.scheduledAt || metadata?.scheduledAtLocal || payload?.scheduledAt || null;
+    const scheduledAt = parseScheduledDateInTimezone(scheduledAtRaw, timezone);
     const nextRunAt = this.computeNextRunAt({
       recurrence,
       timezone,
@@ -248,7 +249,10 @@ class CampaignAutomationService {
           : this.computeNextRunAt({
               recurrence: schedule.recurrence,
               timezone: schedule.timezone,
-              scheduledAt: schedule.metadata?.scheduledAt ? new Date(schedule.metadata.scheduledAt) : null,
+              scheduledAt: parseScheduledDateInTimezone(
+                schedule.metadata?.scheduledAt || schedule.metadata?.scheduledAtLocal,
+                schedule.timezone
+              ),
               allowedWindowStart: schedule.metadata?.allowedWindowStart || '09:00',
               fromDate: new Date()
             });
@@ -611,7 +615,10 @@ class CampaignAutomationService {
       scheduleDoc.nextRunAt = this.computeNextRunAt({
         recurrence: scheduleDoc.recurrence,
         timezone: scheduleDoc.timezone,
-        scheduledAt: scheduleDoc.metadata?.scheduledAt ? new Date(scheduleDoc.metadata.scheduledAt) : null,
+        scheduledAt: parseScheduledDateInTimezone(
+          scheduleDoc.metadata?.scheduledAt || scheduleDoc.metadata?.scheduledAtLocal,
+          scheduleDoc.timezone
+        ),
         allowedWindowStart: scheduleDoc.metadata?.allowedWindowStart || '09:00',
         fromDate: new Date()
       });

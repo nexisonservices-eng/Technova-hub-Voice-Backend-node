@@ -741,6 +741,7 @@ class InboundCallService {
 
     // Emit real-time queue update
     emitQueueUpdate({
+      userId: queueEntry.userId || null,
       queueName,
       action: 'joined',
       callSid,
@@ -841,6 +842,7 @@ class InboundCallService {
     const index = queue.findIndex(entry => entry.callSid === callSid);
     if (index === -1) return false;
 
+    const removedEntry = queue[index];
     queue.splice(index, 1);
 
     // Update positions for remaining calls
@@ -853,6 +855,7 @@ class InboundCallService {
 
     // Emit queue update
     emitQueueUpdate({
+      userId: removedEntry?.userId || null,
       queueName,
       action: 'left',
       callSid,
@@ -869,6 +872,7 @@ class InboundCallService {
       const index = queue.findIndex((entry) => String(entry.callSid) === String(callSid));
       if (index === -1) continue;
 
+      const removedEntry = queue[index];
       queue.splice(index, 1);
       queue.forEach((entry, idx) => {
         entry.position = idx + 1;
@@ -876,6 +880,7 @@ class InboundCallService {
       });
 
       emitQueueUpdate({
+        userId: removedEntry?.userId || null,
         queueName,
         action: 'left',
         callSid,
@@ -899,6 +904,7 @@ class InboundCallService {
 
     // Emit position update
     emitQueueUpdate({
+      userId: entry.userId || null,
       queueName,
       action: 'position_update',
       callSid,

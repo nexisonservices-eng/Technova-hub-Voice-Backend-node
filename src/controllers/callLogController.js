@@ -7,6 +7,14 @@ import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 import { getUserObjectId } from '../utils/authContext.js';
 
+const clampPositiveInt = (value, fallback, max) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return Math.min(parsed, max);
+};
+
+const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 class CallLogController {
     /**
      * Get call logs with filtering and pagination
@@ -41,11 +49,12 @@ class CallLogController {
 
             if (status) filter.status = status;
             if (direction) filter.direction = direction;
-            if (phoneNumber) filter.phoneNumber = new RegExp(phoneNumber, 'i');
+            if (phoneNumber) filter.phoneNumber = new RegExp(escapeRegExp(phoneNumber), 'i');
 
             // Calculate pagination
-            const skip = (parseInt(page) - 1) * parseInt(limit);
-            const limitNum = parseInt(limit);
+            const pageNum = clampPositiveInt(page, 1, Number.MAX_SAFE_INTEGER);
+            const limitNum = clampPositiveInt(limit, 20, 100);
+            const skip = (pageNum - 1) * limitNum;
 
             // Execute query with pagination
             const [calls, total] = await Promise.all([
@@ -58,11 +67,11 @@ class CallLogController {
                 Call.countDocuments(filter)
             ]);
 
-            logger.info(`Retrieved ${calls.length} call logs (page ${page}, total: ${total})`);
+            logger.info(`Retrieved ${calls.length} call logs (page ${pageNum}, total: ${total})`);
 
             res.json(ResponseFormatter.paginated(
                 calls,
-                parseInt(page),
+                pageNum,
                 limitNum,
                 total
             ));

@@ -31,11 +31,14 @@ const callSchema = new mongoose.Schema(
       enum: [
         'initiated',
         'ringing',
+        'answered',
         'in-progress',
         'completed',
         'failed',
         'busy',
-        'no-answer'
+        'no-answer',
+        'cancelled',
+        'canceled'
       ],
       default: 'initiated'
     },
@@ -158,12 +161,17 @@ const callSchema = new mongoose.Schema(
 ====================== */
 
 callSchema.index({ companyId: 1, user: 1, createdAt: -1 });
+callSchema.index({ user: 1, direction: 1, createdAt: -1 });
+callSchema.index({ user: 1, direction: 1, deletedAt: 1, createdAt: -1 });
+callSchema.index({ user: 1, direction: 1, deletedAt: 1, status: 1, createdAt: -1 });
+callSchema.index({ user: 1, direction: 1, deletedAt: 1, phoneNumber: 1 });
 callSchema.index({ phoneNumber: 1 });
 callSchema.index({ status: 1 });
 callSchema.index({ direction: 1 });
 callSchema.index({ createdAt: -1, status: 1, direction: 1 }); // Compound index for filtering
 callSchema.index({ deletedAt: 1 }); // For soft delete queries
 callSchema.index({ user: 1, direction: 1, queued: 1, deletedAt: 1, queueName: 1, queuePosition: 1 });
+callSchema.index({ user: 1, direction: 1, queued: 1, deletedAt: 1, queueName: 1, queuePosition: 1, queueEnteredAt: 1 });
 
 /* ======================
    Instance Methods

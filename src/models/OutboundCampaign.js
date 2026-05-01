@@ -123,6 +123,10 @@ const outboundCampaignSchema = new mongoose.Schema(
 );
 
 outboundCampaignSchema.index({ userId: 1, createdAt: -1 });
+outboundCampaignSchema.index({ userId: 1, status: 1, createdAt: -1 });
+outboundCampaignSchema.index({ userId: 1, 'schedule.recurrence': 1, createdAt: -1 });
+outboundCampaignSchema.index({ userId: 1, campaignId: 1 });
+outboundCampaignSchema.index({ userId: 1, name: 1 });
 outboundCampaignSchema.index({ userId: 1, status: 1, provider: 1 });
 
 const OutboundCampaign = mongoose.model('OutboundCampaign', outboundCampaignSchema);

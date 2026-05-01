@@ -10,6 +10,7 @@ import Workflow from '../models/Workflow.js';
 import mongoose from 'mongoose';
 import twilio from 'twilio';
 import { getUserObjectId } from '../utils/authContext.js';
+import { emitRoutingRulesSnapshot } from '../sockets/unifiedSocket.js';
 
 const router = express.Router();
 
@@ -205,6 +206,7 @@ router.post('/routing/rules', async (req, res) => {
       success: true,
       data: mapRuleResponse(savedRule)
     });
+    emitRoutingRulesSnapshot(userId, id ? 'updated' : 'created', mapRuleResponse(savedRule)).catch(() => {});
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -222,6 +224,7 @@ router.delete('/routing/rules/:ruleId', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Routing rule not found' });
     }
     res.json({ success: true, data: { id: ruleId, deleted: true } });
+    emitRoutingRulesSnapshot(userId, 'deleted', mapRuleResponse(deleted)).catch(() => {});
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -247,6 +250,7 @@ router.patch('/routing/rules/:ruleId/toggle', async (req, res) => {
       success: true,
       data: mapRuleResponse(rule)
     });
+    emitRoutingRulesSnapshot(userId, 'updated', mapRuleResponse(rule)).catch(() => {});
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
