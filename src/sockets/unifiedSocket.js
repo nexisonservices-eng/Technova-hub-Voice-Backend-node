@@ -7,6 +7,10 @@ import { verifyOrResolveToken } from '../middleware/auth.js';
 import { setupIVRWorkflowHandlers } from './ivrWorkflowSocket.js';
 import IVRWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import InboundCallController, { setSocketIO } from '../controllers/inboundCallController.js';
+import Workflow from '../models/Workflow.js';
+import mongoose from 'mongoose';
+import { buildIVRMenuListPayload, formatIVRMenu } from '../services/ivrMenuSnapshotService.js';
+import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 
 let io;
 let initialized = false;
@@ -24,6 +28,149 @@ const resolveUserId = (user) =>
 export const getUserRoom = (userId) => `${USER_ROOM_PREFIX}${String(userId)}`;
 const getAnalyticsRoom = (userId) =>
   userId ? `${ANALYTICS_ROOM}:${String(userId)}` : ANALYTICS_ROOM;
+
+const emitIVRMenuSnapshot = async (target, userId) => {
+  const payload = await buildIVRMenuListPayload(userId);
+  target.emit('ivr_menu:list:success', payload);
+  // Legacy event kept for screens that have not migrated yet.
+  target.emit('ivr_menus_list', { menus: payload.ivrMenus, ...payload });
+  return payload;
+};
+
+const emitIVRMenuSnapshotToUser = async (userId) => {
+  if (!io) return null;
+  const payload = await buildIVRMenuListPayload(userId);
+  io.to(getUserRoom(userId)).emit('ivr_menu:list:success', payload);
+  io.to(getUserRoom(userId)).emit('ivr_menus_list', { menus: payload.ivrMenus, ...payload });
+  return payload;
+};
+
+const emitIVRMenuError = (socket, error) => {
+  const payload = {
+    success: false,
+    error: error?.message || String(error || 'Failed to process IVR menu request'),
+    timestamp: new Date().toISOString()
+  };
+  socket.emit('ivr_menu:list:error', payload);
+  socket.emit('ivr_menus_error', payload);
+  return payload;
+};
+
+const buildWorkflowConfig = (config = {}) => ({
+  voiceId: config.voiceId || config.voice || 'en-GB-SoniaNeural',
+  language: config.language || 'en-GB',
+  provider: config.provider || 'edge',
+  timeout: config.timeout || 10,
+  maxAttempts: config.maxAttempts || config.maxRetries || 3,
+  invalidInputMessage: config.invalidInputMessage || 'Invalid selection. Please try again.'
+});
+
+const findWorkflowForUser = (menuId, userId) => {
+  const id = String(menuId || '').trim();
+  const query = mongoose.Types.ObjectId.isValid(id)
+    ? { _id: id, createdBy: userId }
+    : { promptKey: id, createdBy: userId };
+  return Workflow.findOne(query);
+};
+
+const saveIVRMenuFromSocket = async (payload = {}, userId) => {
+  const menuName = String(payload.menuName || payload.promptKey || payload.displayName || '').trim();
+  const config = payload.config || {};
+  if (!menuName) {
+    throw new Error('Menu name is required');
+  }
+  if (!config || typeof config !== 'object') {
+    throw new Error('Config must be a valid object');
+  }
+
+  const existing = await findWorkflowForUser(menuName, userId);
+  const workflowConfig = {
+    promptKey: existing?.promptKey || menuName,
+    displayName: config.displayName || existing?.displayName || menuName,
+    nodes: Array.isArray(config.nodes) ? config.nodes : [],
+    edges: Array.isArray(config.edges) ? config.edges : [],
+    config: buildWorkflowConfig(config.config || config),
+    tags: Array.isArray(config.tags) ? config.tags : [],
+    status: config.status || existing?.status || 'draft',
+    isActive: true,
+    lastModifiedBy: userId
+  };
+
+  let workflow;
+  let action;
+  if (existing) {
+    Object.assign(existing, workflowConfig);
+    workflow = await existing.save();
+    action = 'updated';
+  } else {
+    workflow = await Workflow.create({
+      ...workflowConfig,
+      createdBy: userId
+    });
+    action = 'created';
+  }
+
+  return { workflow, action };
+};
+
+const collectAudioAssetIds = (workflow) => {
+  const publicIds = new Set();
+  const add = (value) => {
+    if (typeof value === 'string' && value.trim()) {
+      publicIds.add(value.trim());
+    }
+  };
+  const collectFromNode = (node = {}) => {
+    const data = node.data || {};
+    [
+      node.audioPublicId,
+      node.audio_public_id,
+      node.audioAssetId,
+      node.audio_asset_id,
+      node.cloudinaryPublicId,
+      node.publicId,
+      data.audioPublicId,
+      data.audio_public_id,
+      data.audioAssetId,
+      data.audio_asset_id,
+      data.cloudinaryPublicId,
+      data.publicId
+    ].forEach(add);
+  };
+
+  (workflow?.nodes || []).forEach(collectFromNode);
+  (workflow?.workflowConfig?.nodes || []).forEach(collectFromNode);
+  (workflow?.audioFiles || []).forEach((file) => {
+    [file?.audioAssetId, file?.cloudinaryPublicId, file?.publicId].forEach(add);
+  });
+
+  return [...publicIds];
+};
+
+const deleteIVRMenuFromSocket = async (payload = {}, userId) => {
+  const menuId = String(payload.menuId || payload.id || payload._id || '').trim();
+  if (!menuId) {
+    throw new Error('Menu ID is required');
+  }
+
+  const workflow = await findWorkflowForUser(menuId, userId);
+  if (!workflow) {
+    throw new Error('IVR menu not found');
+  }
+
+  const deletedAudioAssetIds = [];
+  for (const publicId of collectAudioAssetIds(workflow)) {
+    try {
+      await deleteFromCloudinary(publicId);
+      deletedAudioAssetIds.push(publicId);
+    } catch (error) {
+      logger.warn(`Failed deleting Cloudinary asset ${publicId}: ${error.message}`);
+    }
+  }
+
+  await Workflow.deleteOne({ _id: workflow._id, createdBy: userId });
+  return { workflow, deletedAudioAssetIds };
+};
 
 export function initializeSocketIO(socketIo) {
   if (initialized) {
@@ -230,6 +377,110 @@ export function initializeSocketIO(socketIo) {
       } catch (error) {
         logger.error('Failed to send IVR performance metrics:', error);
         socket.emit('ivr_performance_error', { error: error.message });
+      }
+    });
+
+    const handleIVRMenuListRequest = async (_data = {}, ack) => {
+      try {
+        const userId = resolveUserId(socket.user);
+        if (!userId) {
+          const errorPayload = emitIVRMenuError(socket, new Error('Unauthorized'));
+          if (typeof ack === 'function') ack(errorPayload);
+          return;
+        }
+
+        const payload = await emitIVRMenuSnapshot(socket, userId);
+        if (typeof ack === 'function') ack(payload);
+        logger.info(`Sent IVR menus list to client ${socket.id}: ${payload.count} menus`);
+      } catch (error) {
+        logger.error(`Error sending IVR menus to client ${socket.id}:`, error);
+        const errorPayload = emitIVRMenuError(socket, error);
+        if (typeof ack === 'function') ack(errorPayload);
+      }
+    };
+
+    socket.on('ivr_menu:list', handleIVRMenuListRequest);
+
+    socket.on('ivr_menu:create', async (data = {}, ack) => {
+      try {
+        const userId = resolveUserId(socket.user);
+        if (!userId) throw new Error('Unauthorized');
+
+        const { workflow, action } = await saveIVRMenuFromSocket(data, userId);
+        const formattedMenu = formatIVRMenu(workflow);
+        const eventData = {
+          action,
+          menuId: workflow._id,
+          menuName: workflow.promptKey,
+          ivrMenu: formattedMenu,
+          timestamp: new Date().toISOString()
+        };
+
+        io.to(getUserRoom(userId)).emit('ivr_menu:changed', eventData);
+        io.to(getUserRoom(userId)).emit(action === 'created' ? 'ivr_config_created' : 'ivr_config_updated', eventData);
+        const snapshot = await emitIVRMenuSnapshotToUser(userId);
+        const response = { success: true, action, ivrMenu: formattedMenu, snapshot, timestamp: eventData.timestamp };
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        logger.error(`IVR menu create socket error for ${socket.id}:`, error);
+        const response = { success: false, error: error.message, timestamp: new Date().toISOString() };
+        socket.emit('ivr_menu:list:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
+
+    socket.on('ivr_menu:update', async (data = {}, ack) => {
+      try {
+        const userId = resolveUserId(socket.user);
+        if (!userId) throw new Error('Unauthorized');
+
+        const { workflow } = await saveIVRMenuFromSocket(data, userId);
+        const formattedMenu = formatIVRMenu(workflow);
+        const eventData = {
+          action: 'updated',
+          menuId: workflow._id,
+          menuName: workflow.promptKey,
+          ivrMenu: formattedMenu,
+          timestamp: new Date().toISOString()
+        };
+
+        io.to(getUserRoom(userId)).emit('ivr_menu:changed', eventData);
+        io.to(getUserRoom(userId)).emit('ivr_config_updated', eventData);
+        const snapshot = await emitIVRMenuSnapshotToUser(userId);
+        const response = { success: true, action: 'updated', ivrMenu: formattedMenu, snapshot, timestamp: eventData.timestamp };
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        logger.error(`IVR menu update socket error for ${socket.id}:`, error);
+        const response = { success: false, error: error.message, timestamp: new Date().toISOString() };
+        socket.emit('ivr_menu:list:error', response);
+        if (typeof ack === 'function') ack(response);
+      }
+    });
+
+    socket.on('ivr_menu:delete', async (data = {}, ack) => {
+      try {
+        const userId = resolveUserId(socket.user);
+        if (!userId) throw new Error('Unauthorized');
+
+        const { workflow, deletedAudioAssetIds } = await deleteIVRMenuFromSocket(data, userId);
+        const eventData = {
+          action: 'deleted',
+          menuId: workflow._id,
+          menuName: workflow.promptKey,
+          deletedAudioAssetIds,
+          timestamp: new Date().toISOString()
+        };
+
+        io.to(getUserRoom(userId)).emit('ivr_menu:changed', eventData);
+        io.to(getUserRoom(userId)).emit('ivr_config_deleted', eventData);
+        const snapshot = await emitIVRMenuSnapshotToUser(userId);
+        const response = { success: true, action: 'deleted', menuId: workflow._id, snapshot, timestamp: eventData.timestamp };
+        if (typeof ack === 'function') ack(response);
+      } catch (error) {
+        logger.error(`IVR menu delete socket error for ${socket.id}:`, error);
+        const response = { success: false, error: error.message, timestamp: new Date().toISOString() };
+        socket.emit('ivr_menu:list:error', response);
+        if (typeof ack === 'function') ack(response);
       }
     });
 
@@ -645,6 +896,25 @@ export function emitInboundCallUpdate(callData) {
     timestamp: new Date(),
     ...callData
   });
+}
+
+export function emitLeadUpdate(userId, payload = {}) {
+  if (!io) return;
+  const eventPayload = {
+    timestamp: new Date().toISOString(),
+    ...payload
+  };
+
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('lead_update', eventPayload);
+    io.to(getUserRoom(userId)).emit('lead:updated', eventPayload);
+    io.to(getUserRoom(userId)).emit('inbound_lead_update', eventPayload);
+    return;
+  }
+
+  io.emit('lead_update', eventPayload);
+  io.emit('lead:updated', eventPayload);
+  io.emit('inbound_lead_update', eventPayload);
 }
 
 export function emitQueueUpdate(queueData) {

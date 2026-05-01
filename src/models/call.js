@@ -120,6 +120,19 @@ const callSchema = new mongoose.Schema(
       trim: true,
       default: ''
     },
+    queueEnteredAt: {
+      type: Date,
+      default: null
+    },
+    queueLeftAt: {
+      type: Date,
+      default: null
+    },
+    queueResult: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     queuePosition: {
       type: Number,
       default: 0
@@ -150,6 +163,7 @@ callSchema.index({ status: 1 });
 callSchema.index({ direction: 1 });
 callSchema.index({ createdAt: -1, status: 1, direction: 1 }); // Compound index for filtering
 callSchema.index({ deletedAt: 1 }); // For soft delete queries
+callSchema.index({ user: 1, direction: 1, queued: 1, deletedAt: 1, queueName: 1, queuePosition: 1 });
 
 /* ======================
    Instance Methods

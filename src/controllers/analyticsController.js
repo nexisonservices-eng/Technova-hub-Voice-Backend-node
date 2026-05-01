@@ -181,6 +181,13 @@ class AnalyticsController {
     const normalizedStatus = status || 'all';
     const cacheKey = this.buildCacheKey(normalizedPeriod, normalizedCallType, normalizedStatus, userId || 'anonymous');
 
+    if (userId) {
+      const deletedCount = await this.enforceInboundRecentCallsRetention(userId, 100);
+      if (deletedCount > 0) {
+        this.clearUserCache(userId);
+      }
+    }
+
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
       return cached.data;
@@ -203,7 +210,10 @@ class AnalyticsController {
 
   async generateInboundAnalytics({ period = 'today', callType = 'all', status = 'all', userId = null } = {}) {
     const dateRange = this.getDateRange(period);
-    const ownerFilter = userId ? { user: userId } : {};
+    const ownerFilter = {
+      ...(userId ? { user: userId } : {}),
+      deletedAt: null
+    };
 
     const [
       summary,
@@ -223,7 +233,7 @@ class AnalyticsController {
       this.getUsersStats(),
       this.getIVRStats(dateRange, userId),
       this.getQueueStats(dateRange, ownerFilter),
-      this.getRecentCalls(dateRange, 50, ownerFilter),
+      this.getRecentCalls(100, ownerFilter),
       this.getDailyBreakdown(period, ownerFilter)
     ]);
 
@@ -626,6 +636,7 @@ class AnalyticsController {
       {
         $match: {
           ...ownerFilter,
+          direction: 'inbound',
           createdAt: { $gte: dateRange.start, $lte: dateRange.end },
           $or: [
             { queued: true },
@@ -692,10 +703,10 @@ class AnalyticsController {
   /**
    * Get recent calls
    */
-  async getRecentCalls(dateRange, limit = 50, ownerFilter = {}) {
+  async getRecentCalls(limit = 50, ownerFilter = {}) {
     const rows = await Call.find({
       ...ownerFilter,
-      createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+      direction: 'inbound'
     })
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -708,6 +719,33 @@ class AnalyticsController {
       type: this.resolveCallType(call),
       phoneNumber: call.phoneNumber || call.from || call.to || '-'
     }));
+  }
+
+  async enforceInboundRecentCallsRetention(userId, limit = 100) {
+    if (!userId || !Number.isFinite(Number(limit)) || Number(limit) <= 0) return 0;
+
+    const staleRows = await Call.find({
+      user: userId,
+      direction: 'inbound',
+      deletedAt: null
+    })
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(Math.floor(Number(limit)))
+      .select('_id')
+      .lean();
+
+    if (!staleRows.length) return 0;
+
+    const staleIds = staleRows.map((row) => row._id).filter(Boolean);
+    const result = await Call.deleteMany({ _id: { $in: staleIds } });
+
+    logger.info('[Analytics] Deleted stale inbound call records beyond retention limit', {
+      userId: String(userId),
+      limit: Math.floor(Number(limit)),
+      deletedCount: result.deletedCount || 0
+    });
+
+    return result.deletedCount || 0;
   }
 
   /**
@@ -1046,6 +1084,17 @@ class AnalyticsController {
   clearCache() {
     this.cache.clear();
     logger.info('[Analytics] Cache cleared');
+  }
+
+  clearUserCache(userId) {
+    if (!userId) return;
+    const userToken = `analytics_${String(userId)}_`;
+
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(userToken)) {
+        this.cache.delete(key);
+      }
+    }
   }
 }
 

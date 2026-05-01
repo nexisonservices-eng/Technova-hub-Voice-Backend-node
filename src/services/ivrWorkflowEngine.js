@@ -52,12 +52,21 @@ class IVRWorkflowEngine extends EventEmitter {
         const recordingUrl = log?.recordingUrl || vars?.recordingUrl || vars?.voicemailUrl || '';
         const recordingSid = vars?.recordingSid || vars?.voicemailSid || '';
         const recordingDuration = Number(vars?.recordingDuration || vars?.voicemailDuration || 0);
+        const executionDurationMs = Number(
+            Number.isFinite(Number(log?.duration))
+                ? log.duration
+                : (state?.startTime ? Date.now() - state.startTime : 0)
+        );
+        const durationSeconds = Number.isFinite(executionDurationMs)
+            ? Math.max(0, Math.round(executionDurationMs / 1000))
+            : 0;
 
         const leadData = {
             user: state?.userId || log?.userId || null,
             callSid: state?.callSid || log?.callSid || '',
             workflowId: state?.workflowId || log?.workflowId || null,
             workflowName: state?.workflowName || log?.workflowName || '',
+            duration: durationSeconds,
             caller: {
                 phoneNumber: state?.callerNumber || log?.callerNumber || '',
                 name: String(vars?.callerName || vars?.name || '').trim()

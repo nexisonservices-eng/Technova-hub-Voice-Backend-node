@@ -44,6 +44,11 @@ const leadSchema = new mongoose.Schema({
         default: 'PENDING_AGENT',
         index: true
     },
+    duration: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
     bookingDetails: {
         serviceType: String,
         roomType: String,
@@ -86,6 +91,11 @@ const leadSchema = new mongoose.Schema({
     toJSON: { virtuals: true },
     toObject: { virtuals: true }
 });
+
+leadSchema.index({ user: 1, createdAt: 1, _id: 1 });
+leadSchema.index({ user: 1, status: 1, createdAt: 1, _id: 1 });
+leadSchema.index({ user: 1, workflowId: 1, createdAt: 1, _id: 1 });
+leadSchema.index({ user: 1, callSid: 1 }, { unique: true });
 
 // Virtual for formatted duration
 leadSchema.virtual('durationFormatted').get(function () {

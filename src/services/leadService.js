@@ -1,5 +1,12 @@
 import Lead from '../models/Lead.js';
 import logger from '../utils/logger.js';
+import { emitLeadUpdate } from '../sockets/unifiedSocket.js';
+
+const normalizePaginationNumber = (value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(max, Math.max(min, Math.floor(parsed)));
+};
 
 class LeadService {
     /**
@@ -23,7 +30,9 @@ class LeadService {
      */
     async getLeads(filters = {}, options = {}) {
         try {
-            const { page = 1, limit = 10, sort = '-createdAt' } = options;
+            const page = normalizePaginationNumber(options.page, 1);
+            const limit = normalizePaginationNumber(options.limit, 50, { min: 1, max: 100 });
+            const sort = options.sort || { createdAt: 1, _id: 1 };
             const skip = (page - 1) * limit;
 
             const query = Lead.find(filters)
@@ -31,17 +40,23 @@ class LeadService {
                 .skip(skip)
                 .limit(limit)
                 .populate('assignedAgent', 'name email')
-                .populate('user', 'name company');
+                .populate('user', 'name company')
+                .lean({ virtuals: true });
 
-            const total = await Lead.countDocuments(filters);
+            const [total, leads] = await Promise.all([
+                Lead.countDocuments(filters),
+                query
+            ]);
 
-            const leads = await query;
+            const totalPages = Math.ceil(total / limit);
 
             return {
                 leads,
                 pagination: {
                     total,
-                    page: parseInt(page),
+                    page,
+                    limit,
+                    totalPages,
                     pages: Math.ceil(total / limit),
                     hasMore: skip + leads.length < total
                 }
@@ -87,6 +102,10 @@ class LeadService {
             if (!lead) throw new Error('Lead not found');
 
             logger.info(`Lead updated: ${leadId}`);
+            emitLeadUpdate(lead.user ? String(lead.user) : null, {
+                action: 'updated',
+                lead
+            });
             return lead;
         } catch (error) {
             logger.error(`Error updating lead ${leadId}:`, error);
@@ -145,6 +164,8 @@ class LeadService {
                 filter.user = leadData.user;
             }
 
+            const existingLead = await Lead.findOne(filter).select('_id').lean();
+
             const update = {
                 $set: {
                     ...leadData
@@ -163,6 +184,10 @@ class LeadService {
             );
 
             logger.info(`Lead upserted for callSid: ${callSid}`);
+            emitLeadUpdate(lead.user ? String(lead.user) : null, {
+                action: existingLead ? 'updated' : 'created',
+                lead
+            });
             return lead;
         } catch (error) {
             logger.error(`Error upserting lead for callSid ${leadData?.callSid || 'unknown'}:`, error);

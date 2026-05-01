@@ -8,6 +8,7 @@ import Call from '../models/call.js';
 import User from '../models/user.js';
 import InboundRoutingRule from '../models/InboundRoutingRule.js';
 import Workflow from '../models/Workflow.js';
+import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import { emitQueueUpdate, emitIVRUpdate } from '../sockets/unifiedSocket.js';
 import callDetailsController from '../controllers/callDetailsController.js';
 
@@ -440,7 +441,9 @@ class InboundCallService {
       return this.routeToWorkflowIVR(callSid, {
         userId: callData?.userId || null,
         promptKey: routing?.ivrPromptKey || promptKeyFromAction,
-        menuId: routing?.ivrMenuId || null
+        menuId: routing?.ivrMenuId || null,
+        callerNumber: callData?.From || callData?.phoneNumber || callData?.callerNumber || '',
+        destinationNumber: callData?.To || callData?.to || callData?.destinationNumber || ''
       });
     }
 
@@ -476,7 +479,10 @@ class InboundCallService {
     }
   }
 
-  async routeToWorkflowIVR(callSid, { userId = null, promptKey = '', menuId = null } = {}) {
+  async routeToWorkflowIVR(
+    callSid,
+    { userId = null, promptKey = '', menuId = null, callerNumber = '', destinationNumber = '' } = {}
+  ) {
     const query = { isActive: true };
     if (userId) {
       query.createdBy = userId;
@@ -484,10 +490,10 @@ class InboundCallService {
 
     let workflow = null;
     if (menuId) {
-      workflow = await Workflow.findOne({ ...query, _id: menuId }).select('_id');
+      workflow = await Workflow.findOne({ ...query, status: 'active', _id: menuId }).select('_id createdBy');
     }
     if (!workflow && promptKey) {
-      workflow = await Workflow.findOne({ ...query, promptKey }).select('_id');
+      workflow = await Workflow.findOne({ ...query, status: 'active', promptKey }).select('_id createdBy');
     }
 
     if (!workflow) {
@@ -497,6 +503,15 @@ class InboundCallService {
 
     const VoiceResponse = twilio.twiml.VoiceResponse;
     const response = new VoiceResponse();
+
+    await ivrWorkflowEngine.startExecution(
+      workflow._id,
+      callSid,
+      callerNumber,
+      destinationNumber,
+      userId || workflow.createdBy || null
+    );
+
     response.redirect({ method: 'POST' }, `/webhook/twilio/workflow/${workflow._id}`);
     return { twiml: response.toString() };
   }

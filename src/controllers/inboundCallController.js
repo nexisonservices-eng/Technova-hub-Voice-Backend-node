@@ -7,11 +7,11 @@ import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import logger from '../utils/logger.js';
 import crypto from 'crypto';
 import Call from '../models/call.js';
-import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import mongoose from 'mongoose';
 import { getUserRoom } from '../sockets/unifiedSocket.js';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
+import { buildIVRMenuListPayload } from '../services/ivrMenuSnapshotService.js';
 
 // Import Socket.IO instance for real-time events
 let io = null;
@@ -29,6 +29,20 @@ const getAuthenticatedUserId = (req) => {
 
   return null;
 };
+
+const normalizeQueueName = (value) => {
+  const queueName = String(value || '').trim();
+  return queueName || 'General';
+};
+
+const getQueueTimestamp = (call) => (
+  call?.queueEnteredAt ||
+  call?.providerData?.queueEnteredAt ||
+  call?.updatedAt ||
+  call?.createdAt ||
+  new Date()
+);
+const DEFAULT_QUEUE_HANDLE_TIME_SECONDS = 300;
 
 class InboundCallController {
   /**
@@ -483,6 +497,74 @@ class InboundCallController {
   /**
    * Ã°Å¸â€œÅ  Get queue status (for dashboard)
    */
+  buildQueueStatusFromCalls(calls = []) {
+    const grouped = {};
+
+    calls.forEach((call) => {
+      const queueName = normalizeQueueName(call.queueName);
+      if (!grouped[queueName]) {
+        grouped[queueName] = {
+          name: queueName,
+          length: 0,
+          config: {
+            averageHandleTimeSeconds: DEFAULT_QUEUE_HANDLE_TIME_SECONDS
+          },
+          calls: []
+        };
+      }
+
+      grouped[queueName].calls.push({
+        callSid: call.callSid,
+        phoneNumber: call.phoneNumber || call.providerData?.from || '',
+        queuedAt: getQueueTimestamp(call),
+        position: Number.isFinite(Number(call.queuePosition)) && Number(call.queuePosition) > 0
+          ? Number(call.queuePosition)
+          : grouped[queueName].calls.length + 1,
+        waitSeconds: Number.isFinite(Number(call.queueWaitTime)) ? Math.max(0, Number(call.queueWaitTime)) : 0,
+        estimatedWaitTime: (Number.isFinite(Number(call.queuePosition)) && Number(call.queuePosition) > 0
+          ? Number(call.queuePosition)
+          : grouped[queueName].calls.length + 1) * DEFAULT_QUEUE_HANDLE_TIME_SECONDS,
+        status: call.status || 'in-progress'
+      });
+    });
+
+    Object.values(grouped).forEach((queue) => {
+      queue.calls.sort((a, b) => {
+        if (a.position !== b.position) return a.position - b.position;
+        return new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime();
+      });
+
+      queue.calls = queue.calls.map((caller, index) => ({
+        ...caller,
+        position: index + 1,
+        estimatedWaitTime: (index + 1) * DEFAULT_QUEUE_HANDLE_TIME_SECONDS
+      }));
+      queue.length = queue.calls.length;
+    });
+
+    return grouped;
+  }
+
+  async getQueueStatusFromDatabase(userId, queueName = '') {
+    const filter = {
+      user: userId,
+      direction: 'inbound',
+      queued: true,
+      deletedAt: null
+    };
+
+    if (queueName) {
+      filter.queueName = normalizeQueueName(queueName);
+    }
+
+    const calls = await Call.find(filter)
+      .select('callSid phoneNumber providerData queueName queueEnteredAt queuePosition queueWaitTime status createdAt updatedAt')
+      .sort({ queueName: 1, queuePosition: 1, queueEnteredAt: 1, createdAt: 1 })
+      .lean();
+
+    return this.buildQueueStatusFromCalls(calls);
+  }
+
   async getQueueStatus(req, res) {
     try {
       const { queueName } = req.params;
@@ -492,10 +574,14 @@ class InboundCallController {
       }
 
       if (queueName) {
-        const status = inboundCallService.getQueueStatus(queueName, userId);
-        res.json(status);
+        const status = await this.getQueueStatusFromDatabase(userId, queueName);
+        res.json(status[normalizeQueueName(queueName)] || {
+          name: normalizeQueueName(queueName),
+          length: 0,
+          calls: []
+        });
       } else {
-        const allStatus = inboundCallService.getAllQueueStatus(userId);
+        const allStatus = await this.getQueueStatusFromDatabase(userId);
         res.json(allStatus);
       }
 
@@ -1501,110 +1587,7 @@ class InboundCallController {
         });
       }
 
-      // Import Workflow model to get data from database
-      const { default: Workflow } = await import('../models/Workflow.js');
-
-      logger.info('Ã°Å¸â€Â Querying IVR workflows with owner filter');
-
-      // Get all IVR workflows from database
-      const menus = await Workflow.find({ isActive: true, createdBy: userId })
-        .select('promptKey displayName text nodes edges config status tags createdAt updatedAt')
-        .sort({ promptKey: 1 });
-
-      const workflowIds = menus.map((menu) => menu._id);
-      const usageByWorkflow = new Map();
-
-      if (workflowIds.length > 0) {
-        const usageStats = await WorkflowExecution.aggregate([
-          { $match: { workflowId: { $in: workflowIds } } },
-          {
-            $group: {
-              _id: '$workflowId',
-              totalExecutions: { $sum: 1 },
-              uniqueContacts: { $addToSet: '$callerNumber' }
-            }
-          },
-          {
-            $project: {
-              totalExecutions: 1,
-              contactsUsed: { $size: '$uniqueContacts' }
-            }
-          }
-        ]);
-
-        usageStats.forEach((item) => {
-          usageByWorkflow.set(String(item._id), {
-            contactsUsed: item.contactsUsed || 0,
-            totalExecutions: item.totalExecutions || 0
-          });
-        });
-      }
-
-      logger.info(`Ã°Å¸â€œÅ  Found ${menus.length} IVR menus in database`);
-      logger.info('Ã°Å¸â€œâ€¹ Raw menu data:', JSON.stringify(menus, null, 2));
-
-      // Transform to match expected format using Workflow structure
-      const formattedMenus = menus.map(menu => {
-        const greetingNode = menu.nodes.find(node => node.type === 'greeting');
-        const inputNodes = menu.nodes.filter(node => node.type === 'input');
-
-        // Use menu.text for consistency with other parts of the system
-        // Fall back to greeting node text, then 'Welcome' as last resort
-        const greetingText = menu.text || greetingNode?.data?.text || 'Welcome';
-
-        // Validate input nodes and filter out incomplete ones
-        const validInputNodes = inputNodes.filter(node => {
-          const digit = String(node?.data?.digit ?? '').trim();
-          if (!digit) {
-            logger.warn(`Ã¢Å¡Â Ã¯Â¸Â Input node missing digit in menu ${menu.promptKey}, skipping node`);
-            return false;
-          }
-          return true;
-        });
-
-        return {
-          _id: menu._id,
-          promptKey: menu.promptKey,
-          displayName: menu.displayName,
-          greeting: {
-            text: greetingText,
-            voice: menu.config?.voiceId || 'en-GB-SoniaNeural',
-            language: menu.config?.language || 'en-GB'
-          },
-          menuOptions: validInputNodes.map(node => ({
-            digit: node.data.digit, // No fallback - digit is required
-            label: node.data?.label || 'Option',
-            action: node.data?.action || 'transfer',
-            destination: node.data?.destination || ''
-          })),
-          settings: {
-            timeout: menu.config?.timeout || 10,
-            maxAttempts: menu.config?.maxAttempts || 3,
-            invalidInputMessage: menu.config?.invalidInputMessage || 'Invalid selection. Please try again.'
-          },
-          workflowConfig: {
-            nodes: menu.nodes,
-            edges: menu.edges,
-            settings: menu.config
-          },
-          status: menu.status || (menu.isActive ? 'active' : 'inactive'),
-          tags: menu.tags || [],
-          contactsUsed: usageByWorkflow.get(String(menu._id))?.contactsUsed || 0,
-          totalExecutions: usageByWorkflow.get(String(menu._id))?.totalExecutions || 0,
-          nodeCount: menu.nodeCount,
-          edgeCount: menu.edgeCount,
-          isComplete: menu.isComplete,
-          createdAt: menu.createdAt,
-          updatedAt: menu.updatedAt
-        };
-      });
-
-      logger.info('Ã¢Å“â€¦ Formatted menus:', JSON.stringify(formattedMenus, null, 2));
-
-      res.json({
-        success: true,
-        ivrMenus: formattedMenus
-      });
+      res.json(await buildIVRMenuListPayload(userId));
 
     } catch (error) {
       logger.error('Get IVR configs error:', error);

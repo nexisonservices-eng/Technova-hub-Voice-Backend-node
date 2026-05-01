@@ -161,6 +161,7 @@ router.post('/routing/rules', async (req, res) => {
         linkedWorkflow = await Workflow.findOne({
           _id: payload.ivrMenuId,
           isActive: true,
+          status: 'active',
           createdBy: userId
         }).select('_id promptKey');
       }
@@ -168,12 +169,13 @@ router.post('/routing/rules', async (req, res) => {
         linkedWorkflow = await Workflow.findOne({
           promptKey: payload.ivrPromptKey,
           isActive: true,
+          status: 'active',
           createdBy: userId
         }).select('_id promptKey');
       }
 
       if (!linkedWorkflow) {
-        return res.status(400).json({ success: false, error: 'Linked IVR workflow not found or inactive' });
+        return res.status(400).json({ success: false, error: 'Linked IVR workflow not found or not active' });
       }
 
       // Normalize persisted identifiers to avoid stale menu links.
@@ -279,16 +281,16 @@ router.post('/routing/rules/:ruleId/test', async (req, res) => {
 
     let menu = null;
     if (rule.ivrMenuId && mongoose.Types.ObjectId.isValid(rule.ivrMenuId)) {
-      menu = await Workflow.findOne({ _id: rule.ivrMenuId, isActive: true, createdBy: userId });
+      menu = await Workflow.findOne({ _id: rule.ivrMenuId, isActive: true, status: 'active', createdBy: userId });
     }
     if (!menu && ivrPromptKey) {
-      menu = await Workflow.findOne({ promptKey: ivrPromptKey, isActive: true, createdBy: userId });
+      menu = await Workflow.findOne({ promptKey: ivrPromptKey, isActive: true, status: 'active', createdBy: userId });
     }
 
     if (!menu) {
       return res.status(404).json({
         success: false,
-        error: 'Linked IVR menu not found or inactive'
+        error: 'Linked IVR menu not found or not active'
       });
     }
 

@@ -8,11 +8,9 @@ import express from 'express';
 import logger from '../utils/logger.js';
 import twilioIntegrationService from '../services/twilioIntegrationService.js';
 import inboundCallService from '../services/inboundCallService.js';
-import callStateService from '../services/callStateService.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import Call from '../models/call.js';
 import IVRController from '../controllers/ivrController.js';
-import callDetailsController from '../controllers/callDetailsController.js';
 import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import Workflow from '../models/Workflow.js';
 import twilio from 'twilio';
@@ -21,30 +19,6 @@ import adminCredentialsService from '../services/adminCredentialsService.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 
 const router = express.Router();
-
-const resolveStartNodeId = (workflow) => {
-  const nodes = Array.isArray(workflow?.nodes) ? workflow.nodes : [];
-  const edges = Array.isArray(workflow?.edges) ? workflow.edges : [];
-  if (!nodes.length) return null;
-
-  const isEntryType = (node) => {
-    const type = String(node?.type || '').toLowerCase();
-    return type === 'audio' || type === 'greeting';
-  };
-
-  const incoming = new Map(nodes.map((node) => [node.id, 0]));
-  edges.forEach((edge) => {
-    incoming.set(edge.target, (incoming.get(edge.target) || 0) + 1);
-  });
-
-  const entryWithNoIncoming = nodes.find((node) => isEntryType(node) && (incoming.get(node.id) || 0) === 0);
-  if (entryWithNoIncoming) return entryWithNoIncoming.id;
-
-  const firstEntry = nodes.find(isEntryType);
-  if (firstEntry) return firstEntry.id;
-
-  return nodes[0]?.id || null;
-};
 
 const normalizePhone = (value) => {
   const digits = String(value || '').replace(/[^\d+]/g, '');
@@ -61,41 +35,6 @@ const toPositiveInt = (value, fallback = 0) => {
 const resolveQueueName = (value) => {
   const text = String(value || '').trim();
   return text || 'General';
-};
-
-const ensureInboundCallRecord = async ({ callSid, from, to, userId = null } = {}) => {
-  if (!callSid || !from) return null;
-
-  const existing = await Call.findOne({ callSid });
-  if (existing) return existing;
-
-  try {
-    const { call } = await callStateService.createCall({
-      callSid,
-      phoneNumber: from,
-      direction: 'inbound',
-      provider: 'twilio',
-      userId
-    });
-
-    await callDetailsController.notifyCallCreated({
-      callSid,
-      phoneNumber: from,
-      to,
-      direction: 'inbound',
-      status: 'initiated',
-      provider: 'twilio',
-      userId: userId || call?.user || null,
-      timestamp: new Date()
-    }, 'inbound');
-
-    return call;
-  } catch (error) {
-    if (error?.code === 11000) {
-      return Call.findOne({ callSid });
-    }
-    throw error;
-  }
 };
 
 const resolveWebhookUserId = async (req) => {
@@ -157,41 +96,14 @@ router.post('/inbound', async (req, res) => {
       return res.status(200).type('text/xml').send(response.toString());
     }
 
-    await ensureInboundCallRecord({
-      callSid: CallSid,
-      from: From,
-      to: To,
+    const result = await inboundCallService.processIncomingCall({
+      CallSid,
+      From,
+      To,
       userId: webhookUserId
     });
 
-    const activeWorkflow = await Workflow.findOne({
-      status: 'active',
-      isActive: true,
-      createdBy: webhookUserId
-    }).sort({ updatedAt: -1 });
-
-    if (activeWorkflow) {
-      await ivrWorkflowEngine.startExecution(
-        activeWorkflow._id,
-        CallSid,
-        From,
-        To,
-        webhookUserId
-      );
-
-      const firstNodeId = resolveStartNodeId(activeWorkflow);
-      if (firstNodeId) {
-        const twiml = await ivrWorkflowEngine.generateTwiML(activeWorkflow._id, firstNodeId, null, CallSid);
-        return res.status(200).type('text/xml').send(twiml);
-      }
-    }
-
-    const VoiceResponse = twilio.twiml.VoiceResponse;
-    const response = new VoiceResponse();
-    response.say({ voice: 'alice' }, 'Thank you for calling. Please hold while we connect you.');
-    response.hangup();
-
-    return res.status(200).type('text/xml').send(response.toString());
+    return res.status(200).type('text/xml').send(result.twiml);
   } catch (error) {
     logger.error('Error handling inbound webhook:', error);
     const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -220,51 +132,17 @@ router.post('/voice', async (req, res) => {
     
     logger.info(`Incoming voice call: ${CallSid} from ${From} to ${To}`);
 
-    await ensureInboundCallRecord({
-      callSid: CallSid,
-      from: From,
-      to: To,
-      userId: webhookUserId
+    const resolvedUserId = webhookUserId || await resolveWebhookUserId(req);
+    const result = await inboundCallService.processIncomingCall({
+      CallSid,
+      From,
+      To,
+      CallStatus,
+      userId: resolvedUserId
     });
 
-    // Use existing IVR controller welcome logic
-    const ivrController = new IVRController();
-    
-    // Check if there's an active workflow first
-    const activeWorkflow = await ivrController.getActiveWorkflow(webhookUserId);
-    
-    if (activeWorkflow) {
-      // Use existing workflow engine
-      logger.info(`Using active workflow: ${activeWorkflow._id}`);
-      
-      // Start execution using existing workflow engine
-      await ivrWorkflowEngine.startExecution(
-        activeWorkflow._id,
-        CallSid,
-        From,
-        To,
-        webhookUserId || activeWorkflow.createdBy || null
-      );
-      
-      // Generate TwiML using existing system
-      const startNodeId = resolveStartNodeId(activeWorkflow);
-      if (!startNodeId) {
-        throw new Error('Active workflow has no valid start node');
-      }
-      const twiml = await ivrWorkflowEngine.generateTwiML(activeWorkflow._id, startNodeId, null, CallSid);
-      
-      res.type('text/xml');
-      res.send(twiml);
-    } else {
-      // Fallback to new integration service
-      logger.info('No active workflow found, using new integration service');
-      
-      const execution = await twilioIntegrationService.handleIncomingCall(callData);
-      const twiml = await twilioIntegrationService.generateTwiML(execution.workflowId);
-      
-      res.type('text/xml');
-      res.send(twiml);
-    }
+    res.type('text/xml');
+    res.send(result.twiml);
   } catch (error) {
     logger.error('Error handling incoming call:', error);
     
@@ -689,11 +567,13 @@ router.post('/ai/complete', async (req, res) => {
  */
 router.post('/enqueue', async (req, res) => {
   try {
-    const { CallSid, queueName } = req.body;
+    const { CallSid, queueName, From, Caller } = req.body;
     const webhookUserId = await resolveWebhookUserIdForCall(req, CallSid);
     if (!webhookUserId) logger.warn(`Tenant resolution failed for enqueue call ${CallSid}`);
 
     const normalizedQueueName = resolveQueueName(queueName);
+    const enqueueTime = new Date();
+    const phoneNumber = normalizePhone(From || Caller || '');
     
     logger.info(`Call enqueued: ${CallSid} to queue ${normalizedQueueName}`);
     
@@ -715,9 +595,23 @@ router.post('/enqueue', async (req, res) => {
       {
         $set: {
           queued: true,
-          queueName: normalizedQueueName
+          queueName: normalizedQueueName,
+          queuePosition: 0,
+          queueWaitTime: 0,
+          queueLeftAt: null,
+          queueResult: '',
+          ...(phoneNumber ? { phoneNumber } : {})
         }
       }
+    );
+
+    await Call.updateOne(
+      {
+        callSid: CallSid,
+        ...(webhookUserId ? { user: webhookUserId } : {}),
+        $or: [{ queueEnteredAt: null }, { queueEnteredAt: { $exists: false } }]
+      },
+      { $set: { queueEnteredAt: enqueueTime } }
     );
     
     // Generate queue TwiML
@@ -750,7 +644,7 @@ router.post('/queue/wait', async (req, res) => {
     const callRecord = await Call.findOne({
       callSid: CallSid,
       ...(webhookUserId ? { user: webhookUserId } : {})
-    }).select('queueName phoneNumber');
+    }).select('queueName phoneNumber queueEnteredAt');
     const normalizedQueueName = resolveQueueName(queueName || callRecord?.queueName);
     logger.info(`Queue position update: ${CallSid} -> ${normalizedQueueName} position ${QueuePosition} of ${CurrentQueueSize}`);
 
@@ -761,6 +655,7 @@ router.post('/queue/wait', async (req, res) => {
       userId: webhookUserId || null,
       phoneNumber,
       position: toPositiveInt(QueuePosition, 1),
+      queuedAt: callRecord?.queueEnteredAt || null,
       priority: 'normal'
     });
     const queueEntry = syncResult?.entry || null;
@@ -787,8 +682,12 @@ router.post('/queue/wait', async (req, res) => {
         $set: {
           queued: true,
           queueName: normalizedQueueName,
+          queueEnteredAt: queueEntry?.queuedAt || callRecord?.queueEnteredAt || new Date(),
+          queueLeftAt: null,
+          queueResult: '',
           queuePosition: toPositiveInt(queueEntry?.position, toPositiveInt(QueuePosition, 1)),
-          queueWaitTime: queueWaitTimeSeconds
+          queueWaitTime: queueWaitTimeSeconds,
+          ...(phoneNumber ? { phoneNumber } : {})
         }
       }
     );
@@ -855,7 +754,7 @@ router.post('/queue/leave', async (req, res) => {
     const callRecord = await Call.findOne({
       callSid: CallSid,
       ...(webhookUserId ? { user: webhookUserId } : {})
-    }).select('queueName');
+    }).select('queueName queueEnteredAt queueWaitTime status');
     const normalizedQueueName = resolveQueueName(queueName || callRecord?.queueName);
     
     // Update execution record
@@ -873,6 +772,20 @@ router.post('/queue/leave', async (req, res) => {
       removed = inboundCallService.removeFromAnyQueue(CallSid);
     }
 
+    const queueLeftAt = new Date();
+    const queueEnteredAt = callRecord?.queueEnteredAt ? new Date(callRecord.queueEnteredAt) : null;
+    const finalQueueWaitTime = queueEnteredAt
+      ? Math.max(0, Math.floor((queueLeftAt.getTime() - queueEnteredAt.getTime()) / 1000))
+      : Math.max(0, Number(callRecord?.queueWaitTime) || 0);
+    const normalizedResult = String(QueueResult || '').trim().toLowerCase();
+    const statusUpdate = normalizedResult === 'timeout'
+      ? { status: 'no-answer' }
+      : normalizedResult === 'completed'
+        ? { status: 'completed' }
+        : normalizedResult === 'failed'
+          ? { status: 'failed' }
+          : {};
+
     await Call.findOneAndUpdate(
       {
         callSid: CallSid,
@@ -881,7 +794,11 @@ router.post('/queue/leave', async (req, res) => {
       {
         $set: {
           queued: false,
-          queuePosition: 0
+          queuePosition: 0,
+          queueWaitTime: finalQueueWaitTime,
+          queueLeftAt,
+          queueResult: String(QueueResult || ''),
+          ...statusUpdate
         }
       }
     );

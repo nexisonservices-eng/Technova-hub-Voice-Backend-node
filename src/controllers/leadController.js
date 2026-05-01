@@ -1,8 +1,8 @@
 import leadService from '../services/leadService.js';
-import WorkflowExecution from '../models/WorkflowExecution.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 import { getUserObjectId } from '../utils/authContext.js';
+import mongoose from 'mongoose';
 
 class LeadController {
     /**
@@ -31,29 +31,14 @@ class LeadController {
             }
 
             if (workflowId) {
-                const executionFilter = { workflowId, userId };
-                const executions = await WorkflowExecution.find(executionFilter)
-                    .select('callSid')
-                    .lean();
-                const workflowCallSids = [...new Set(executions.map((item) => item.callSid).filter(Boolean))];
-
-                if (workflowCallSids.length === 0) {
-                    return res.json(ResponseFormatter.success({
-                        leads: [],
-                        pagination: {
-                            total: 0,
-                            page: Number(page) || 1,
-                            pages: 0,
-                            hasMore: false
-                        }
-                    }, 'Leads retrieved successfully'));
+                if (!mongoose.Types.ObjectId.isValid(workflowId)) {
+                    return res.status(400).json(ResponseFormatter.error('Invalid workflowId'));
                 }
-
-                filters.callSid = { $in: workflowCallSids };
+                filters.workflowId = workflowId;
             }
 
             const result = await leadService.getLeads(filters, { page, limit });
-            res.json(ResponseFormatter.success(result, 'Leads retrieved successfully'));
+            res.json(ResponseFormatter.success(result));
         } catch (error) {
             logger.error('Get leads error:', error);
             res.status(500).json(ResponseFormatter.error(error.message));
