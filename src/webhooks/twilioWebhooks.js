@@ -30,6 +30,26 @@ function isPublicMediaUrl(urlString) {
   }
 }
 
+function formatBroadcastCallPayload(call) {
+  return {
+    callId: call._id,
+    _id: call._id,
+    userId: call.userId || null,
+    callSid: call.callSid || null,
+    phone: call.contact?.phone || '',
+    contact: call.contact || {},
+    status: call.status,
+    attempts: call.attempts || 0,
+    duration: call.duration || 0,
+    startTime: call.startTime || null,
+    answerTime: call.answerTime || null,
+    endTime: call.endTime || null,
+    createdAt: call.createdAt,
+    updatedAt: call.updatedAt,
+    error: call.twilioError || null
+  };
+}
+
 class TwilioWebhooks {
   /**
    * ==========================================
@@ -209,14 +229,7 @@ class TwilioWebhooks {
         await call.save();
       }
 
-      emitCallUpdate(call.broadcast.toString(), {
-        callId: call._id,
-        callSid: CallSid,
-        phone: call.contact.phone,
-        status: call.status,
-        attempts: call.attempts,
-        duration: call.duration || 0
-      });
+      emitCallUpdate(call.broadcast.toString(), formatBroadcastCallPayload(call));
 
       if (broadcast) {
         await this.updateBroadcastStats(broadcast);
@@ -254,11 +267,11 @@ class TwilioWebhooks {
 
     broadcast.stats = {
       total: broadcast.stats.total,
-      queued: statMap.queued || 0,
-      calling: statMap.calling || 0,
+      queued: (statMap.queued || 0) + (statMap.claiming || 0),
+      calling: (statMap.calling || 0) + (statMap.ringing || 0) + (statMap.in_progress || 0) + (statMap.answered || 0),
       answered: statMap.answered || 0,
       completed: statMap.completed || 0,
-      failed: statMap.failed || 0,
+      failed: (statMap.failed || 0) + (statMap.busy || 0) + (statMap.no_answer || 0),
       opted_out: statMap.opted_out || 0
     };
 
@@ -304,14 +317,7 @@ class TwilioWebhooks {
         );
 
         // Push immediate realtime updates to monitor.
-        emitCallUpdate(call.broadcast.toString(), {
-          callId: call._id,
-          callSid: CallSid,
-          phone: call.contact.phone,
-          status: 'opted_out',
-          attempts: call.attempts,
-          duration: call.duration || 0
-        });
+        emitCallUpdate(call.broadcast.toString(), formatBroadcastCallPayload(call));
 
         const broadcast = await Broadcast.findById(call.broadcast);
         if (broadcast) {

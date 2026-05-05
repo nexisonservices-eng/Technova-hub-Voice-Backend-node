@@ -2,6 +2,7 @@ import express from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { requirePlanFeature } from '../middleware/planGuard.js';
 import outboundLocalController from '../controllers/OutboundController.js';
+import campaignSchedulerController from '../controllers/CampaignSchedulerController.js';
 
 const router = express.Router();
 
@@ -197,8 +198,40 @@ router.get('/outbound-local/campaigns', (req, res) =>
   outboundLocalController.listCampaigns(req, res)
 );
 
+router.get('/outbound-local/schedule', (req, res) =>
+  campaignSchedulerController.listSchedules(req, res)
+);
+
+router.post('/outbound-local/schedule', (req, res) =>
+  campaignSchedulerController.schedule(req, res)
+);
+
+router.post('/outbound-local/schedule/:scheduleId/pause', (req, res) =>
+  campaignSchedulerController.pause(req, res)
+);
+
+router.post('/outbound-local/schedule/:scheduleId/resume', (req, res) =>
+  campaignSchedulerController.resume(req, res)
+);
+
+router.post('/outbound-local/schedule/bulk-delete', (req, res) =>
+  campaignSchedulerController.bulkDelete(req, res)
+);
+
 router.post('/outbound-local/campaigns/bulk-delete', (req, res) =>
   outboundLocalController.deleteCampaigns(req, res)
+);
+
+router.post('/outbound-local/retry', (req, res) =>
+  campaignSchedulerController.retry(req, res)
+);
+
+router.post('/outbound-local/abtest', (req, res) =>
+  campaignSchedulerController.abtest(req, res)
+);
+
+router.get('/outbound-local/numbers/rotate', (req, res) =>
+  campaignSchedulerController.rotateNumbers(req, res)
 );
 
 router.get('/outbound-local/templates', (req, res) =>

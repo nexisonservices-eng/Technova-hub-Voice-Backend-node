@@ -42,6 +42,7 @@ const broadcastCallSchema = new mongoose.Schema(
       type: String,
       enum: [
         'queued',
+        'claiming',
         'calling',
         'ringing',
         'in_progress',
@@ -63,6 +64,7 @@ const broadcastCallSchema = new mongoose.Schema(
       default: 0
     },
     retryAfter: Date,
+    claimedAt: Date,
 
     // Call metrics
     duration: Number,   // seconds
@@ -104,13 +106,20 @@ const broadcastCallSchema = new mongoose.Schema(
 
 // Indexes
 broadcastCallSchema.index({ broadcast: 1, status: 1 });
+broadcastCallSchema.index({ broadcast: 1, userId: 1, createdAt: -1 });
+broadcastCallSchema.index({ broadcast: 1, userId: 1, status: 1, createdAt: -1 });
 broadcastCallSchema.index({ broadcast: 1, attempts: 1, retryAfter: 1 });
+broadcastCallSchema.index({ broadcast: 1, userId: 1, status: 1, retryAfter: 1, createdAt: 1 });
+broadcastCallSchema.index({ broadcast: 1, userId: 1, status: 1, claimedAt: 1 });
 broadcastCallSchema.index({ userId: 1, createdAt: -1 });
+broadcastCallSchema.index({ userId: 1, status: 1, createdAt: -1 });
+broadcastCallSchema.index({ userId: 1, broadcast: 1, status: 1, createdAt: -1 });
 
 // Instance methods
 broadcastCallSchema.methods.markCalling = async function (callSid) {
   this.callSid = callSid;
   this.status = 'calling';
+  this.claimedAt = undefined;
   this.startTime = new Date();
   this.attempts += 1;
   await this.save();
@@ -130,6 +139,7 @@ broadcastCallSchema.methods.markFailed = async function (
   retryConfig = {}
 ) {
   this.status = 'failed';
+  this.claimedAt = undefined;
   this.endTime = new Date();
   this.twilioError = {
     code: errorCode,
@@ -154,6 +164,7 @@ broadcastCallSchema.methods.markFailed = async function (
 
 broadcastCallSchema.methods.markOptedOut = async function () {
   this.status = 'opted_out';
+  this.claimedAt = undefined;
   this.optedOut = true;
   this.endTime = new Date();
   await this.save();

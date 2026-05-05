@@ -470,6 +470,7 @@ export function initializeSocketIO(socketIo) {
       try {
         const analyticsRoom = getAnalyticsRoom(socketUserId);
         socket.join(analyticsRoom);
+        analyticsController.registerAnalyticsSubscription(socket, { ...payload, userId: socketUserId });
         logger.info(`Socket ${socket.id} joined ${analyticsRoom}`);
         await analyticsController.emitAnalyticsSnapshotToSocket(socket, payload);
       } catch (error) {
@@ -481,11 +482,13 @@ export function initializeSocketIO(socketIo) {
     socket.on('leave_analytics_room', () => {
       const analyticsRoom = getAnalyticsRoom(socketUserId);
       socket.leave(analyticsRoom);
+      analyticsController.unregisterAnalyticsSubscription(socket);
       logger.info(`Socket ${socket.id} left ${analyticsRoom}`);
     });
 
     socket.on('request_call_analytics', async (payload = {}) => {
       try {
+        analyticsController.registerAnalyticsSubscription(socket, { ...payload, userId: socketUserId });
         await analyticsController.emitAnalyticsSnapshotToSocket(socket, payload);
       } catch (error) {
         logger.error(`Failed call analytics request for ${socket.id}:`, error);
@@ -882,6 +885,7 @@ export function initializeSocketIO(socketIo) {
     socket.on('disconnect', async (reason) => {
       logger.info(`❌ Socket disconnected: ${socket.id} - Reason: ${reason}`);
       activeConnections.delete(socket.id);
+      analyticsController.unregisterAnalyticsSubscription(socket);
 
       if (socket.data.aiClient) {
         try {
@@ -1023,25 +1027,38 @@ function cleanupStaleConnections() {
 // 🔹 Broadcast / call emit helpers
 export function emitBroadcastUpdate(broadcastId, data) {
   if (!io) return;
+  const userId = data?.userId || data?.user || data?.createdBy || null;
   io.to(`broadcast:${broadcastId}`).emit('broadcast_update', {
     broadcastId,
     timestamp: new Date(),
     ...data
   });
+  if (userId) {
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId, reason: 'broadcast_update' });
+  }
 }
 
 export function emitCallUpdate(broadcastId, callData) {
   if (!io) return;
-  io.to(`broadcast:${broadcastId}`).emit('call_update', {
+  const payload = {
     broadcastId,
     timestamp: new Date(),
     ...callData
-  });
-  io.emit('outbound_call_update', {
-    broadcastId,
-    timestamp: new Date(),
-    ...callData
-  });
+  };
+  io.to(`broadcast:${broadcastId}`).emit('call_update', payload);
+
+  const userId = callData?.userId || callData?.user || callData?.createdBy || null;
+  if (userId) {
+    io.to(getUserRoom(userId)).emit('outbound_call_update', payload);
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId, reason: 'broadcast_call_update' });
+    return;
+  }
+
+  io.emit('outbound_call_update', payload);
+  analyticsController.clearCache();
+  analyticsController.scheduleAnalyticsBroadcast({ reason: 'broadcast_call_update' });
 }
 
 export function emitOutboundCallUpdate(userId, callData = {}) {
@@ -1053,10 +1070,14 @@ export function emitOutboundCallUpdate(userId, callData = {}) {
 
   if (userId) {
     io.to(getUserRoom(userId)).emit('outbound_call_update', payload);
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId, reason: 'outbound_call_update' });
     return;
   }
 
   io.emit('outbound_call_update', payload);
+  analyticsController.clearCache();
+  analyticsController.scheduleAnalyticsBroadcast({ reason: 'outbound_call_update' });
 }
 
 export function emitCallsCreated(broadcastId) {
@@ -1070,6 +1091,8 @@ export function emitCallsCreated(broadcastId) {
 export function emitBroadcastListUpdate() {
   if (!io) return;
   io.emit('broadcast_list_update', { timestamp: new Date() });
+  analyticsController.clearCache();
+  analyticsController.scheduleAnalyticsBroadcast({ reason: 'broadcast_list_update' });
 }
 
 export function emitBatchUpdate(broadcastId, batchData) {
@@ -1100,6 +1123,8 @@ export function emitOutboundMetrics(userId, metrics) {
 
   if (userId) {
     io.to(getUserRoom(userId)).emit('outbound_metrics', payload);
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId, reason: 'outbound_metrics' });
     return;
   }
 
@@ -1163,6 +1188,8 @@ export function emitInboundCallUpdate(callData) {
     io.to(getUserRoom(userId)).emit('inbound_call_update', payload);
     io.to(getUserRoom(userId)).emit('inbound:call:update', payload);
     io.to(getUserRoom(userId)).emit('inbound_data_updated', payload);
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId, reason: 'inbound_call_update' });
     emitInboundOverviewToUser(userId).catch((error) => {
       logger.error(`Failed emitting inbound overview for ${userId}:`, error);
     });
@@ -1171,6 +1198,8 @@ export function emitInboundCallUpdate(callData) {
   io.emit('inbound_call_update', payload);
   io.emit('inbound:call:update', payload);
   io.emit('inbound_data_updated', payload);
+  analyticsController.clearCache();
+  analyticsController.scheduleAnalyticsBroadcast({ reason: 'inbound_call_update' });
 }
 
 export function emitLeadUpdate(userId, payload = {}) {

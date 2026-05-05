@@ -11,11 +11,29 @@ import { emitStatsUpdate, emitBroadcastListUpdate, emitCallsCreated } from '../s
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 
 class BroadcastService {
+  normalizeConcurrencyConfig(data = {}) {
+    const clamp = (value, fallback, min, max) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return fallback;
+      return Math.min(max, Math.max(min, Math.floor(numeric)));
+    };
+
+    const maxConcurrent = clamp(data.maxConcurrent, 50, 1, 100);
+    return {
+      maxConcurrent,
+      batchSize: clamp(data.batchSize, Math.min(25, maxConcurrent), 1, maxConcurrent),
+      dispatchIntervalMs: clamp(data.dispatchIntervalMs, 1000, 250, 10000),
+      maxRetries: clamp(data.maxRetries, 2, 0, 5),
+      retryDelay: clamp(data.retryDelay, 300000, 0, 24 * 60 * 60 * 1000)
+    };
+  }
+
   /**
    * Create and initialize broadcast campaign
    */
   async createBroadcast(data, userId) {
     try {
+      const concurrency = this.normalizeConcurrencyConfig(data);
       const broadcast = await Broadcast.create({
         name: data.name,
         messageTemplate: data.messageTemplate,
@@ -26,9 +44,11 @@ class BroadcastService {
         },
         contacts: data.contacts,
         config: {
-          maxConcurrent: data.maxConcurrent || 50,
-          maxRetries: data.maxRetries || 2,
-          retryDelay: data.retryDelay || 30000,
+          maxConcurrent: concurrency.maxConcurrent,
+          batchSize: concurrency.batchSize,
+          dispatchIntervalMs: concurrency.dispatchIntervalMs,
+          maxRetries: concurrency.maxRetries,
+          retryDelay: concurrency.retryDelay,
           compliance: data.compliance || {}
         },
         stats: {
@@ -233,11 +253,11 @@ class BroadcastService {
 
     broadcast.stats = {
       total: broadcast.stats.total,
-      queued: statMap.queued || 0,
-      calling: statMap.calling || 0,
+      queued: (statMap.queued || 0) + (statMap.claiming || 0),
+      calling: (statMap.calling || 0) + (statMap.ringing || 0) + (statMap.in_progress || 0) + (statMap.answered || 0),
       answered: statMap.answered || 0,
       completed: statMap.completed || 0,
-      failed: statMap.failed || 0,
+      failed: (statMap.failed || 0) + (statMap.busy || 0) + (statMap.no_answer || 0),
       opted_out: statMap.opted_out || 0
     };
 
@@ -259,7 +279,7 @@ class BroadcastService {
     broadcastQueueService.stopBroadcast(broadcastId);
 
     await BroadcastCall.updateMany(
-      { broadcast: broadcastId, userId, status: 'queued' },
+      { broadcast: broadcastId, userId, status: { $in: ['queued', 'claiming'] } },
       { status: 'cancelled' }
     );
 

@@ -6,6 +6,38 @@ import Call from '../models/call.js';
 import BroadcastCall from '../models/BroadcastCall.js';
 import { getUserIdString } from '../utils/authContext.js';
 import { reportUsage } from '../services/usageService.js';
+import outboundCampaignService from '../services/outboundCampaignService.js';
+import { emitOutboundCallUpdate } from '../sockets/unifiedSocket.js';
+
+const buildOutboundCallUpdatePayload = (call, status = 'completed') => {
+  const providerData = call?.providerData || {};
+  const updatedAt = call?.updatedAt || new Date();
+  return {
+    _id: call?._id,
+    callSid: call?.callSid || '',
+    status,
+    phoneNumber: call?.phoneNumber || '',
+    provider: call?.provider || providerData.provider || '',
+    duration: Number(call?.duration || 0),
+    campaignId: providerData.campaignId || '',
+    campaignDbId: providerData.campaignDbId || '',
+    campaignName: providerData.campaignName || '',
+    campaignType: providerData.campaignType || providerData.originType || '',
+    originType: providerData.originType || providerData.campaignType || '',
+    contactId: providerData.contactId || '',
+    workflowId: providerData.workflowId || '',
+    voiceId: providerData.voiceId || '',
+    metadata: {
+      originType: providerData.originType || providerData.campaignType || '',
+      campaignType: providerData.campaignType || providerData.originType || '',
+      singleRecipient: providerData.singleRecipient || '',
+      contactCount: providerData.contactCount || ''
+    },
+    createdAt: call?.createdAt || updatedAt,
+    updatedAt,
+    ended: true
+  };
+};
 
 class CallController {
   async startOutboundCall(req, res) {
@@ -179,15 +211,29 @@ class CallController {
       await telephonyService.endCall(callSid, req.twilioContext);
       await callStateService.endCall(callSid);
 
-      await Call.updateOne(
+      const endedAt = new Date();
+      const existingCall = await Call.findOne({ callSid, user: userId });
+      const duration = existingCall?.startTime
+        ? Math.max(0, Math.floor((endedAt.getTime() - new Date(existingCall.startTime).getTime()) / 1000))
+        : Number(existingCall?.duration || 0);
+
+      const updatedCall = await Call.findOneAndUpdate(
         { callSid, user: userId },
-        { $set: { status: 'completed', endTime: new Date() } }
-      );
+        { $set: { status: 'completed', endTime: endedAt, duration } },
+        { new: true }
+      ).lean();
+
+      if (updatedCall) {
+        emitOutboundCallUpdate(userId, buildOutboundCallUpdatePayload(updatedCall, 'completed'));
+        if (updatedCall.providerData?.campaignDbId && updatedCall.providerData?.contactId) {
+          await outboundCampaignService.syncCallUpdate(callSid, 'completed', duration);
+        }
+      }
 
       res.json({
         success: true,
         message: 'Call ended successfully',
-        data: { callSid }
+        data: { callSid, status: 'completed', duration }
       });
     } catch (error) {
       logger.error('End call error:', error);

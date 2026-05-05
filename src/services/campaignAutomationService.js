@@ -191,13 +191,14 @@ class CampaignAutomationService {
 
     this.registerScheduleTask(schedule);
 
+    const schedulePayload = typeof schedule.toObject === 'function' ? schedule.toObject() : schedule;
     emitCampaignUpdate(String(userId), {
-      action: 'scheduled',
-      scheduleId: String(schedule._id),
-      campaignId: schedule.campaignId,
-      campaignName: schedule.campaignName,
-      cronExpression: schedule.cronExpression,
-      recurrence: schedule.recurrence
+      action: 'schedule_created',
+      schedule: {
+        ...schedulePayload,
+        id: String(schedule._id),
+        _id: String(schedule._id)
+      }
     });
 
     return schedule;
@@ -608,6 +609,15 @@ class CampaignAutomationService {
     const key = String(scheduleId);
     const task = this.tasks.get(key);
     if (task) task.stop();
+  }
+
+  removeSchedule(scheduleId) {
+    const key = String(scheduleId);
+    const task = this.tasks.get(key);
+    if (task) {
+      task.stop();
+      this.tasks.delete(key);
+    }
   }
 
   resumeSchedule(scheduleDoc) {

@@ -82,6 +82,14 @@ const broadcastSchema = new mongoose.Schema(
         type: Number,
         default: 50
       },
+      batchSize: {
+        type: Number,
+        default: 25
+      },
+      dispatchIntervalMs: {
+        type: Number,
+        default: 1000
+      },
       maxRetries: {
         type: Number,
         default: 2
@@ -191,6 +199,9 @@ const broadcastSchema = new mongoose.Schema(
 // Indexes
 broadcastSchema.index({ status: 1, createdAt: -1 });
 broadcastSchema.index({ createdBy: 1 });
+broadcastSchema.index({ createdBy: 1, createdAt: -1 });
+broadcastSchema.index({ createdBy: 1, status: 1, createdAt: -1 });
+broadcastSchema.index({ createdBy: 1, name: 1 });
 
 // Methods
 broadcastSchema.methods.incrementStat = async function (statKey) {

@@ -9,7 +9,7 @@ import exotelService from '../services/ExotelService.js';
 import pythonTTSService from '../services/pythonTTSService.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
 import logger from '../utils/logger.js';
-import { emitOutboundMetrics, emitOutboundTemplateUpdate } from '../sockets/unifiedSocket.js';
+import { emitOutboundCallUpdate, emitOutboundMetrics, emitOutboundTemplateUpdate } from '../sockets/unifiedSocket.js';
 import { getUserIdString, getUserObjectId } from '../utils/authContext.js';
 import mongoose from 'mongoose';
 import outboundCampaignService from '../services/outboundCampaignService.js';
@@ -278,7 +278,14 @@ class OutboundLocalController {
         ? { exotel: exotelResult?.raw || {} }
         : { twilio: exotelResult?.raw || {} };
 
-    await Call.create({
+    const providerDataPayload = {
+      from,
+      webhookUrl,
+      ...(providerData || {}),
+      ...providerPayload
+    };
+
+    const call = await Call.create({
       callSid,
       exotelCallSid: normalizedProvider === 'exotel' ? (exotelResult?.callSid || '') : '',
       user: userObjectId,
@@ -289,14 +296,24 @@ class OutboundLocalController {
       retryAttempt: 0,
       nextRetryAt: status === 'failed' ? new Date(Date.now() + 2 * 60 * 60 * 1000) : null,
       startTime: new Date(),
-      providerData: {
-        from,
-        webhookUrl,
-        ...(providerData || {}),
-        ...providerPayload
-      },
+      providerData: providerDataPayload,
       error: errorMessage ? { message: errorMessage } : undefined
     });
+
+    emitOutboundCallUpdate(String(userObjectId || ''), {
+      _id: String(call._id || ''),
+      callSid: call.callSid,
+      phoneNumber: call.phoneNumber,
+      status: call.status,
+      direction: call.direction,
+      provider: call.provider,
+      duration: call.duration || 0,
+      createdAt: call.createdAt,
+      updatedAt: call.updatedAt,
+      providerData: providerDataPayload
+    });
+
+    return call;
   }
 
   async quickCall(req, res) {
@@ -381,6 +398,8 @@ class OutboundLocalController {
       if (scheduleType !== 'immediate') {
         const campaign = await outboundCampaignService.createCampaign({
           provider,
+          originType: 'single',
+          campaignType: 'single',
           campaignName: `Single Call ${to || toRaw || Date.now()}`,
           from,
           templateId: templateId || '',
@@ -406,6 +425,9 @@ class OutboundLocalController {
           scheduled: true,
           campaignId: campaign.campaignId,
           campaignDbId: campaign._id,
+          campaignType: 'single',
+          originType: 'single',
+          phoneNumber: to || toRaw,
           status: campaign.status,
           schedule: campaign.schedule
         });
@@ -532,6 +554,10 @@ class OutboundLocalController {
         provider,
         providerData: {
           provider,
+          originType: 'single',
+          campaignType: 'single',
+          singleRecipient: persistedTo,
+          contactCount: 1,
           templateId: templateId || '',
           templateName: resolvedTemplateName || '',
           script: resolvedScript || '',
@@ -665,7 +691,11 @@ class OutboundLocalController {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
 
-      const campaign = await outboundCampaignService.createCampaign(req.body || {}, userObjectId, {
+      const campaign = await outboundCampaignService.createCampaign({
+        ...(req.body || {}),
+        originType: req.body?.originType || req.body?.campaignType || 'bulk',
+        campaignType: req.body?.campaignType || req.body?.originType || 'bulk'
+      }, userObjectId, {
         autoExecute: true,
         createSchedule: true
       });
@@ -688,6 +718,8 @@ class OutboundLocalController {
         success: true,
         campaignId: campaign.campaignId,
         campaignDbId: campaign._id,
+        campaignType: campaign.metadata?.originType || 'bulk',
+        originType: campaign.metadata?.originType || 'bulk',
         status: campaign.status,
         schedule: campaign.schedule,
         message: campaign.schedule?.enabled

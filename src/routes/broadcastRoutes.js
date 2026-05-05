@@ -12,6 +12,9 @@ const router = express.Router();
 // 🔒 Protected broadcast routes (require authentication)
 router.post('/start', authenticate, requirePlanFeature('voiceCampaign'), resolveUserTwilioContext, broadcastController.startBroadcast);
 router.get('/status/:id', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastStatus);
+router.post('/bulk/cancel', authenticate, resolveUserTwilioContext, broadcastController.bulkCancelBroadcasts);
+router.post('/bulk/delete', authenticate, resolveUserTwilioContext, broadcastController.bulkDeleteBroadcasts);
+router.get('/:id/summary-details', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastSummaryDetails);
 router.post('/:id/cancel', authenticate, resolveUserTwilioContext, broadcastController.cancelBroadcast);
 router.get('/:id/calls', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastCalls);
 router.get('/list', authenticate, resolveUserTwilioContext, broadcastController.listBroadcasts);

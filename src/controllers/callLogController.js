@@ -15,6 +15,37 @@ const clampPositiveInt = (value, fallback, max) => {
 
 const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const buildOutboundTypeFilter = (type = 'all') => {
+    const normalizedType = String(type || 'all').toLowerCase();
+    if (!['single', 'bulk'].includes(normalizedType)) return null;
+
+    if (normalizedType === 'single') {
+        return {
+            $or: [
+                { 'providerData.originType': 'single' },
+                { 'providerData.campaignType': 'single' },
+                { 'providerData.singleRecipient': { $exists: true, $ne: '' } },
+                { 'providerData.campaignId': { $exists: false } },
+                { 'providerData.campaignId': '' }
+            ]
+        };
+    }
+
+    return {
+        $or: [
+            { 'providerData.originType': 'bulk' },
+            { 'providerData.campaignType': 'bulk' },
+            {
+                $and: [
+                    { 'providerData.campaignId': { $exists: true, $ne: '' } },
+                    { 'providerData.originType': { $ne: 'single' } },
+                    { 'providerData.campaignType': { $ne: 'single' } }
+                ]
+            }
+        ]
+    };
+};
+
 class CallLogController {
     /**
      * Get call logs with filtering and pagination
@@ -31,6 +62,7 @@ class CallLogController {
                 endDate,
                 status,
                 direction,
+                type = 'all',
                 phoneNumber,
                 page = 1,
                 limit = 20,
@@ -39,7 +71,12 @@ class CallLogController {
             } = req.query;
 
             // Build filter query
-            const filter = { deletedAt: null, user: userId }; // Exclude soft-deleted
+            const filter = {
+                deletedAt: null,
+                user: userId,
+                callSid: { $exists: true, $ne: '' },
+                status: { $ne: 'scheduled' }
+            }; // Exclude soft-deleted and schedule-only rows
 
             if (startDate || endDate) {
                 filter.createdAt = {};
@@ -50,6 +87,10 @@ class CallLogController {
             if (status) filter.status = status;
             if (direction) filter.direction = direction;
             if (phoneNumber) filter.phoneNumber = new RegExp(escapeRegExp(phoneNumber), 'i');
+            const typeFilter = buildOutboundTypeFilter(type);
+            if (typeFilter) {
+                filter.$and = [...(filter.$and || []), typeFilter];
+            }
 
             // Calculate pagination
             const pageNum = clampPositiveInt(page, 1, Number.MAX_SAFE_INTEGER);

@@ -95,6 +95,12 @@ const callLogFilterSchema = {
         enum: ['inbound', 'outbound', 'outbound-local'],
         message: 'Direction must be inbound or outbound'
     },
+    type: {
+        type: 'string',
+        required: false,
+        enum: ['all', 'single', 'bulk'],
+        message: 'Type must be all, single, or bulk'
+    },
     phoneNumber: {
         type: 'string',
         required: false,

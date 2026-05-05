@@ -3,6 +3,7 @@ import BroadcastCall from '../models/BroadcastCall.js';
 import ExecutionLog from '../models/ExecutionLog.js';
 import Workflow from '../models/Workflow.js';
 import User from '../models/user.js';
+import mongoose from 'mongoose';
 import logger from '../utils/logger.js';
 import { getIO } from '../sockets/unifiedSocket.js';
 import { getRawUserId, getUserObjectId } from '../utils/authContext.js';
@@ -19,7 +20,9 @@ class AnalyticsController {
     this.ANALYTICS_ROOM_PREFIX = 'analytics_room:';
     this.broadcastDebounceMs = 500;
     this.broadcastTimer = null;
-    this.pendingBroadcastPayload = null;
+    this.pendingBroadcastKeys = new Map();
+    this.activeAnalyticsSubscriptions = new Map();
+    this.inFlightAnalytics = new Map();
   }
 
   /**
@@ -134,6 +137,7 @@ class AnalyticsController {
             failedCalls,
             inboundCalls: callStats.inboundCalls || 0,
             ivrCalls: callStats.ivrCalls || 0,
+            inboundIvrCalls: (callStats.inboundCalls || 0) + (callStats.ivrCalls || 0),
             outboundCalls: (callStats.outboundCalls || 0) + (broadcastStats.totalCalls || 0),
             broadcastCalls: broadcastStats.totalCalls || 0,
             activeCalls: activeCallCount + activeBroadcastCount
@@ -170,6 +174,60 @@ class AnalyticsController {
     return `analytics_${userId}_${period}_${callType}_${status}`;
   }
 
+  getRecentCallLimit() {
+    const configuredLimit = Number(process.env.ANALYTICS_RECENT_CALL_LIMIT || 200);
+    return Math.max(1, Math.min(Number.isFinite(configuredLimit) ? configuredLimit : 200, 500));
+  }
+
+  normalizeAnalyticsPayload(payload = {}, fallbackUserId = null) {
+    return {
+      period: payload.period || 'today',
+      callType: payload.callType || 'all',
+      status: payload.status || 'all',
+      userId: payload.userId ? String(payload.userId) : (fallbackUserId ? String(fallbackUserId) : null)
+    };
+  }
+
+  buildSubscriptionKey({ period = 'today', callType = 'all', status = 'all', userId = null } = {}) {
+    return [userId ? String(userId) : 'global', period || 'today', callType || 'all', status || 'all'].join('|');
+  }
+
+  registerAnalyticsSubscription(socket, payload = {}) {
+    if (!socket?.id) return null;
+    const socketUserId = payload.userId || getRawUserId(socket.user);
+    const subscription = this.normalizeAnalyticsPayload(payload, socketUserId);
+    this.activeAnalyticsSubscriptions.set(socket.id, subscription);
+    return subscription;
+  }
+
+  unregisterAnalyticsSubscription(socketOrId) {
+    const socketId = typeof socketOrId === 'string' ? socketOrId : socketOrId?.id;
+    if (socketId) this.activeAnalyticsSubscriptions.delete(socketId);
+  }
+
+  getActiveBroadcastTargets(payload = {}) {
+    const requestedUserId = payload.userId ? String(payload.userId) : null;
+    const hasExplicitView = Boolean(payload.period || payload.callType || payload.status);
+
+    if (hasExplicitView) {
+      return [this.normalizeAnalyticsPayload(payload, requestedUserId)];
+    }
+
+    const targets = new Map();
+    for (const subscription of this.activeAnalyticsSubscriptions.values()) {
+      const subscriptionUserId = subscription.userId ? String(subscription.userId) : null;
+      if (requestedUserId && subscriptionUserId !== requestedUserId) continue;
+      targets.set(this.buildSubscriptionKey(subscription), subscription);
+    }
+
+    if (targets.size === 0) {
+      const fallback = this.normalizeAnalyticsPayload({ ...payload, period: 'today', callType: 'all', status: 'all' }, requestedUserId);
+      targets.set(this.buildSubscriptionKey(fallback), fallback);
+    }
+
+    return [...targets.values()];
+  }
+
   getAnalyticsRoom(userId = null) {
     const resolvedUserId = userId ? String(userId) : '';
     return resolvedUserId ? `${this.ANALYTICS_ROOM_PREFIX}${resolvedUserId}` : this.ANALYTICS_ROOM;
@@ -193,25 +251,35 @@ class AnalyticsController {
       return cached.data;
     }
 
-    const analyticsData = await this.generateInboundAnalytics({
+    const inFlight = this.inFlightAnalytics.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const generation = this.generateInboundAnalytics({
       period: normalizedPeriod,
       callType: normalizedCallType,
       status: normalizedStatus,
       userId
+    }).then((analyticsData) => {
+      this.cache.set(cacheKey, {
+        data: analyticsData,
+        timestamp: Date.now()
+      });
+      return analyticsData;
+    }).finally(() => {
+      this.inFlightAnalytics.delete(cacheKey);
     });
 
-    this.cache.set(cacheKey, {
-      data: analyticsData,
-      timestamp: Date.now()
-    });
-
-    return analyticsData;
+    this.inFlightAnalytics.set(cacheKey, generation);
+    return generation;
   }
 
   async generateInboundAnalytics({ period = 'today', callType = 'all', status = 'all', userId = null } = {}) {
     const dateRange = this.getDateRange(period);
+    const userObjectId = this.toObjectId(userId);
     const ownerFilter = {
-      ...(userId ? { user: userId } : {}),
+      ...(userObjectId ? { user: userObjectId } : {}),
       deletedAt: null
     };
 
@@ -224,21 +292,27 @@ class AnalyticsController {
       ivr,
       queue,
       recentCalls,
-      dailyBreakdown
+      dailyBreakdown,
+      channels,
+      statusBreakdown
     ] = await Promise.all([
-      this.getSummaryStats(dateRange, callType, status, ownerFilter),
-      this.getHourlyDistribution(dateRange, ownerFilter),
+      this.getUnifiedSummaryStats(dateRange, callType, status, ownerFilter, userId),
+      this.getUnifiedHourlyDistribution(dateRange, callType, status, ownerFilter, userId),
       this.getIVRBreakdown(dateRange, userId),
       this.getAIMetrics(dateRange, ownerFilter),
       this.getUsersStats(),
       this.getIVRStats(dateRange, userId),
       this.getQueueStats(dateRange, ownerFilter),
-      this.getRecentCalls(100, ownerFilter),
-      this.getDailyBreakdown(period, ownerFilter)
+      this.getUnifiedRecentCalls(this.getRecentCallLimit(), dateRange, callType, status, ownerFilter, userId),
+      this.getUnifiedDailyBreakdown(period, callType, status, ownerFilter, userId),
+      this.getChannelStats(dateRange, callType, status, ownerFilter, userId),
+      this.getUnifiedStatusBreakdown(dateRange, callType, status, ownerFilter, userId)
     ]);
 
     return {
       summary,
+      channels,
+      statusBreakdown,
       hourlyDistribution,
       ivrBreakdown,
       aiMetrics,
@@ -254,6 +328,237 @@ class AnalyticsController {
       },
       generatedAt: new Date().toISOString()
     };
+  }
+
+  async getChannelStats(dateRange, callType = 'all', status = 'all', ownerFilter = {}, userId = null) {
+    const channels = this.getEmptyChannels();
+
+    if (this.shouldIncludeCallModel(callType)) {
+      const callPipeline = [
+        { $match: this.buildCallMatch(dateRange, status, ownerFilter) },
+        this.getComputedCallTypeStage()
+      ];
+      this.applyCallTypeFilter(callPipeline, callType);
+      callPipeline.push({
+        $group: {
+          _id: '$computedCallType',
+          total: { $sum: 1 },
+          active: { $sum: { $cond: [{ $in: ['$status', ['initiated', 'ringing', 'answered', 'in-progress']] }, 1, 0] } },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+          failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no-answer', 'cancelled', 'canceled']] }, 1, 0] } },
+          missed: { $sum: { $cond: [{ $in: ['$status', ['busy', 'no-answer', 'missed', 'abandoned']] }, 1, 0] } },
+          totalDuration: { $sum: '$duration' }
+        }
+      });
+
+      const callRows = await Call.aggregate(callPipeline);
+      callRows.forEach((row) => {
+        if (channels[row._id]) {
+          this.mergeMetricBucket(channels[row._id], row);
+        }
+      });
+    }
+
+    if (this.shouldIncludeBroadcastModel(callType)) {
+      const broadcastRows = await BroadcastCall.aggregate([
+        { $match: this.buildBroadcastMatch(dateRange, status, userId) },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            active: { $sum: { $cond: [{ $in: ['$status', ['queued', 'claiming', 'calling', 'ringing', 'in_progress', 'answered']] }, 1, 0] } },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no_answer', 'cancelled', 'opted_out']] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $in: ['$status', ['busy', 'no_answer', 'missed', 'abandoned']] }, 1, 0] } },
+            totalDuration: { $sum: '$duration' }
+          }
+        }
+      ]);
+
+      if (broadcastRows[0]) {
+        this.mergeMetricBucket(channels.voiceBroadcast, broadcastRows[0]);
+      }
+    }
+
+    channels.inboundIvr = this.getEmptyChannelMetrics();
+    this.mergeMetricBucket(channels.inboundIvr, channels.inbound);
+    this.mergeMetricBucket(channels.inboundIvr, channels.ivr);
+
+    return channels;
+  }
+
+  async getUnifiedSummaryStats(dateRange, callType = 'all', status = 'all', ownerFilter = {}, userId = null) {
+    const channels = await this.getChannelStats(dateRange, callType, status, ownerFilter, userId);
+    const summary = {
+      totalCalls: 0,
+      activeCalls: 0,
+      completedCalls: 0,
+      failedCalls: 0,
+      missedCalls: 0,
+      voicemails: 0,
+      callbacks: 0,
+      avgDuration: 0,
+      totalDuration: 0,
+      successRate: 0,
+      inboundCalls: channels.inbound.total,
+      ivrCalls: channels.ivr.total,
+      inboundIvrCalls: channels.inboundIvr.total,
+      outboundCalls: channels.outbound.total,
+      broadcastCalls: channels.voiceBroadcast.total,
+      quickCalls: 0,
+      outboundCompletedCalls: channels.outbound.completed,
+      outboundFailedCalls: channels.outbound.failed
+    };
+
+    [channels.voiceBroadcast, channels.inbound, channels.ivr, channels.outbound].forEach((bucket) => {
+      summary.totalCalls += bucket.total;
+      summary.activeCalls += bucket.active;
+      summary.completedCalls += bucket.completed;
+      summary.failedCalls += bucket.failed;
+      summary.missedCalls += bucket.missed;
+      summary.totalDuration += bucket.totalDuration;
+    });
+
+    if (this.shouldIncludeCallModel(callType)) {
+      const extraPipeline = [
+        { $match: this.buildCallMatch(dateRange, status, ownerFilter) },
+        this.getComputedCallTypeStage()
+      ];
+      this.applyCallTypeFilter(extraPipeline, callType);
+      extraPipeline.push({
+        $group: {
+          _id: null,
+          voicemails: { $sum: { $cond: [{ $ne: [{ $ifNull: ['$voicemail', null] }, null] }, 1, 0] } },
+          callbacks: {
+            $sum: {
+              $cond: [
+                { $or: [{ $eq: ['$callbackRequested', true] }, { $eq: ['$callback.requested', true] }] },
+                1,
+                0
+              ]
+            }
+          },
+          quickCalls: { $sum: { $cond: [{ $eq: ['$direction', 'outbound-local'] }, 1, 0] } }
+        }
+      });
+      const extra = await Call.aggregate(extraPipeline);
+      summary.voicemails = Number(extra[0]?.voicemails || 0);
+      summary.callbacks = Number(extra[0]?.callbacks || 0);
+      summary.quickCalls = Number(extra[0]?.quickCalls || 0);
+    }
+
+    summary.avgDuration = summary.totalCalls > 0 ? Math.round(summary.totalDuration / summary.totalCalls) : 0;
+    summary.successRate = summary.totalCalls > 0 ? Math.round((summary.completedCalls / summary.totalCalls) * 100) : 0;
+    summary.answerRate = summary.successRate;
+    return summary;
+  }
+
+  async getUnifiedHourlyDistribution(dateRange, callType = 'all', status = 'all', ownerFilter = {}, userId = null) {
+    const hours = Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      calls: 0,
+      total: 0,
+      completed: 0,
+      failed: 0,
+      inbound: 0,
+      ivr: 0,
+      inboundIvr: 0,
+      outbound: 0,
+      voiceBroadcast: 0,
+      successRate: 0
+    }));
+
+    if (this.shouldIncludeCallModel(callType)) {
+      const callPipeline = [
+        { $match: this.buildCallMatch(dateRange, status, ownerFilter) },
+        this.getComputedCallTypeStage()
+      ];
+      this.applyCallTypeFilter(callPipeline, callType);
+      callPipeline.push(
+        {
+          $group: {
+            _id: { hour: { $hour: '$createdAt' }, type: '$computedCallType' },
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no-answer', 'cancelled', 'canceled']] }, 1, 0] } }
+          }
+        },
+        { $sort: { '_id.hour': 1 } }
+      );
+
+      const callRows = await Call.aggregate(callPipeline);
+      callRows.forEach((row) => {
+        const bucket = hours[row._id.hour];
+        const type = row._id.type;
+        if (!bucket || !Object.prototype.hasOwnProperty.call(bucket, type)) return;
+        bucket[type] += row.total;
+        bucket.calls += row.total;
+        bucket.total += row.total;
+        bucket.completed += row.completed;
+        bucket.failed += row.failed;
+      });
+    }
+
+    if (this.shouldIncludeBroadcastModel(callType)) {
+      const broadcastRows = await BroadcastCall.aggregate([
+        { $match: this.buildBroadcastMatch(dateRange, status, userId) },
+        {
+          $group: {
+            _id: { $hour: '$createdAt' },
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no_answer', 'cancelled', 'opted_out']] }, 1, 0] } }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]);
+
+      broadcastRows.forEach((row) => {
+        const bucket = hours[row._id];
+        if (!bucket) return;
+        bucket.voiceBroadcast += row.total;
+        bucket.calls += row.total;
+        bucket.total += row.total;
+        bucket.completed += row.completed;
+        bucket.failed += row.failed;
+      });
+    }
+
+    return hours.map((bucket) => ({
+      ...bucket,
+      inboundIvr: bucket.inbound + bucket.ivr,
+      successRate: bucket.total > 0 ? Math.round((bucket.completed / bucket.total) * 100) : 0
+    }));
+  }
+
+  async getUnifiedStatusBreakdown(dateRange, callType = 'all', status = 'all', ownerFilter = {}, userId = null) {
+    const breakdown = {};
+    const addStatus = (key, count) => {
+      const normalized = String(key || 'unknown').replace(/_/g, '-');
+      breakdown[normalized] = (breakdown[normalized] || 0) + Number(count || 0);
+    };
+
+    if (this.shouldIncludeCallModel(callType)) {
+      const callPipeline = [
+        { $match: this.buildCallMatch(dateRange, status, ownerFilter) },
+        this.getComputedCallTypeStage()
+      ];
+      this.applyCallTypeFilter(callPipeline, callType);
+      callPipeline.push({ $group: { _id: '$status', count: { $sum: 1 } } });
+
+      const callRows = await Call.aggregate(callPipeline);
+      callRows.forEach((row) => addStatus(row._id, row.count));
+    }
+
+    if (this.shouldIncludeBroadcastModel(callType)) {
+      const broadcastRows = await BroadcastCall.aggregate([
+        { $match: this.buildBroadcastMatch(dateRange, status, userId) },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]);
+      broadcastRows.forEach((row) => addStatus(row._id, row.count));
+    }
+
+    return breakdown;
   }
 
   /**
@@ -721,6 +1026,210 @@ class AnalyticsController {
     }));
   }
 
+  async getUnifiedRecentCalls(limit = 100, dateRange, callType = 'all', status = 'all', ownerFilter = {}, userId = null) {
+    const rows = [];
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 200));
+
+    if (this.shouldIncludeCallModel(callType)) {
+      const callQuery = this.buildCallMatch(dateRange, status, ownerFilter);
+      const calls = await Call.find(callQuery)
+        .sort({ createdAt: -1 })
+        .limit(safeLimit)
+      .select('callSid phoneNumber from to direction routing status duration createdAt updatedAt provider providerData')
+      .lean();
+
+      const matchesRequestedType = (call) => (
+        !callType ||
+        callType === 'all' ||
+        call.type === callType ||
+        (callType === 'inboundIvr' && ['inbound', 'ivr'].includes(call.type))
+      );
+
+      rows.push(...calls
+        .map((call) => ({
+          id: String(call._id || call.callSid || ''),
+          callSid: call.callSid || '',
+          phoneNumber: call.phoneNumber || call.from || call.to || '-',
+          type: this.resolveCallType(call),
+          callType: this.resolveCallType(call),
+          status: call.status || 'unknown',
+          duration: Number(call.duration || 0),
+          provider: call.provider || '',
+          campaignName: call.providerData?.campaignName || call.providerData?.templateName || '',
+          createdAt: call.createdAt,
+          updatedAt: call.updatedAt,
+          source: 'call'
+        }))
+        .filter(matchesRequestedType));
+    }
+
+    if (this.shouldIncludeBroadcastModel(callType)) {
+      const broadcastCalls = await BroadcastCall.find(this.buildBroadcastMatch(dateRange, status, userId))
+        .populate('broadcast', 'name campaignType')
+        .sort({ createdAt: -1 })
+        .limit(safeLimit)
+        .select('callSid contact status duration createdAt updatedAt broadcast attempts twilioError')
+        .lean();
+
+      rows.push(...broadcastCalls.map((call) => ({
+        id: String(call._id || call.callSid || ''),
+        callSid: call.callSid || '',
+        phoneNumber: call.contact?.phone || '-',
+        contactName: call.contact?.name || '',
+        type: 'voiceBroadcast',
+        callType: 'voiceBroadcast',
+        status: String(call.status || 'unknown').replace(/_/g, '-'),
+        duration: Number(call.duration || 0),
+        provider: 'twilio',
+        campaignName: call.broadcast?.name || '',
+        campaignType: call.broadcast?.campaignType || '',
+        attempts: Number(call.attempts || 0),
+        error: call.twilioError || null,
+        createdAt: call.createdAt,
+        updatedAt: call.updatedAt,
+        source: 'broadcast'
+      })));
+    }
+
+    return rows
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .slice(0, safeLimit);
+  }
+
+  getEmptyChannelMetrics() {
+    return {
+      total: 0,
+      active: 0,
+      completed: 0,
+      failed: 0,
+      missed: 0,
+      avgDuration: 0,
+      totalDuration: 0,
+      successRate: 0
+    };
+  }
+
+  getEmptyChannels() {
+    return {
+      voiceBroadcast: this.getEmptyChannelMetrics(),
+      inbound: this.getEmptyChannelMetrics(),
+      ivr: this.getEmptyChannelMetrics(),
+      inboundIvr: this.getEmptyChannelMetrics(),
+      outbound: this.getEmptyChannelMetrics()
+    };
+  }
+
+  mergeMetricBucket(target, source = {}) {
+    const total = Number(source.total || 0);
+    const totalDuration = Number(source.totalDuration || 0);
+
+    target.total += total;
+    target.active += Number(source.active || 0);
+    target.completed += Number(source.completed || 0);
+    target.failed += Number(source.failed || 0);
+    target.missed += Number(source.missed || 0);
+    target.totalDuration += totalDuration;
+    target.avgDuration = target.total > 0 ? Math.round(target.totalDuration / target.total) : 0;
+    target.successRate = target.total > 0 ? Math.round((target.completed / target.total) * 100) : 0;
+  }
+
+  buildCallMatch(dateRange, status = 'all', ownerFilter = {}) {
+    const matchStage = {
+      ...ownerFilter,
+      createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+    };
+
+    if (status && status !== 'all') {
+      if (status === 'missed') {
+        matchStage.status = { $in: ['busy', 'no-answer', 'missed', 'abandoned'] };
+      } else if (status === 'failed') {
+        matchStage.status = { $in: ['failed', 'busy', 'no-answer', 'cancelled', 'canceled'] };
+      } else if (status === 'active') {
+        matchStage.status = { $in: ['initiated', 'ringing', 'answered', 'in-progress'] };
+      } else {
+        matchStage.status = status;
+      }
+    }
+
+    return matchStage;
+  }
+
+  buildBroadcastMatch(dateRange, status = 'all', userId = null) {
+    const matchStage = {
+      ...(userId ? { userId: this.toObjectId(userId) } : {}),
+      createdAt: { $gte: dateRange.start, $lte: dateRange.end }
+    };
+
+    if (status && status !== 'all') {
+      if (status === 'missed') {
+        matchStage.status = { $in: ['busy', 'no_answer', 'missed', 'abandoned'] };
+      } else if (status === 'failed') {
+        matchStage.status = { $in: ['failed', 'busy', 'no_answer', 'cancelled'] };
+      } else if (status === 'active') {
+        matchStage.status = { $in: ['queued', 'claiming', 'calling', 'ringing', 'in_progress', 'answered'] };
+      } else {
+        matchStage.status = status;
+      }
+    }
+
+    return matchStage;
+  }
+
+  getComputedCallTypeStage() {
+    return {
+      $addFields: {
+        computedCallType: {
+          $cond: [
+            { $eq: ['$direction', 'outbound-local'] },
+            'outbound',
+            {
+              $cond: [
+                { $eq: ['$direction', 'outbound'] },
+                'outbound',
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $eq: ['$direction', 'inbound'] },
+                        { $ne: [{ $ifNull: ['$routing', 'default'] }, 'default'] }
+                      ]
+                    },
+                    'ivr',
+                    'inbound'
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    };
+  }
+
+  applyCallTypeFilter(pipeline, callType) {
+    if (!callType || callType === 'all' || callType === 'voiceBroadcast') return;
+    if (callType === 'inboundIvr') {
+      pipeline.push({ $match: { computedCallType: { $in: ['inbound', 'ivr'] } } });
+      return;
+    }
+    pipeline.push({ $match: { computedCallType: callType } });
+  }
+
+  shouldIncludeCallModel(callType) {
+    return !callType || callType === 'all' || ['inbound', 'ivr', 'inboundIvr', 'outbound'].includes(callType);
+  }
+
+  shouldIncludeBroadcastModel(callType) {
+    return !callType || callType === 'all' || callType === 'voiceBroadcast';
+  }
+
+  toObjectId(value) {
+    if (!value) return value;
+    return mongoose.Types.ObjectId.isValid(String(value))
+      ? new mongoose.Types.ObjectId(String(value))
+      : value;
+  }
+
   async enforceInboundRecentCallsRetention(userId, limit = 100) {
     if (!userId || !Number.isFinite(Number(limit)) || Number(limit) <= 0) return 0;
 
@@ -787,6 +1296,92 @@ class AnalyticsController {
         completed: d.completed,
         failed: d.failed
       };
+    });
+
+    return breakdown;
+  }
+
+  async getUnifiedDailyBreakdown(period, callType = 'all', status = 'all', ownerFilter = {}, userId = null) {
+    const dateRange = this.getDateRange(period);
+    const breakdown = {};
+
+    const ensureDay = (dateKey) => {
+      if (!breakdown[dateKey]) {
+        breakdown[dateKey] = {
+          total: 0,
+          completed: 0,
+          failed: 0,
+          inbound: 0,
+          ivr: 0,
+          inboundIvr: 0,
+          outbound: 0,
+          voiceBroadcast: 0,
+          successRate: 0
+        };
+      }
+      return breakdown[dateKey];
+    };
+
+    if (this.shouldIncludeCallModel(callType)) {
+      const callPipeline = [
+        { $match: this.buildCallMatch(dateRange, status, ownerFilter) },
+        this.getComputedCallTypeStage()
+      ];
+      this.applyCallTypeFilter(callPipeline, callType);
+      callPipeline.push(
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+              type: '$computedCallType'
+            },
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no-answer', 'cancelled', 'canceled']] }, 1, 0] } }
+          }
+        },
+        { $sort: { '_id.date': 1 } }
+      );
+
+      const callRows = await Call.aggregate(callPipeline);
+      callRows.forEach((row) => {
+        const day = ensureDay(row._id.date);
+        const type = row._id.type;
+        if (Object.prototype.hasOwnProperty.call(day, type)) {
+          day[type] += row.total;
+        }
+        day.total += row.total;
+        day.completed += row.completed;
+        day.failed += row.failed;
+      });
+    }
+
+    if (this.shouldIncludeBroadcastModel(callType)) {
+      const broadcastRows = await BroadcastCall.aggregate([
+        { $match: this.buildBroadcastMatch(dateRange, status, userId) },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no_answer', 'cancelled', 'opted_out']] }, 1, 0] } }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]);
+
+      broadcastRows.forEach((row) => {
+        const day = ensureDay(row._id);
+        day.voiceBroadcast += row.total;
+        day.total += row.total;
+        day.completed += row.completed;
+        day.failed += row.failed;
+      });
+    }
+
+    Object.values(breakdown).forEach((day) => {
+      day.inboundIvr = day.inbound + day.ivr;
+      day.successRate = day.total > 0 ? Math.round((day.completed / day.total) * 100) : 0;
     });
 
     return breakdown;
@@ -867,7 +1462,7 @@ class AnalyticsController {
       // Trigger analytics refresh for significant events
       if (['call_ended', 'call_updated'].includes(callData.event)) {
         this.scheduleAnalyticsBroadcast({
-          period: callData.period || 'today',
+          ...(callData.period ? { period: callData.period } : {}),
           reason: callData.event,
           userId
         });
@@ -887,11 +1482,9 @@ class AnalyticsController {
 
   async emitAnalyticsSnapshotToSocket(socket, payload = {}) {
     if (!socket) return;
-    const period = payload.period || 'today';
-    const callType = payload.callType || 'all';
-    const status = payload.status || 'all';
     const socketUserId = payload.userId || getRawUserId(socket.user);
-    const userId = socketUserId ? String(socketUserId) : null;
+    const { period, callType, status, userId } = this.normalizeAnalyticsPayload(payload, socketUserId);
+    this.registerAnalyticsSubscription(socket, { period, callType, status, userId });
     const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
 
     socket.emit('call_analytics_update', {
@@ -909,10 +1502,7 @@ class AnalyticsController {
     const io = getIO();
     if (!io) return;
 
-    const period = payload.period || 'today';
-    const callType = payload.callType || 'all';
-    const status = payload.status || 'all';
-    const userId = payload.userId ? String(payload.userId) : null;
+    const { period, callType, status, userId } = this.normalizeAnalyticsPayload(payload);
     const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
     const analyticsRoom = this.getAnalyticsRoom(userId);
 
@@ -929,22 +1519,25 @@ class AnalyticsController {
   }
 
   scheduleAnalyticsBroadcast(payload = {}) {
-    this.pendingBroadcastPayload = {
-      ...(this.pendingBroadcastPayload || {}),
-      ...payload
-    };
+    const targets = this.getActiveBroadcastTargets(payload);
+    targets.forEach((target) => {
+      this.pendingBroadcastKeys.set(this.buildSubscriptionKey(target), {
+        ...target,
+        reason: payload.reason || target.reason || 'broadcast'
+      });
+    });
 
     if (this.broadcastTimer) {
       return;
     }
 
     this.broadcastTimer = setTimeout(async () => {
-      const nextPayload = this.pendingBroadcastPayload || {};
+      const nextPayloads = [...this.pendingBroadcastKeys.values()];
       this.broadcastTimer = null;
-      this.pendingBroadcastPayload = null;
+      this.pendingBroadcastKeys.clear();
 
       try {
-        await this.broadcastAnalyticsSnapshot(nextPayload);
+        await Promise.all(nextPayloads.map((nextPayload) => this.broadcastAnalyticsSnapshot(nextPayload)));
       } catch (error) {
         logger.error('[Analytics] Scheduled broadcast failed:', error);
       }
@@ -1083,6 +1676,7 @@ class AnalyticsController {
 
   clearCache() {
     this.cache.clear();
+    this.inFlightAnalytics.clear();
     logger.info('[Analytics] Cache cleared');
   }
 
@@ -1093,6 +1687,12 @@ class AnalyticsController {
     for (const key of this.cache.keys()) {
       if (key.startsWith(userToken)) {
         this.cache.delete(key);
+      }
+    }
+
+    for (const key of this.inFlightAnalytics.keys()) {
+      if (key.startsWith(userToken)) {
+        this.inFlightAnalytics.delete(key);
       }
     }
   }

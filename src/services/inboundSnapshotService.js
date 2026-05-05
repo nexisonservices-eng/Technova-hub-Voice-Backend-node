@@ -22,6 +22,7 @@ const toQueueTimestamp = (call) => (
 
 export const mapRoutingRuleResponse = (rule) => ({
   id: String(rule._id),
+  _id: String(rule._id),
   name: rule.name,
   priority: rule.priority,
   condition: rule.condition,
@@ -29,7 +30,9 @@ export const mapRoutingRuleResponse = (rule) => ({
   actionType: rule.actionType || 'custom',
   ivrMenuId: rule.ivrMenuId || '',
   ivrPromptKey: rule.ivrPromptKey || '',
-  enabled: Boolean(rule.enabled)
+  enabled: Boolean(rule.enabled),
+  createdAt: rule.createdAt || null,
+  updatedAt: rule.updatedAt || null
 });
 
 export const buildQueueSnapshotPayload = async (userId, queueName = '') => {

@@ -161,10 +161,15 @@ const callSchema = new mongoose.Schema(
 ====================== */
 
 callSchema.index({ companyId: 1, user: 1, createdAt: -1 });
+callSchema.index({ user: 1, createdAt: -1 });
+callSchema.index({ user: 1, status: 1, createdAt: -1 });
+callSchema.index({ user: 1, deletedAt: 1, createdAt: -1 });
+callSchema.index({ user: 1, deletedAt: 1, status: 1, createdAt: -1 });
 callSchema.index({ user: 1, direction: 1, createdAt: -1 });
 callSchema.index({ user: 1, direction: 1, deletedAt: 1, createdAt: -1 });
 callSchema.index({ user: 1, direction: 1, deletedAt: 1, status: 1, createdAt: -1 });
 callSchema.index({ user: 1, direction: 1, deletedAt: 1, phoneNumber: 1 });
+callSchema.index({ user: 1, direction: 1, routing: 1, deletedAt: 1, createdAt: -1 });
 callSchema.index({ phoneNumber: 1 });
 callSchema.index({ status: 1 });
 callSchema.index({ direction: 1 });

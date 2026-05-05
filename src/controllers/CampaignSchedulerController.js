@@ -1,7 +1,67 @@
 import campaignAutomationService from '../services/campaignAutomationService.js';
 import CampaignSchedule from '../models/CampaignSchedule.js';
 import { getUserIdString, getUserObjectId } from '../utils/authContext.js';
+import { emitCampaignUpdate } from '../sockets/unifiedSocket.js';
 import logger from '../utils/logger.js';
+
+const deriveScheduleType = (schedule = {}) => {
+  const metadata = schedule.metadata || {};
+  const explicitType = String(
+    schedule.type ||
+    schedule.campaignType ||
+    schedule.originType ||
+    metadata.type ||
+    metadata.campaignType ||
+    metadata.originType ||
+    ''
+  ).trim().toLowerCase();
+
+  if (explicitType === 'single' || explicitType === 'bulk') return explicitType;
+
+  const numbers = Array.isArray(schedule.numbers) ? schedule.numbers : [];
+  const contactCount = Number(schedule.contactCount ?? metadata.contactCount ?? numbers.length ?? 0) || 0;
+  const campaignName = String(schedule.campaignName || metadata.campaignName || '').trim();
+  if ((metadata.singleRecipient || numbers.length === 1) && contactCount <= 1) return 'single';
+  if (contactCount === 1 && /^single call\b/i.test(campaignName)) return 'single';
+  return 'bulk';
+};
+
+const buildScheduleTypeFilter = (type = 'all') => {
+  const normalizedType = String(type || 'all').toLowerCase();
+  const singleConditions = [
+    { 'metadata.originType': 'single' },
+    { 'metadata.campaignType': 'single' },
+    { 'metadata.singleRecipient': { $exists: true, $ne: '' } },
+    { $and: [{ campaignName: /^single call\b/i }, { numbers: { $size: 1 } }] }
+  ];
+
+  if (normalizedType === 'single') return { $or: singleConditions };
+  if (normalizedType === 'bulk') return { $nor: singleConditions };
+  return null;
+};
+
+const normalizeSchedule = (schedule = {}) => {
+  const metadata = schedule.metadata || {};
+  const numbers = Array.isArray(schedule.numbers) ? schedule.numbers : [];
+  const type = deriveScheduleType(schedule);
+  const contactCount = Number(schedule.contactCount ?? metadata.contactCount ?? numbers.length ?? 0) || 0;
+
+  return {
+    ...schedule,
+    id: schedule._id,
+    type,
+    provider: schedule.provider || metadata.provider || 'twilio',
+    singleRecipient: schedule.singleRecipient || metadata.singleRecipient || numbers[0] || '',
+    contactCount,
+    workflowId: schedule.workflowId || metadata.workflowId || '',
+    scheduledAt: schedule.scheduledAt || metadata.scheduledAt || schedule.createdAt || null,
+    nextRunAt: schedule.nextRunAt || null,
+    allowedWindow: schedule.allowedWindow || metadata.allowedWindow || {
+      start: metadata.allowedWindowStart || metadata.windowStart || null,
+      end: metadata.allowedWindowEnd || metadata.windowEnd || null
+    }
+  };
+};
 
 class CampaignSchedulerController {
   async listSchedules(req, res) {
@@ -14,6 +74,7 @@ class CampaignSchedulerController {
       const {
         status = 'all',
         recurrence = 'all',
+        type = 'all',
         search = '',
         page = 1,
         limit = 10
@@ -30,11 +91,22 @@ class CampaignSchedulerController {
       if (recurrence && recurrence !== 'all') {
         filter.recurrence = recurrence;
       }
+      const typeFilter = buildScheduleTypeFilter(type);
+      if (typeFilter) {
+        filter.$and = [...(filter.$and || []), typeFilter];
+      }
       if (search && String(search).trim()) {
         const value = String(search).trim();
-        filter.$or = [
-          { campaignName: { $regex: value, $options: 'i' } },
-          { campaignId: { $regex: value, $options: 'i' } }
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { campaignName: { $regex: value, $options: 'i' } },
+              { campaignId: { $regex: value, $options: 'i' } },
+              { numbers: { $elemMatch: { $regex: value, $options: 'i' } } },
+              { 'metadata.singleRecipient': { $regex: value, $options: 'i' } }
+            ]
+          }
         ];
       }
 
@@ -49,7 +121,7 @@ class CampaignSchedulerController {
 
       return res.status(200).json({
         success: true,
-        data: items,
+        data: items.map(normalizeSchedule),
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -71,17 +143,15 @@ class CampaignSchedulerController {
       }
 
       const schedule = await campaignAutomationService.createSchedule(req.body || {}, userObjectId);
+      const normalizedSchedule = normalizeSchedule(typeof schedule?.toObject === 'function' ? schedule.toObject() : schedule);
+      emitCampaignUpdate(getUserIdString(req), {
+        action: 'schedule_created',
+        schedule: normalizedSchedule
+      });
 
       return res.status(201).json({
         success: true,
-        schedule: {
-          id: schedule._id,
-          campaignId: schedule.campaignId,
-          campaignName: schedule.campaignName,
-          cronExpression: schedule.cronExpression,
-          recurrence: schedule.recurrence,
-          status: schedule.status
-        }
+        schedule: normalizedSchedule
       });
     } catch (error) {
       logger.error('Campaign schedule failed:', error);
@@ -153,7 +223,12 @@ class CampaignSchedulerController {
       }
 
       campaignAutomationService.pauseSchedule(scheduleId);
-      return res.status(200).json({ success: true, status: schedule.status });
+      const normalizedSchedule = normalizeSchedule(schedule.toObject ? schedule.toObject() : schedule);
+      emitCampaignUpdate(getUserIdString(req), {
+        action: 'schedule_paused',
+        schedule: normalizedSchedule
+      });
+      return res.status(200).json({ success: true, status: schedule.status, schedule: normalizedSchedule });
     } catch (error) {
       return res.status(500).json({ success: false, message: error.message });
     }
@@ -178,8 +253,58 @@ class CampaignSchedulerController {
       }
 
       campaignAutomationService.resumeSchedule(schedule);
-      return res.status(200).json({ success: true, status: schedule.status });
+      const normalizedSchedule = normalizeSchedule(schedule.toObject ? schedule.toObject() : schedule);
+      emitCampaignUpdate(getUserIdString(req), {
+        action: 'schedule_resumed',
+        schedule: normalizedSchedule
+      });
+      return res.status(200).json({ success: true, status: schedule.status, schedule: normalizedSchedule });
     } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  async bulkDelete(req, res) {
+    try {
+      const userObjectId = getUserObjectId(req);
+      if (!userObjectId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      const scheduleIds = Array.isArray(req.body?.scheduleIds)
+        ? req.body.scheduleIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+      if (!scheduleIds.length) {
+        return res.status(400).json({ success: false, message: 'scheduleIds must be a non-empty array' });
+      }
+
+      const schedules = await CampaignSchedule.find({
+        _id: { $in: scheduleIds },
+        userId: userObjectId
+      }).select('_id').lean();
+
+      const ownedIds = schedules.map((schedule) => String(schedule._id));
+      if (!ownedIds.length) {
+        return res.status(404).json({ success: false, message: 'No schedules found to delete' });
+      }
+
+      const result = await CampaignSchedule.deleteMany({
+        _id: { $in: ownedIds },
+        userId: userObjectId
+      });
+      ownedIds.forEach((scheduleId) => campaignAutomationService.removeSchedule(scheduleId));
+      emitCampaignUpdate(getUserIdString(req), {
+        action: 'schedule_deleted',
+        scheduleIds: ownedIds
+      });
+
+      return res.status(200).json({
+        success: true,
+        deletedCount: result.deletedCount || 0,
+        scheduleIds: ownedIds
+      });
+    } catch (error) {
+      logger.error('Bulk delete schedules failed:', error);
       return res.status(500).json({ success: false, message: error.message });
     }
   }

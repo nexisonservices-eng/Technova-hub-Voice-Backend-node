@@ -96,9 +96,17 @@ const buildOutboundCallPayload = (call, status, duration = 0) => {
     campaignId: providerData.campaignId || '',
     campaignDbId: providerData.campaignDbId || '',
     campaignName: providerData.campaignName || '',
+    campaignType: providerData.campaignType || providerData.originType || '',
+    originType: providerData.originType || providerData.campaignType || '',
     contactId: providerData.contactId || '',
     workflowId: providerData.workflowId || '',
     voiceId: providerData.voiceId || '',
+    metadata: {
+      originType: providerData.originType || providerData.campaignType || '',
+      campaignType: providerData.campaignType || providerData.originType || '',
+      singleRecipient: providerData.singleRecipient || '',
+      contactCount: providerData.contactCount || ''
+    },
     createdAt: call?.createdAt || updatedAt,
     updatedAt,
     ended: TERMINAL_OUTBOUND_STATUSES.has(String(status || '').toLowerCase())

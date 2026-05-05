@@ -11,7 +11,7 @@ import pythonTTSService from './pythonTTSService.js';
 import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
-import { emitCampaignUpdate, emitOutboundMetrics } from '../sockets/unifiedSocket.js';
+import { emitCampaignUpdate, emitOutboundCallUpdate, emitOutboundMetrics } from '../sockets/unifiedSocket.js';
 import { parseScheduledDateInTimezone } from '../utils/timezoneDate.js';
 
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
@@ -133,19 +133,28 @@ class OutboundCampaignService {
 
   toCampaignPayload(campaign = {}) {
     const source = typeof campaign?.toObject === 'function' ? campaign.toObject() : campaign;
+    const metadata = source?.metadata || {};
+    const originType = String(metadata.originType || metadata.campaignType || '').trim().toLowerCase();
     return {
       _id: source?._id,
       campaignId: source?.campaignId || '',
       name: source?.name || '',
+      campaignName: source?.name || '',
+      campaignType: originType || (Number(source?.contactSummary?.total || 0) === 1 ? 'single' : 'bulk'),
+      originType: originType || (Number(source?.contactSummary?.total || 0) === 1 ? 'single' : 'bulk'),
       provider: source?.provider || '',
       mode: source?.mode || '',
       status: source?.status || '',
       fromNumber: source?.fromNumber || '',
+      phoneNumber: metadata.singleRecipient || '',
+      recipientPhone: metadata.singleRecipient || '',
+      message: source?.message || '',
       metrics: source?.metrics || {},
       contactSummary: source?.contactSummary || {},
       voice: source?.voice || {},
       schedule: source?.schedule || {},
       ivrWorkflow: source?.ivrWorkflow || {},
+      metadata,
       createdAt: source?.createdAt || null,
       updatedAt: source?.updatedAt || null
     };
@@ -385,6 +394,7 @@ class OutboundCampaignService {
     } = this.normalizeScheduleConfig(payload);
     const workflow = await this.resolveWorkflow(payload?.workflowId, userId);
     const maxConcurrent = clamp(parsePositiveInt(payload?.maxConcurrent, 5), 1, 10);
+    const requestedOriginType = String(payload?.originType || payload?.campaignType || payload?.metadata?.originType || '').trim().toLowerCase();
 
     if (!['exotel', 'twilio'].includes(provider)) {
       throw new Error('Invalid provider. Supported providers are exotel and twilio.');
@@ -435,6 +445,9 @@ class OutboundCampaignService {
     if (!contacts.length) {
       throw new Error('No valid contacts found for this campaign.');
     }
+    const originType = requestedOriginType === 'single' || (contacts.length === 1 && /^single call\b/i.test(name))
+      ? 'single'
+      : 'bulk';
 
     const campaignKey = `outbound_campaign_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const mode =
@@ -480,7 +493,14 @@ class OutboundCampaignService {
       },
       metadata: {
         maxConcurrent,
-        templateId: String(payload?.templateId || '').trim()
+        templateId: String(payload?.templateId || '').trim(),
+        originType,
+        campaignType: originType,
+        singleRecipient: originType === 'single' ? contacts[0]?.phone || '' : '',
+        contactCount: contacts.length,
+        workflowId: workflow?.workflowId ? String(workflow.workflowId) : String(payload?.workflowId || '').trim(),
+        voiceId,
+        message
       }
     });
 
@@ -514,6 +534,10 @@ class OutboundCampaignService {
           recurrence: recurrence === 'none' ? 'once' : recurrence,
           metadata: {
             outboundCampaignId: String(campaign._id),
+            originType,
+            campaignType: originType,
+            singleRecipient: originType === 'single' ? contacts[0]?.phone || '' : '',
+            contactCount: contacts.length,
             workflowId: workflow?.workflowId ? String(workflow.workflowId) : '',
             provider,
             scheduledAt: scheduledAt && !Number.isNaN(scheduledAt.getTime()) ? scheduledAt.toISOString() : '',
@@ -753,7 +777,26 @@ class OutboundCampaignService {
       raw = exotelCall.raw || {};
     }
 
-    await Call.create({
+    const providerData = {
+      from: campaign.fromNumber,
+      campaignId: campaign.campaignId,
+      campaignDbId: String(campaign._id),
+      campaignName: campaign.name,
+      originType: campaign.metadata?.originType || '',
+      campaignType: campaign.metadata?.campaignType || '',
+      singleRecipient: campaign.metadata?.singleRecipient || '',
+      contactCount: Number(campaign.contactSummary?.total || 0),
+      contactId: String(contact._id),
+      workflowId: workflow?.workflowId ? String(workflow.workflowId) : '',
+      workflowName: workflow?.workflowName || '',
+      voiceId: campaign.voice?.voiceId || '',
+      script: campaign.message || '',
+      audioUrl: audioAsset.audioUrl || '',
+      scheduleId: scheduleId || String(campaign.schedule?.scheduleId || ''),
+      [campaign.provider]: raw
+    };
+
+    const call = await Call.create({
       callSid,
       exotelCallSid: campaign.provider === 'exotel' ? callSid : '',
       user: campaign.userId,
@@ -763,20 +806,20 @@ class OutboundCampaignService {
       status: 'initiated',
       retryAttempt: 0,
       startTime: new Date(),
-      providerData: {
-        from: campaign.fromNumber,
-        campaignId: campaign.campaignId,
-        campaignDbId: String(campaign._id),
-        campaignName: campaign.name,
-        contactId: String(contact._id),
-        workflowId: workflow?.workflowId ? String(workflow.workflowId) : '',
-        workflowName: workflow?.workflowName || '',
-        voiceId: campaign.voice?.voiceId || '',
-        script: campaign.message || '',
-        audioUrl: audioAsset.audioUrl || '',
-        scheduleId: scheduleId || String(campaign.schedule?.scheduleId || ''),
-        [campaign.provider]: raw
-      }
+      providerData
+    });
+
+    emitOutboundCallUpdate(String(campaign.userId || ''), {
+      _id: String(call._id || ''),
+      callSid: call.callSid,
+      phoneNumber: call.phoneNumber,
+      status: call.status,
+      direction: call.direction,
+      provider: call.provider,
+      duration: call.duration || 0,
+      createdAt: call.createdAt,
+      updatedAt: call.updatedAt,
+      providerData
     });
 
     if (workflow?.workflowId) {
@@ -945,7 +988,7 @@ class OutboundCampaignService {
     });
   }
 
-  async listCampaigns(userId, { page = 1, limit = 20, search = '', status = 'all', recurrence = 'all' } = {}) {
+  async listCampaigns(userId, { page = 1, limit = 20, search = '', status = 'all', recurrence = 'all', excludeScheduled = false } = {}) {
     const pageNum = Math.max(1, Number(page) || 1);
     const limitNum = Math.max(1, Math.min(100, Number(limit) || 20));
     const skip = (pageNum - 1) * limitNum;
@@ -960,6 +1003,10 @@ class OutboundCampaignService {
 
     if (normalizedRecurrence && normalizedRecurrence !== 'all') {
       query['schedule.recurrence'] = normalizedRecurrence;
+    }
+
+    if (String(excludeScheduled) === 'true' || excludeScheduled === true) {
+      query['schedule.enabled'] = { $ne: true };
     }
 
     if (searchText) {

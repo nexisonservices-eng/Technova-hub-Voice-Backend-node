@@ -21,6 +21,7 @@ export const formatIVRMenu = (menu, usageByWorkflow = new Map()) => {
 
   return {
     _id: menu._id,
+    id: String(menu._id),
     promptKey: menu.promptKey,
     displayName: menu.displayName,
     greeting: {
