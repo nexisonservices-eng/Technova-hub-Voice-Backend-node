@@ -7,6 +7,9 @@ import mongoose from 'mongoose';
 import logger from '../utils/logger.js';
 import { getIO } from '../sockets/unifiedSocket.js';
 import { getRawUserId, getUserObjectId } from '../utils/authContext.js';
+import { getDateRangeInTimezone } from '../utils/timezoneDate.js';
+
+const VOICE_TIME_ZONE = 'Asia/Kolkata';
 
 /**
  * Production-level Analytics Controller
@@ -481,7 +484,7 @@ class AnalyticsController {
       callPipeline.push(
         {
           $group: {
-            _id: { hour: { $hour: '$createdAt' }, type: '$computedCallType' },
+            _id: { hour: { $hour: { date: '$createdAt', timezone: VOICE_TIME_ZONE } }, type: '$computedCallType' },
             total: { $sum: 1 },
             completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
             failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no-answer', 'cancelled', 'canceled']] }, 1, 0] } }
@@ -508,7 +511,7 @@ class AnalyticsController {
         { $match: this.buildBroadcastMatch(dateRange, status, userId) },
         {
           $group: {
-            _id: { $hour: '$createdAt' },
+            _id: { $hour: { date: '$createdAt', timezone: VOICE_TIME_ZONE } },
             total: { $sum: 1 },
             completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
             failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no_answer', 'cancelled', 'opted_out']] }, 1, 0] } }
@@ -752,7 +755,7 @@ class AnalyticsController {
       },
       {
         $group: {
-          _id: { $hour: '$createdAt' },
+          _id: { $hour: { date: '$createdAt', timezone: VOICE_TIME_ZONE } },
           calls: { $sum: 1 },
           completed: {
             $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
@@ -1279,7 +1282,7 @@ class AnalyticsController {
       {
         $group: {
           _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' }
+            $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: VOICE_TIME_ZONE }
           },
           total: { $sum: 1 },
           completed: {
@@ -1336,7 +1339,7 @@ class AnalyticsController {
         {
           $group: {
             _id: {
-              date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: VOICE_TIME_ZONE } },
               type: '$computedCallType'
             },
             total: { $sum: 1 },
@@ -1365,7 +1368,7 @@ class AnalyticsController {
         { $match: this.buildBroadcastMatch(dateRange, status, userId) },
         {
           $group: {
-            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: VOICE_TIME_ZONE } },
             total: { $sum: 1 },
             completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
             failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'busy', 'no_answer', 'cancelled', 'opted_out']] }, 1, 0] } }
@@ -1550,41 +1553,7 @@ class AnalyticsController {
 
   // Helper methods
   getDateRange(period) {
-    const end = new Date();
-    const start = new Date();
-
-    switch (period) {
-      case 'today':
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'week':
-        start.setDate(start.getDate() - 7);
-        break;
-      case 'month':
-        start.setMonth(start.getMonth() - 1);
-        break;
-      case 'year':
-        start.setFullYear(start.getFullYear() - 1);
-        break;
-      case 'yesterday':
-        start.setDate(start.getDate() - 1);
-        start.setHours(0, 0, 0, 0);
-        end.setDate(end.getDate() - 1);
-        end.setHours(23, 59, 59, 999);
-        break;
-      case 'last_week':
-        start.setDate(start.getDate() - 14);
-        end.setDate(end.getDate() - 7);
-        break;
-      case 'last_month':
-        start.setMonth(start.getMonth() - 2);
-        end.setMonth(end.getMonth() - 1);
-        break;
-      default:
-        start.setHours(0, 0, 0, 0);
-    }
-
-    return { start, end };
+    return getDateRangeInTimezone(period, VOICE_TIME_ZONE);
   }
 
   async getAvgHandleTime() {

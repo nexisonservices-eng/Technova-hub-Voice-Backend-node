@@ -14,7 +14,17 @@ import {
   emitCallListUpdate
 } from '../sockets/unifiedSocket.js';
 import { getUserObjectId } from '../utils/authContext.js';
+import { parseDateOnlyInTimezone } from '../utils/timezoneDate.js';
 
+const VOICE_TIME_ZONE = 'Asia/Kolkata';
+
+const buildIstDateFilter = (startDate, endDate) => {
+  if (!startDate && !endDate) return null;
+  const filter = {};
+  if (startDate) filter.$gte = parseDateOnlyInTimezone(startDate, VOICE_TIME_ZONE, false);
+  if (endDate) filter.$lte = parseDateOnlyInTimezone(endDate, VOICE_TIME_ZONE, true);
+  return filter;
+};
 
 /**
  * Call Details Controller - Provides comprehensive details for inbound, IVR, and outbound calls
@@ -112,9 +122,7 @@ class CallDetailsController {
         ];
       }
       if (startDate || endDate) {
-        query.createdAt = {};
-        if (startDate) query.createdAt.$gte = new Date(startDate);
-        if (endDate) query.createdAt.$lte = new Date(endDate);
+        query.createdAt = buildIstDateFilter(startDate, endDate);
       }
 
       let calls = [];

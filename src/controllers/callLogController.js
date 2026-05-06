@@ -7,6 +7,9 @@ import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 import { getUserObjectId } from '../utils/authContext.js';
 import analyticsController from './analyticsController.js';
+import { parseDateOnlyInTimezone } from '../utils/timezoneDate.js';
+
+const VOICE_TIME_ZONE = 'Asia/Kolkata';
 
 const clampPositiveInt = (value, fallback, max) => {
     const parsed = Number.parseInt(value, 10);
@@ -19,6 +22,14 @@ const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g
 const scheduleAnalyticsSnapshot = (userId, reason) => {
     analyticsController.clearUserCache(userId);
     analyticsController.scheduleAnalyticsBroadcast({ userId: String(userId), reason });
+};
+
+const buildIstDateFilter = (startDate, endDate) => {
+    if (!startDate && !endDate) return null;
+    const filter = {};
+    if (startDate) filter.$gte = parseDateOnlyInTimezone(startDate, VOICE_TIME_ZONE, false);
+    if (endDate) filter.$lte = parseDateOnlyInTimezone(endDate, VOICE_TIME_ZONE, true);
+    return filter;
 };
 
 const buildOutboundTypeFilter = (type = 'all') => {
@@ -85,9 +96,7 @@ class CallLogController {
             }; // Exclude soft-deleted and schedule-only rows
 
             if (startDate || endDate) {
-                filter.createdAt = {};
-                if (startDate) filter.createdAt.$gte = new Date(startDate);
-                if (endDate) filter.createdAt.$lte = new Date(endDate);
+                filter.createdAt = buildIstDateFilter(startDate, endDate);
             }
 
             if (status) filter.status = status;
@@ -188,9 +197,7 @@ class CallLogController {
             const filter = { deletedAt: null, user: userId };
 
             if (startDate || endDate) {
-                filter.createdAt = {};
-                if (startDate) filter.createdAt.$gte = new Date(startDate);
-                if (endDate) filter.createdAt.$lte = new Date(endDate);
+                filter.createdAt = buildIstDateFilter(startDate, endDate);
             }
 
             if (status) filter.status = status;
@@ -383,9 +390,7 @@ class CallLogController {
             const filter = { deletedAt: null, user: userId };
 
             if (startDate || endDate) {
-                filter.createdAt = {};
-                if (startDate) filter.createdAt.$gte = new Date(startDate);
-                if (endDate) filter.createdAt.$lte = new Date(endDate);
+                filter.createdAt = buildIstDateFilter(startDate, endDate);
             }
 
             const stats = await Call.aggregate([

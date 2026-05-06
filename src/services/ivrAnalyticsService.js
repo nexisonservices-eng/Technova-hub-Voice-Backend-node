@@ -1,6 +1,9 @@
 import ExecutionLog from '../models/ExecutionLog.js';
 import Workflow from '../models/Workflow.js';
 import logger from '../utils/logger.js';
+import { parseDateOnlyInTimezone } from '../utils/timezoneDate.js';
+
+const VOICE_TIME_ZONE = 'Asia/Kolkata';
 
 class IVRAnalyticsService {
     /**
@@ -11,8 +14,8 @@ class IVRAnalyticsService {
             const query = { workflowId, ...(userId ? { userId } : {}) };
             if (startDate || endDate) {
                 query.startTime = {};
-                if (startDate) query.startTime.$gte = new Date(startDate);
-                if (endDate) query.startTime.$lte = new Date(endDate);
+                if (startDate) query.startTime.$gte = parseDateOnlyInTimezone(startDate, VOICE_TIME_ZONE, false);
+                if (endDate) query.startTime.$lte = parseDateOnlyInTimezone(endDate, VOICE_TIME_ZONE, true);
             }
 
             const executions = await ExecutionLog.find(query).lean();
