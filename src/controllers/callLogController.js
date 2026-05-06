@@ -6,6 +6,7 @@ import Call from '../models/call.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 import { getUserObjectId } from '../utils/authContext.js';
+import analyticsController from './analyticsController.js';
 
 const clampPositiveInt = (value, fallback, max) => {
     const parsed = Number.parseInt(value, 10);
@@ -14,6 +15,11 @@ const clampPositiveInt = (value, fallback, max) => {
 };
 
 const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const scheduleAnalyticsSnapshot = (userId, reason) => {
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId: String(userId), reason });
+};
 
 const buildOutboundTypeFilter = (type = 'all') => {
     const normalizedType = String(type || 'all').toLowerCase();
@@ -250,6 +256,7 @@ class CallLogController {
             // Soft delete
             call.deletedAt = new Date();
             await call.save();
+            scheduleAnalyticsSnapshot(userId, 'call_log_deleted');
 
             logger.info(`Soft deleted call log: ${callSid}`);
 
@@ -294,6 +301,9 @@ class CallLogController {
             );
 
             logger.info(`Bulk deleted ${resultScoped.modifiedCount} call logs`);
+            if (resultScoped.modifiedCount > 0) {
+                scheduleAnalyticsSnapshot(userId, 'call_logs_bulk_deleted');
+            }
 
             res.json(ResponseFormatter.success({
                 deletedCount: resultScoped.modifiedCount,
@@ -341,6 +351,7 @@ class CallLogController {
             // Add tags (avoid duplicates)
             call.tags = [...new Set([...(call.tags || []), ...tags])];
             await call.save();
+            scheduleAnalyticsSnapshot(userId, 'call_log_tags_updated');
 
             logger.info(`Added tags to call ${callSid}: ${tags.join(', ')}`);
 

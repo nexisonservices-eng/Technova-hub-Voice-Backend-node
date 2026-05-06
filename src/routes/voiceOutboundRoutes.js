@@ -194,6 +194,10 @@ router.get('/outbound-local/overview', (req, res) =>
   outboundLocalController.overview(req, res)
 );
 
+router.get('/outbound-local/calls/:callSid/status', (req, res) =>
+  outboundLocalController.getCallStatus(req, res)
+);
+
 router.get('/outbound-local/campaigns', (req, res) =>
   outboundLocalController.listCampaigns(req, res)
 );

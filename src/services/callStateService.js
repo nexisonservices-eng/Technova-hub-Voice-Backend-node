@@ -1,6 +1,21 @@
 import logger from '../utils/logger.js';
 import Call from '../models/call.js';
 
+const scheduleAnalyticsSnapshot = async (userId, reason) => {
+  try {
+    const analyticsController = (await import('../controllers/analyticsController.js')).default;
+    if (userId) {
+      analyticsController.clearUserCache(userId);
+      analyticsController.scheduleAnalyticsBroadcast({ userId: String(userId), reason });
+      return;
+    }
+    analyticsController.clearCache();
+    analyticsController.scheduleAnalyticsBroadcast({ reason });
+  } catch (error) {
+    logger.error(`[Analytics] Failed to schedule ${reason} snapshot:`, error);
+  }
+};
+
 class CallStateService {
   constructor() {
     this.activeCalls = new Map();
@@ -28,6 +43,7 @@ class CallStateService {
     });
 
     logger.info(`[${callSid}] Call created for user ${String(userId || 'unknown')}`);
+    await scheduleAnalyticsSnapshot(userId, 'call_created');
     return { call, user: userId ? { _id: userId } : null };
   }
 
@@ -48,6 +64,7 @@ class CallStateService {
     call.status = status;
     Object.assign(call, additionalData);
     await call.save();
+    await scheduleAnalyticsSnapshot(call.user, 'call_updated');
     return call;
   }
 
@@ -70,6 +87,7 @@ class CallStateService {
     const call = await Call.findOne({ callSid });
     if (call) {
       await call.endCall();
+      await scheduleAnalyticsSnapshot(call.user, 'call_ended');
     }
     if (state?.aiClient) {
       state.aiClient.disconnect();

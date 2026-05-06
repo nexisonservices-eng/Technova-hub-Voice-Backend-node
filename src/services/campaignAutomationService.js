@@ -6,6 +6,7 @@ import Call from '../models/call.js';
 import exotelService from './ExotelService.js';
 import logger from '../utils/logger.js';
 import { parseScheduledDateInTimezone } from '../utils/timezoneDate.js';
+import analyticsController from '../controllers/analyticsController.js';
 import {
   emitCampaignUpdate,
   emitRetryStats,
@@ -16,6 +17,16 @@ import {
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
 const RETRY_GAP_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_TIMEZONE = 'Asia/Kolkata';
+
+const scheduleAnalyticsSnapshot = (userId, reason) => {
+  if (userId) {
+    analyticsController.clearUserCache(userId);
+    analyticsController.scheduleAnalyticsBroadcast({ userId: String(userId), reason });
+    return;
+  }
+  analyticsController.clearCache();
+  analyticsController.scheduleAnalyticsBroadcast({ reason });
+};
 
 const normalizeNumber = (value = '') => {
   const digits = String(value).replace(/\D/g, '');
@@ -429,6 +440,7 @@ class CampaignAutomationService {
       total: numbers.length,
       successRate: numbers.length > 0 ? Math.round((initiated / numbers.length) * 100) : 0
     });
+      scheduleAnalyticsSnapshot(userId, 'campaign_schedule_executed');
 
       return {
         initiated,
@@ -513,6 +525,7 @@ class CampaignAutomationService {
       stillFailed,
       nextRetryAt: retryPlan.nextRetryAt
     });
+    scheduleAnalyticsSnapshot(userId, 'retry_queue_processed');
 
     return {
       queued: failedCalls.length,
@@ -592,6 +605,7 @@ class CampaignAutomationService {
       winner,
       groups
     });
+    scheduleAnalyticsSnapshot(userId, 'abtest_calls_created');
 
     return { winner, groups };
   }

@@ -11,14 +11,14 @@ const router = express.Router();
 
 // 🔒 Protected broadcast routes (require authentication)
 router.post('/start', authenticate, requirePlanFeature('voiceCampaign'), resolveUserTwilioContext, broadcastController.startBroadcast);
-router.get('/status/:id', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastStatus);
-router.post('/bulk/cancel', authenticate, resolveUserTwilioContext, broadcastController.bulkCancelBroadcasts);
-router.post('/bulk/delete', authenticate, resolveUserTwilioContext, broadcastController.bulkDeleteBroadcasts);
-router.get('/:id/summary-details', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastSummaryDetails);
-router.post('/:id/cancel', authenticate, resolveUserTwilioContext, broadcastController.cancelBroadcast);
-router.get('/:id/calls', authenticate, resolveUserTwilioContext, broadcastController.getBroadcastCalls);
-router.get('/list', authenticate, resolveUserTwilioContext, broadcastController.listBroadcasts);
-router.delete('/:id', authenticate, resolveUserTwilioContext, broadcastController.deleteBroadcast);
+router.get('/status/:id', authenticate, broadcastController.getBroadcastStatus);
+router.post('/bulk/cancel', authenticate, broadcastController.bulkCancelBroadcasts);
+router.post('/bulk/delete', authenticate, broadcastController.bulkDeleteBroadcasts);
+router.get('/:id/summary-details', authenticate, broadcastController.getBroadcastSummaryDetails);
+router.post('/:id/cancel', authenticate, broadcastController.cancelBroadcast);
+router.get('/:id/calls', authenticate, broadcastController.getBroadcastCalls);
+router.get('/list', authenticate, broadcastController.listBroadcasts);
+router.delete('/:id', authenticate, broadcastController.deleteBroadcast);
 
 // 🌐 Twilio webhook routes (secured via Twilio signature)
 router.post('/twiml', verifyTwilioRequest, twilioWebhooks.getBroadcastTwiML.bind(twilioWebhooks));

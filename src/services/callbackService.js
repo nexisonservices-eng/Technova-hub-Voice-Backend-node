@@ -4,6 +4,13 @@ import twilioVoiceService from './twilioVoiceService.js';
 import callStateService from './callStateService.js';
 import { emitCallbackUpdate } from '../sockets/unifiedSocket.js';
 import adminCredentialsService from './adminCredentialsService.js';
+import analyticsController from '../controllers/analyticsController.js';
+
+const scheduleAnalyticsSnapshot = (userId, reason) => {
+  if (!userId) return;
+  analyticsController.clearUserCache(userId);
+  analyticsController.scheduleAnalyticsBroadcast({ userId: String(userId), reason });
+};
 
 class CallbackService {
   constructor() {
@@ -82,6 +89,7 @@ class CallbackService {
           scheduledFor: callback.scheduledFor
         }
       });
+      scheduleAnalyticsSnapshot(callback.user, 'callback_scheduled');
 
       return callback;
     } catch (error) {
@@ -170,6 +178,7 @@ class CallbackService {
           attempt: callback.providerData.attempts
         }
       });
+      scheduleAnalyticsSnapshot(callback.user, 'callback_attempted');
 
       logger.info(`📞 Callback initiated: ${callback.callSid} -> ${callResult.sid}`);
 
@@ -194,6 +203,7 @@ class CallbackService {
           error: error.message
         }
       });
+      scheduleAnalyticsSnapshot(callback.user, 'callback_failed');
 
     } finally {
       this.currentCallbacks--;
@@ -309,6 +319,7 @@ class CallbackService {
       callback.status = 'cancelled';
       callback.notes = reason || 'Cancelled by user';
       await callback.save();
+      scheduleAnalyticsSnapshot(callback.user, 'callback_cancelled');
 
       // Emit cancellation update
       emitCallbackUpdate({

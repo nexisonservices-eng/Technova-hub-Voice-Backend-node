@@ -77,6 +77,14 @@ const buildMetrics = (initiated, failed, total) => ({
   successRate: total > 0 ? Math.round((initiated / total) * 100) : 0
 });
 
+const TERMINAL_OUTBOUND_STATUSES = new Set(['completed', 'failed', 'busy', 'no-answer', 'cancelled', 'canceled']);
+
+const mapTwilioOutboundStatus = (status = '') => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'canceled') return 'cancelled';
+  return normalized;
+};
+
 const getTodayWindow = () => {
   const now = new Date();
   const start = new Date(now);
@@ -314,6 +322,116 @@ class OutboundLocalController {
     });
 
     return call;
+  }
+
+  buildOutboundCallPayload(call, status = call?.status, duration = 0) {
+    const providerData = call?.providerData || {};
+    const updatedAt = call?.updatedAt || new Date();
+    const normalizedStatus = String(status || '').toLowerCase();
+
+    return {
+      _id: String(call?._id || ''),
+      callSid: call?.callSid || '',
+      status: normalizedStatus,
+      phoneNumber: call?.phoneNumber || '',
+      provider: call?.provider || providerData.provider || '',
+      duration: Number(call?.duration || duration || 0),
+      campaignId: providerData.campaignId || '',
+      campaignDbId: providerData.campaignDbId || '',
+      campaignName: providerData.campaignName || '',
+      campaignType: providerData.campaignType || providerData.originType || '',
+      originType: providerData.originType || providerData.campaignType || '',
+      contactId: providerData.contactId || '',
+      workflowId: providerData.workflowId || '',
+      voiceId: providerData.voiceId || '',
+      providerData,
+      metadata: {
+        originType: providerData.originType || providerData.campaignType || '',
+        campaignType: providerData.campaignType || providerData.originType || '',
+        singleRecipient: providerData.singleRecipient || '',
+        contactCount: providerData.contactCount || ''
+      },
+      createdAt: call?.createdAt || updatedAt,
+      updatedAt,
+      ended: TERMINAL_OUTBOUND_STATUSES.has(normalizedStatus)
+    };
+  }
+
+  async getCallStatus(req, res) {
+    try {
+      const userId = getUserIdString(req);
+      const userObjectId = getUserObjectId(req);
+      const callSid = String(req.params?.callSid || '').trim();
+
+      if (!userId || !userObjectId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
+
+      if (!callSid) {
+        return res.status(400).json({ success: false, message: 'callSid is required' });
+      }
+
+      let call = await Call.findOne({
+        callSid,
+        user: userObjectId,
+        direction: 'outbound-local',
+        deletedAt: null
+      });
+
+      if (!call) {
+        return res.status(404).json({ success: false, message: 'Call not found' });
+      }
+
+      let providerStatus = String(call.status || 'initiated').toLowerCase();
+      let duration = Number(call.duration || 0);
+      let providerRaw = null;
+
+      if (call.provider === 'twilio') {
+        const from = String(call.providerData?.from || '').trim();
+        const twilioContext = await this.resolveTwilioContext({ userId, from });
+        const client = twilio(twilioContext.accountSid, twilioContext.authToken);
+        const twilioCall = await client.calls(callSid).fetch();
+
+        providerStatus = mapTwilioOutboundStatus(twilioCall.status);
+        duration = Number(twilioCall.duration || call.duration || 0) || 0;
+        providerRaw = this.buildSerializableTwilioCall(twilioCall);
+
+        const ended = TERMINAL_OUTBOUND_STATUSES.has(providerStatus);
+        call.status = providerStatus || call.status;
+        if (duration > 0) {
+          call.duration = duration;
+        }
+        if (ended && !call.endTime) {
+          call.endTime = twilioCall.endTime || new Date();
+        }
+        call.providerData = {
+          ...(call.providerData || {}),
+          twilio: providerRaw,
+          lastStatusSyncAt: new Date()
+        };
+        call.markModified('providerData');
+        await call.save();
+      }
+
+      const payload = this.buildOutboundCallPayload(call, providerStatus, duration);
+      if (payload.ended) {
+        emitOutboundCallUpdate(String(call.user || ''), payload);
+      }
+
+      return res.status(200).json({
+        success: true,
+        call: payload,
+        providerStatus,
+        providerRaw
+      });
+    } catch (error) {
+      logger.error('Outbound Local call status sync failed:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to sync outbound call status',
+        error: error.message
+      });
+    }
   }
 
   async quickCall(req, res) {

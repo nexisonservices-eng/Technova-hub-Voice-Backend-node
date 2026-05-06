@@ -23,6 +23,7 @@ class AnalyticsController {
     this.pendingBroadcastKeys = new Map();
     this.activeAnalyticsSubscriptions = new Map();
     this.inFlightAnalytics = new Map();
+    this.cacheVersion = 0;
   }
 
   /**
@@ -256,16 +257,19 @@ class AnalyticsController {
       return inFlight;
     }
 
+    const generationVersion = this.cacheVersion;
     const generation = this.generateInboundAnalytics({
       period: normalizedPeriod,
       callType: normalizedCallType,
       status: normalizedStatus,
       userId
     }).then((analyticsData) => {
-      this.cache.set(cacheKey, {
-        data: analyticsData,
-        timestamp: Date.now()
-      });
+      if (generationVersion === this.cacheVersion) {
+        this.cache.set(cacheKey, {
+          data: analyticsData,
+          timestamp: Date.now()
+        });
+      }
       return analyticsData;
     }).finally(() => {
       this.inFlightAnalytics.delete(cacheKey);
@@ -1460,7 +1464,7 @@ class AnalyticsController {
       });
 
       // Trigger analytics refresh for significant events
-      if (['call_ended', 'call_updated'].includes(callData.event)) {
+      if (['call_started', 'call_created', 'call_updated', 'call_ended'].includes(callData.event)) {
         this.scheduleAnalyticsBroadcast({
           ...(callData.period ? { period: callData.period } : {}),
           reason: callData.event,
@@ -1675,6 +1679,7 @@ class AnalyticsController {
   }
 
   clearCache() {
+    this.cacheVersion += 1;
     this.cache.clear();
     this.inFlightAnalytics.clear();
     logger.info('[Analytics] Cache cleared');
@@ -1682,6 +1687,7 @@ class AnalyticsController {
 
   clearUserCache(userId) {
     if (!userId) return;
+    this.cacheVersion += 1;
     const userToken = `analytics_${String(userId)}_`;
 
     for (const key of this.cache.keys()) {

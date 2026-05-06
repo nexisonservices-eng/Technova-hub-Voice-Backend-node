@@ -30,6 +30,7 @@ const callSchema = new mongoose.Schema(
       type: String,
       enum: [
         'initiated',
+        'queued',
         'ringing',
         'answered',
         'in-progress',
