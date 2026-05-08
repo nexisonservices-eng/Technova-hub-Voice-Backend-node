@@ -14,6 +14,13 @@ const sanitizeFolderSegment = (value = '', fallback = 'user') => {
   return cleaned || fallback;
 };
 
+const buildCompanyRoot = ({ companyName = '', companySlug = '', companyId = '' }) => {
+  const safeCompanyId = String(companyId || '').trim();
+  if (!safeCompanyId) return '';
+  const companySlugSegment = sanitizeFolderSegment(companySlug || companyName || '', 'company');
+  return `${ROOT_PREFIX}/${companySlugSegment}_${safeCompanyId}`;
+};
+
 const toUserIdString = (value) => {
   if (!value) return '';
   if (typeof value === 'string') return value.trim();
@@ -39,27 +46,39 @@ const buildMissingContextError = (message) => {
   return error;
 };
 
-const resolveUserIdentity = async (context = {}) => {
+const resolveCompanyIdentity = async (context = {}) => {
   const userId = toUserIdString(context.userId || context.id || context._id || context.sub || context.user);
   let username = toUsername(context.username);
+  let companyId = toUserIdString(context.companyId || context.company?._id || context.company?.id);
+  let companyName = String(context.companyName || context.company?.name || '').trim();
+  let companySlug = String(context.companySlug || context.company?.slug || '').trim();
+  let cloudinaryFolderRoot = String(context.cloudinaryFolderRoot || context.company?.cloudinaryFolderRoot || '').trim();
 
-  if (!userId) {
-    throw buildMissingContextError('Unable to resolve userId for Cloudinary audio folder');
-  }
-
-  if (!username) {
+  if ((!companyId || !companyName) && userId) {
     const profile = await adminCredentialsService.getUserProfileByUserId(userId);
-    username = String(profile?.username || '').trim();
+    username = username || String(profile?.username || '').trim();
+    companyId = companyId || String(profile?.companyId || '').trim();
+    companyName = companyName || String(profile?.companyName || '').trim();
+    companySlug = companySlug || String(profile?.companySlug || '').trim();
+    cloudinaryFolderRoot = cloudinaryFolderRoot || String(profile?.cloudinaryFolderRoot || '').trim();
   }
 
-  if (!username) {
-    throw buildMissingContextError(`Unable to resolve username for Cloudinary audio folder (userId=${userId})`);
+  if (!companyId) {
+    throw buildMissingContextError(`Unable to resolve companyId for Cloudinary audio folder (userId=${userId || 'unknown'})`);
+  }
+
+  const root = cloudinaryFolderRoot || buildCompanyRoot({ companyName, companySlug, companyId });
+  if (!root) {
+    throw buildMissingContextError(`Unable to resolve company Cloudinary root for audio folder (companyId=${companyId})`);
   }
 
   return {
     userId,
     username,
-    userSlug: sanitizeFolderSegment(username, 'user')
+    companyId,
+    companyName,
+    companySlug,
+    root
   };
 };
 
@@ -75,12 +94,12 @@ const createFolderIfMissing = async (folder) => {
 };
 
 export const ensureUserAudioFolders = async (context = {}) => {
-  const identity = await resolveUserIdentity(context);
-  const root = `${ROOT_PREFIX}/${identity.userSlug}_${identity.userId}`;
+  const identity = await resolveCompanyIdentity(context);
+  const root = identity.root;
   const audioRoot = `${root}/audio`;
   const ivrAudioFolder = `${audioRoot}/ivr-audio`;
   const broadcastAudioFolder = `${audioRoot}/broadcast-audio`;
-  const cacheKey = `${identity.userId}:${identity.userSlug}`;
+  const cacheKey = `${identity.companyId}:${root}`;
 
   if (!ensuredFolderCache.has(cacheKey)) {
     await createFolderIfMissing(root);
@@ -88,7 +107,7 @@ export const ensureUserAudioFolders = async (context = {}) => {
     await createFolderIfMissing(ivrAudioFolder);
     await createFolderIfMissing(broadcastAudioFolder);
     ensuredFolderCache.add(cacheKey);
-    logger.info(`Ensured Cloudinary user audio folders for ${identity.username} (${identity.userId})`);
+    logger.info(`Ensured Cloudinary company audio folders for ${identity.companyName || identity.companyId}`);
   }
 
   return {
@@ -105,4 +124,3 @@ export const resolveCloudinaryAudioFolder = async (context = {}, audioType = 'iv
   if (audioType === 'broadcast') return folders.broadcastAudioFolder;
   return folders.ivrAudioFolder;
 };
-
