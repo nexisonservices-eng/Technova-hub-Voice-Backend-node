@@ -18,6 +18,7 @@ import LeadRoutes from "./routes/leadRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
 import callDetailsRoutes from "./routes/callDetailsRoutes.js";
 import voiceOutboundRoutes from "./routes/voiceOutboundRoutes.js";
+import internalCleanupRoutes from "./routes/internalCleanupRoutes.js";
 
 
 import path from 'path';
@@ -55,6 +56,7 @@ app.use('/api/leads', LeadRoutes); // Lead management (semi-automated bookings)
 app.use('/api/analytics', analyticsRoutes); // Analytics endpoints
 app.use('/api/calls', callDetailsRoutes); // Call details endpoints
 app.use('/api/voice', voiceOutboundRoutes); // Exotel outbound local endpoints
+app.use('/internal/cleanup', internalCleanupRoutes);
 
 // Health check
 app.get('/', (req, res) => {
