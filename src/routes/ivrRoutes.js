@@ -14,7 +14,7 @@ import { authenticate } from '../middleware/auth.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 import twilio from 'twilio';
-import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
+import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 import IVRAudioController from '../controllers/IVRAudioController.js';
 
@@ -1062,77 +1062,11 @@ router.delete('/menus/:id', async (req, res) => {
       });
     }
 
-    // Collect Cloudinary publicIds from legacy + current workflow structures
-    const publicIds = new Set();
-
-    // New workflow shape
-    (menu.nodes || []).forEach((node) => {
-      const nodeData = node?.data || {};
-      const nodeLevelIds = [
-        node.audioPublicId,
-        node.audio_public_id,
-        node.audioAssetId,
-        node.audio_asset_id,
-        node.cloudinaryPublicId,
-        node.publicId
-      ];
-      const dataLevelIds = [
-        nodeData.audioPublicId,
-        nodeData.audio_public_id,
-        nodeData.audioAssetId,
-        nodeData.audio_asset_id,
-        nodeData.cloudinaryPublicId,
-        nodeData.publicId
-      ];
-      [...nodeLevelIds, ...dataLevelIds]
-        .filter((pid) => typeof pid === 'string' && pid.trim())
-        .forEach((pid) => publicIds.add(pid.trim()));
-
-      [node.audioUrl, node.audio_url, nodeData.audioUrl, nodeData.audio_url]
-        .filter((url) => typeof url === 'string' && url.includes('/upload/'))
-        .forEach((url) => {
-          const match = url.match(/\/(?:image|video|raw)\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)?(?:\?|$)/)
-            || url.match(/\/upload\/(?:v\d+\/)?([^?]+?)(?:\.[a-zA-Z0-9]+)?(?:\?|$)/);
-          if (match?.[1]) {
-            publicIds.add(match[1]);
-          }
-        });
+    const cloudinaryCleanup = await deleteVoiceAudioAssets([menu], {
+      type: 'ivr-menu',
+      workflowId: String(menu._id),
+      userId: String(userId)
     });
-
-    // Optional legacy nested workflow shape
-    (menu.workflowConfig?.nodes || []).forEach((node) => {
-      const nodeData = node?.data || {};
-      [
-        node.audioPublicId,
-        node.audio_public_id,
-        node.audioAssetId,
-        node.audio_asset_id,
-        nodeData.audioPublicId,
-        nodeData.audio_public_id,
-        nodeData.audioAssetId,
-        nodeData.audio_asset_id
-      ]
-        .filter((pid) => typeof pid === 'string' && pid.trim())
-        .forEach((pid) => publicIds.add(pid.trim()));
-    });
-
-    // Legacy fields
-    (menu.audioFiles || []).forEach((file) => {
-      [file?.audioAssetId, file?.cloudinaryPublicId, file?.publicId]
-        .filter((pid) => typeof pid === 'string' && pid.trim())
-        .forEach((pid) => publicIds.add(pid.trim()));
-    });
-
-    // Delete assets from Cloudinary (best-effort, do not block DB delete)
-    const assetDeleteErrors = [];
-    for (const publicId of publicIds) {
-      try {
-        await deleteFromCloudinary(publicId);
-      } catch (err) {
-        logger.warn(`Failed to delete Cloudinary asset for IVR ${id}: ${publicId}`, err);
-        assetDeleteErrors.push({ publicId, error: err.message });
-      }
-    }
 
     // Hard delete from MongoDB
     await Workflow.deleteOne({ _id: menu._id });
@@ -1144,8 +1078,7 @@ router.delete('/menus/:id', async (req, res) => {
       message: 'IVR menu deleted successfully',
       deleted: {
         workflowId: menu._id,
-        cloudinaryAssetsRequested: publicIds.size,
-        cloudinaryDeleteErrors: assetDeleteErrors
+        cloudinary: cloudinaryCleanup
       }
     });
   } catch (error) {

@@ -892,6 +892,7 @@ router.delete('/:workflowId', authenticate, async (req, res) => {
         workflowId,
         deleted: true,
         deletedNodes: result.deletedNodes,
+        cloudinary: result.cloudinary,
         message: `Workflow ${workflowId} and ${result.deletedNodes} associated audio files deleted successfully`
       }
     });

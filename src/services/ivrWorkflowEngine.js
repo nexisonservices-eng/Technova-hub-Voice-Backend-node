@@ -7,6 +7,7 @@ import ivrExecutionEngine from './ivrExecutionEngine.js';
 import leadService from './leadService.js';
 import { emitIVRWorkflowUpdate, emitIVRWorkflowError, emitIVRWorkflowStats } from '../sockets/unifiedSocket.js';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
+import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -1386,47 +1387,20 @@ class IVRWorkflowEngine extends EventEmitter {
 
             logger.info(`🗑️ Deleting workflow ${workflowId} and all associated audio files`);
 
-            // Delete all Cloudinary audio files for this workflow
             const nodesWithAudio = workflow.nodes?.filter(n =>
                 n.data?.audioAssetId || n.audioAssetId || n.data?.audioUrl || n.audioUrl
             ) || [];
-
-            if (nodesWithAudio.length > 0) {
-                logger.info(`🗑️ Found ${nodesWithAudio.length} nodes with audio to delete`);
-
-                for (const node of nodesWithAudio) {
-                    // Check all possible locations for audio asset ID
-                    let audioAssetId = this.normalizeCloudinaryAssetId(
-                        node.data?.audioPublicId || node.data?.audioAssetId || node.audioAssetId
-                    );
-
-                    // If no asset ID but have URL, extract from URL
-                    if (!audioAssetId && (node.data?.audioUrl || node.audioUrl)) {
-                        const audioUrl = node.data?.audioUrl || node.audioUrl;
-                        const extractedPublicId = this.extractCloudinaryPublicId(audioUrl);
-                        if (extractedPublicId) {
-                            audioAssetId = extractedPublicId;
-                            logger.info(`🔍 Extracted audioAssetId from URL for node ${node.id}: ${audioAssetId}`);
-                        }
-                    }
-
-                    if (audioAssetId) {
-                        try {
-                            await deleteFromCloudinary(audioAssetId);
-                            logger.info(`✅ Deleted Cloudinary audio for node ${node.id}: ${audioAssetId}`);
-                        } catch (deleteError) {
-                            logger.warn(`⚠️ Failed to delete Cloudinary audio for node ${node.id}:`, deleteError.message);
-                            // Continue deleting other files even if one fails
-                        }
-                    }
-                }
-            }
+            const cloudinaryCleanup = await deleteVoiceAudioAssets([workflow], {
+                type: 'workflow',
+                workflowId: String(workflowId),
+                userId: String(workflow.createdBy || '')
+            });
 
             // Delete the workflow from database
             await Workflow.findByIdAndDelete(workflowId);
 
             logger.info(`✅ Successfully deleted workflow ${workflowId} and all associated audio`);
-            return { success: true, deletedNodes: nodesWithAudio.length };
+            return { success: true, deletedNodes: nodesWithAudio.length, cloudinary: cloudinaryCleanup };
         } catch (error) {
             logger.error(`❌ Error deleting workflow ${workflowId}:`, error);
             throw error;

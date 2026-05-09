@@ -5,6 +5,7 @@ import Broadcast from '../models/Broadcast.js';
 import OutboundLocalTemplate from '../models/OutboundTemplate.js';
 import OutboundCampaign from '../models/OutboundCampaign.js';
 import OutboundCampaignContact from '../models/OutboundCampaignContact.js';
+import CampaignSchedule from '../models/CampaignSchedule.js';
 import exotelService from '../services/ExotelService.js';
 import pythonTTSService from '../services/pythonTTSService.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
@@ -14,6 +15,7 @@ import { getUserIdString, getUserObjectId } from '../utils/authContext.js';
 import mongoose from 'mongoose';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { reportUsage } from '../services/usageService.js';
+import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
 const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
@@ -1141,19 +1143,48 @@ class OutboundLocalController {
       const campaigns = await OutboundCampaign.find({
         _id: { $in: validIds },
         userId: userObjectId
-      }).select('_id').lean();
+      }).lean();
 
       const scopedIds = campaigns.map((item) => item._id);
       if (!scopedIds.length) {
         return res.status(404).json({ success: false, message: 'No campaigns found to delete' });
       }
 
+      const campaignKeys = campaigns.map((item) => item.campaignId).filter(Boolean);
+      const scheduleIds = campaigns.map((item) => item?.schedule?.scheduleId).filter(Boolean);
+      const calls = await Call.find({
+        user: userObjectId,
+        direction: 'outbound-local',
+        $or: [
+          { 'providerData.campaignDbId': { $in: scopedIds.map((id) => String(id)) } },
+          ...(campaignKeys.length ? [{ 'providerData.campaignId': { $in: campaignKeys } }] : [])
+        ]
+      }).lean();
+      const cloudinaryCleanup = await deleteVoiceAudioAssets(
+        [campaigns, calls],
+        { type: 'outbound-campaigns', userId: String(userObjectId), campaignIds: scopedIds.map(String) }
+      );
+
       await OutboundCampaignContact.deleteMany({ campaignId: { $in: scopedIds } });
+      if (scheduleIds.length || campaignKeys.length) {
+        await CampaignSchedule.deleteMany({
+          userId: userObjectId,
+          $or: [
+            ...(scheduleIds.length ? [{ _id: { $in: scheduleIds } }] : []),
+            ...(campaignKeys.length ? [{ campaignId: { $in: campaignKeys } }] : [])
+          ]
+        });
+      }
+      if (calls.length) {
+        await Call.deleteMany({ _id: { $in: calls.map((call) => call._id) }, user: userObjectId });
+      }
       const result = await OutboundCampaign.deleteMany({ _id: { $in: scopedIds } });
 
       return res.status(200).json({
         success: true,
-        deletedCount: result.deletedCount || 0
+        deletedCount: result.deletedCount || 0,
+        deletedCallLogs: calls.length,
+        cloudinary: cloudinaryCleanup
       });
     } catch (error) {
       logger.error('Outbound Local campaign bulk delete failed:', error);

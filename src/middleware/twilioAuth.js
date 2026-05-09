@@ -12,10 +12,36 @@ const normalizePhone = (value) => {
 
 const resolveWebhookUrl = (req) => {
   const base = (process.env.PUBLIC_WEBHOOK_BASE_URL || process.env.BASE_URL || '').trim();
+  const forwardedProto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  const forwardedHost = String(req.get('x-forwarded-host') || '').split(',')[0].trim();
+  const host = forwardedHost || req.get('host');
+  const protocol = forwardedProto || req.protocol || 'https';
+
+  if (host) {
+    return `${protocol}://${host}${req.originalUrl}`;
+  }
+
   if (base) {
     return `${base.replace(/\/$/, '')}${req.originalUrl}`;
   }
-  return `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+
+  return `${protocol}://${req.get('host')}${req.originalUrl}`;
+};
+
+const buildWebhookDebugContext = (req, url) => {
+  const parsedUrl = new URL(url);
+  return {
+    validationUrl: String(process.env.TWILIO_SIGNATURE_DEBUG_FULL_URL || '').toLowerCase() === 'true'
+      ? url
+      : `${parsedUrl.origin}${parsedUrl.pathname}`,
+    queryKeys: Array.from(parsedUrl.searchParams.keys()),
+    method: req.method,
+    path: req.originalUrl.split('?')[0],
+    hasSignature: Boolean(req.headers['x-twilio-signature']),
+    host: req.get('host'),
+    forwardedHost: req.get('x-forwarded-host') || null,
+    forwardedProto: req.get('x-forwarded-proto') || null
+  };
 };
 
 const allowUnsignedInDev = () =>
@@ -78,7 +104,8 @@ export const verifyTwilioRequest = async (req, res, next) => {
   }
 
   try {
-    const { authToken, fromNumber, tenant } = await resolveAuthContext(req);
+    const { authToken: tenantAuthToken, fromNumber, tenant } = await resolveAuthContext(req);
+    const authToken = tenantAuthToken || String(process.env.TWILIO_AUTH_TOKEN || '').trim();
 
     if (!authToken) {
       logger.error('Twilio auth token is not configured');
@@ -91,6 +118,10 @@ export const verifyTwilioRequest = async (req, res, next) => {
     const isValid = twilio.validateRequest(authToken, twilioSignature, url, params);
 
     if (!isValid) {
+      logger.warn('Invalid Twilio signature', {
+        ...buildWebhookDebugContext(req, url),
+        hasAuthToken: Boolean(authToken),
+      });
       return res.status(403).send('Forbidden: Invalid Twilio signature');
     }
 

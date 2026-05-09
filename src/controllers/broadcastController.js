@@ -638,7 +638,10 @@ class BroadcastController {
         requested: ids.length,
         processed: validIds.length,
         deleted: results.filter((result) => result.status === 'fulfilled').length,
-        failed: results.filter((result) => result.status === 'rejected').length
+        failed: results.filter((result) => result.status === 'rejected').length,
+        cleanup: results
+          .filter((result) => result.status === 'fulfilled')
+          .map((result) => result.value)
       });
     } catch (error) {
       logger.error('Bulk delete broadcasts error:', error);
@@ -660,11 +663,12 @@ class BroadcastController {
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
       }
-      await broadcastService.deleteBroadcast(id, userId, req.user || {});
+      const cleanup = await broadcastService.deleteBroadcast(id, userId, req.user || {});
 
       res.json({
         success: true,
-        message: 'Broadcast deleted successfully'
+        message: 'Broadcast deleted successfully',
+        cleanup
       });
     } catch (error) {
       logger.error('Delete broadcast error:', error);

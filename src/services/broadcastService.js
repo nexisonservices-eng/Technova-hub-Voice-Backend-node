@@ -1,14 +1,19 @@
 import crypto from 'crypto';
 import axios from 'axios';
-import cloudinary, { deleteFromCloudinary } from "../utils/cloudinaryUtils.js";
+import cloudinary from "../utils/cloudinaryUtils.js";
 import logger from '../utils/logger.js';
 import Broadcast from '../models/Broadcast.js';
 import BroadcastCall from '../models/BroadcastCall.js';
+import Call from '../models/call.js';
+import OutboundCampaign from '../models/OutboundCampaign.js';
+import OutboundCampaignContact from '../models/OutboundCampaignContact.js';
+import CampaignSchedule from '../models/CampaignSchedule.js';
 import ttsBatchService from "./ttsBatchService.js";
 import broadcastQueueService from './broadcastQueueService.js';
 import aiAssistantService from './aiAssistantService.js';
 import { emitStatsUpdate, emitBroadcastListUpdate, emitCallsCreated } from '../sockets/unifiedSocket.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 class BroadcastService {
   normalizeConcurrencyConfig(data = {}) {
@@ -308,44 +313,74 @@ class BroadcastService {
       broadcastQueueService.stopBroadcast(broadcastId);
     }
 
+    const broadcastCalls = await BroadcastCall.find({ broadcast: broadcastId, userId }).lean();
+    const outboundCampaignRefs = (broadcast.outboundCampaigns || [])
+      .map((item) => String(item?.campaignId || '').trim())
+      .filter(Boolean);
+    const linkedOutboundCampaigns = outboundCampaignRefs.length
+      ? await OutboundCampaign.find({ userId, campaignId: { $in: outboundCampaignRefs } }).lean()
+      : [];
+    const linkedOutboundCampaignIds = linkedOutboundCampaigns.map((item) => item._id);
+    const linkedOutboundCampaignKeys = linkedOutboundCampaigns.map((item) => item.campaignId).filter(Boolean);
+    const linkedScheduleIds = linkedOutboundCampaigns
+      .map((item) => item?.schedule?.scheduleId)
+      .filter(Boolean);
+    const callOr = [
+      { 'providerData.broadcastId': String(broadcast._id) },
+      { 'providerData.broadcastDbId': String(broadcast._id) },
+      { 'providerData.campaignDbId': String(broadcast._id) },
+      ...(outboundCampaignRefs.length ? [{ 'providerData.campaignId': { $in: outboundCampaignRefs } }] : []),
+      ...(linkedOutboundCampaignIds.length
+        ? [{ 'providerData.campaignDbId': { $in: linkedOutboundCampaignIds.map((id) => String(id)) } }]
+        : [])
+    ];
+    const linkedCalls = await Call.find({ user: userId, $or: callOr }).lean();
+    const cloudinaryCleanup = await deleteVoiceAudioAssets(
+      [broadcast, broadcastCalls, linkedOutboundCampaigns, linkedCalls],
+      { type: 'broadcast', broadcastId: String(broadcast._id), userId: String(userId) }
+    );
+
     // 🗑️ Delete Cloudinary Assets
-    if (broadcast.audioAssets && broadcast.audioAssets.length > 0) {
-      logger.info(`Deleting ${broadcast.audioAssets.length} audio assets for broadcast ${broadcastId}`);
-
-      const folder = await resolveCloudinaryAudioFolder(
-        {
-          userId: String(broadcast.createdBy || userId || ''),
-          username: userContext?.username || ''
-        },
-        'broadcast'
-      );
-
-      for (const asset of broadcast.audioAssets) {
-        if (asset.uniqueKey) {
-          try {
-            // Cloudinary requires folder/public_id to delete
-            const publicId = `${folder}/${asset.uniqueKey}`;
-            await deleteFromCloudinary(publicId);
-            logger.info(`Deleted audio asset: ${publicId}`);
-          } catch (err) {
-            logger.warn(`Failed to delete Cloudinary asset ${asset.uniqueKey}:`, err.message);
-          }
-        }
-      }
-    }
-
     // Delete all associated calls
     await BroadcastCall.deleteMany({ broadcast: broadcastId, userId });
+    if (linkedOutboundCampaignIds.length) {
+      await OutboundCampaignContact.deleteMany({ campaignId: { $in: linkedOutboundCampaignIds } });
+      await OutboundCampaign.deleteMany({ _id: { $in: linkedOutboundCampaignIds }, userId });
+    }
+    if (linkedScheduleIds.length || linkedOutboundCampaignKeys.length) {
+      await CampaignSchedule.deleteMany({
+        userId,
+        $or: [
+          ...(linkedScheduleIds.length ? [{ _id: { $in: linkedScheduleIds } }] : []),
+          ...(linkedOutboundCampaignKeys.length ? [{ campaignId: { $in: linkedOutboundCampaignKeys } }] : [])
+        ]
+      });
+    }
+    if (linkedCalls.length) {
+      await Call.deleteMany({ _id: { $in: linkedCalls.map((call) => call._id) }, user: userId });
+    }
 
     // Delete broadcast
     await Broadcast.deleteOne({ _id: broadcastId, createdBy: userId });
 
-    logger.info(`Broadcast ${broadcastId} fully deleted (DB + Cloudinary)`);
+    logger.info(`Broadcast ${broadcastId} fully deleted (DB + Cloudinary)`, {
+      cloudinaryCleanup,
+      linkedOutboundCampaigns: linkedOutboundCampaignIds.length,
+      linkedCalls: linkedCalls.length
+    });
 
     await this._broadcastStatsUpdate();
     emitBroadcastListUpdate();
 
-    return { success: true };
+    return {
+      success: true,
+      cloudinary: cloudinaryCleanup,
+      deleted: {
+        broadcastCalls: broadcastCalls.length,
+        linkedOutboundCampaigns: linkedOutboundCampaignIds.length,
+        linkedCalls: linkedCalls.length
+      }
+    };
   }
 
   /**

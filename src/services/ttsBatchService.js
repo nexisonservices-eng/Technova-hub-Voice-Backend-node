@@ -75,19 +75,24 @@ class TTSBatchService {
       );
 
       const audioBuffer = Buffer.from(response.data);
-      const fileName = `broadcast/${message.uniqueKey}.${this._getAudioFormat(
-        voiceConfig.provider
-      )}`;
+      const publicId = message.uniqueKey;
+      const fileName = `${publicId}.${this._getAudioFormat(voiceConfig.provider)}`;
 
       if (!isCloudinaryConfigured()) {
         throw new Error('Cloudinary is required for TTS audio storage, but it is not configured.');
       }
 
+      const folder = await resolveCloudinaryAudioFolder(userContext, 'broadcast');
+      logger.info('Uploading broadcast batch audio to Cloudinary', {
+        folder,
+        publicId
+      });
+
       const uploadResult = await uploadToCloudinary(audioBuffer, fileName, {
         format: this._getAudioFormat(voiceConfig.provider),
-        folder: await resolveCloudinaryAudioFolder(userContext, 'broadcast')
+        folder
       });
-      logger.info(`Audio uploaded to Cloudinary: ${fileName}`);
+      logger.info(`Audio uploaded to Cloudinary: ${publicId}`);
 
       return {
         success: true,

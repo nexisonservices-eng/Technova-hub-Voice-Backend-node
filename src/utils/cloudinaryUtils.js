@@ -35,6 +35,15 @@ function stripAudioExtension(value) {
   return value.replace(/\.(mp3|wav|m4a|ogg)$/i, '');
 }
 
+function normalizePublicId(fileName) {
+  const raw = String(fileName || '').trim();
+  if (!raw) return '';
+
+  const withoutQuery = raw.split('?')[0].split('#')[0].replace(/\\/g, '/');
+  const leaf = withoutQuery.split('/').filter(Boolean).pop() || '';
+  return stripAudioExtension(leaf);
+}
+
 function buildPublicIdVariants(publicIdOrUrl) {
   const raw = typeof publicIdOrUrl === 'string' ? publicIdOrUrl.trim() : '';
   if (!raw) return [];
@@ -81,12 +90,20 @@ export async function uploadToCloudinary(buffer, fileName, options = {}) {
     }
 
     return new Promise((resolve, reject) => {
+      const publicId = normalizePublicId(fileName);
+      if (!publicId) {
+        const error = new Error('Cloudinary public_id is required');
+        error.code = 'AUDIO_PUBLIC_ID_MISSING';
+        reject(error);
+        return;
+      }
+
       const uploadStream = cloudinary.uploader.upload_stream(
         {
           folder,
           resource_type: 'video', // Use 'video' for audio files
           format: options.format || 'mp3',
-          public_id: fileName.replace(/\.[^/.]+$/, ""), // Remove extension
+          public_id: publicId,
           overwrite: true,
           invalidate: true
         },
@@ -96,7 +113,12 @@ export async function uploadToCloudinary(buffer, fileName, options = {}) {
             reject(error);
           } else {
             const secureUrl = result.secure_url;
-            logger.info(`File uploaded to Cloudinary: ${fileName} -> ${secureUrl}`);
+            logger.info('File uploaded to Cloudinary', {
+              fileName,
+              folder,
+              publicId: result.public_id,
+              secureUrl
+            });
             
             resolve({
               url: secureUrl,
