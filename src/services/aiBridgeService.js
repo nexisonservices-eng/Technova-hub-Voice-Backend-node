@@ -44,6 +44,7 @@ class AIBridgeService extends EventEmitter {
         }
       });
 
+      
       this.ws.on('error', (err) => {
         logger.error(`[${this.callId}] WebSocket error`, err);
         this.emit('error', err);

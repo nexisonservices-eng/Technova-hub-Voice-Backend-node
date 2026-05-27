@@ -3,6 +3,7 @@ import axios from 'axios';
 import logger from '../utils/logger.js';
 import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import emailService from './emailService.js';
+import appointmentBookingService from './appointmentBookingService.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -201,6 +202,18 @@ class IVRExecutionEngine {
 
         case 'audio':
           return await this._handleAudio(response, node, workflowConfig, context);
+        case 'availability_check':
+          return await this._handleAvailabilityCheck(response, node, workflowConfig, context, callSid);
+        case 'slot_offer':
+          return await this._handleSlotOffer(response, node, workflowConfig, context, callSid);
+        case 'booking_confirm':
+          return await this._handleBookingConfirm(response, node, workflowConfig, context, callSid);
+        case 'booking_create':
+          return await this._handleBookingCreate(response, node, workflowConfig, context, callSid);
+        case 'whatsapp_notify':
+          return await this._handleWhatsAppNotify(response, node, workflowConfig, context, callSid);
+        case 'handoff':
+          return await this._handleHandoff(response, node, workflowConfig, context);
         default:
           logger.warn(`Unknown node type: ${node.type}`);
           response.say('An error occurred. Unknown step.');
@@ -752,6 +765,267 @@ class IVRExecutionEngine {
 
     response.say('Repeating.');
     this._appendNextStep(response, node.id, config.edges, config._id);
+    return response.toString();
+  }
+
+  _replaceCurlyVariables(callSid, text = '', extraVariables = {}) {
+    const base = String(text || '');
+    if (!callSid || !base) return base;
+    const state = ivrWorkflowEngine.getExecutionState(callSid);
+    const variables = {
+      ...(state?.variables || {}),
+      ...(extraVariables || {})
+    };
+    return base.replace(/\{\{([^}]+)\}\}/g, (_match, rawKey) => {
+      const key = String(rawKey || '').trim();
+      if (!key) return '';
+      const value = variables[key];
+      return value === undefined || value === null ? '' : String(value);
+    });
+  }
+
+  _resolveBookingActionTarget(edges = [], nodeId = '', handles = []) {
+    for (const handle of handles) {
+      const edge = edges.find((item) => item.source === nodeId && item.sourceHandle === handle);
+      if (edge) return edge.target;
+    }
+    return null;
+  }
+
+  async _handleAvailabilityCheck(response, node, config, context, callSid) {
+    const { data } = node;
+    const settings = config.settings || {};
+    const nodes = Array.isArray(config.nodes) ? config.nodes : [];
+    const { voice, language } = this._getMergedSettings(node, settings);
+    const slotSnapshot = await appointmentBookingService.getSlotSnapshot(
+      node,
+      { _id: config._id, settings },
+      context
+    );
+    const promptText = appointmentBookingService.buildSelectionPrompt(
+      node,
+      slotSnapshot,
+      data.promptText || data.prompt_text || 'Please choose an available slot.'
+    );
+
+    const gather = response.gather({
+      numDigits: data.numDigits || data.num_digits || 1,
+      timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
+      method: 'POST'
+    });
+
+    gather.say({ voice, language }, this._replaceCurlyVariables(callSid, promptText));
+    if (slotSnapshot.length === 0) {
+      gather.say({ voice, language }, 'No slots are available right now. Please try again later.');
+    }
+
+    return response.toString();
+  }
+
+  async _handleSlotOffer(response, node, config, context, callSid) {
+    const { data } = node;
+    const settings = config.settings || {};
+    const { voice, language } = this._getMergedSettings(node, settings);
+    const state = callSid ? ivrWorkflowEngine.getExecutionState(callSid) : null;
+    const suggestedSlotLabel =
+      String(state?.variables?.['booking.nextAvailableSlotLabel'] || state?.variables?.['booking.selectedSlotLabel'] || '').trim();
+    const promptText = appointmentBookingService.buildOfferPrompt(node, {
+      slotLabel: suggestedSlotLabel || ''
+    });
+
+    const gather = response.gather({
+      numDigits: 1,
+      timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
+      method: 'POST'
+    });
+
+    gather.say({ voice, language }, this._replaceCurlyVariables(callSid, promptText));
+    return response.toString();
+  }
+
+  async _handleBookingConfirm(response, node, config, context, callSid) {
+    const { data } = node;
+    const settings = config.settings || {};
+    const { voice, language } = this._getMergedSettings(node, settings);
+    const state = callSid ? ivrWorkflowEngine.getExecutionState(callSid) : null;
+    const slotLabel = String(state?.variables?.['booking.selectedSlotLabel'] || '').trim();
+    const bookingReference = String(state?.variables?.['booking.reference'] || '').trim();
+    const promptText = String(
+      data.promptText ||
+      data.prompt_text ||
+      `Your slot ${slotLabel || ''} ${bookingReference ? `(reference ${bookingReference}) ` : ''}is ready. Would you like to confirm the booking?`
+    ).trim();
+
+    const gather = response.gather({
+      numDigits: 1,
+      timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
+      method: 'POST'
+    });
+
+    gather.say({ voice, language }, this._replaceCurlyVariables(callSid, promptText));
+    return response.toString();
+  }
+
+  async _handleBookingCreate(response, node, config, context, callSid) {
+    const { data } = node;
+    const settings = config.settings || {};
+    const { voice, language } = this._getMergedSettings(node, settings);
+    const state = callSid ? ivrWorkflowEngine.getExecutionState(callSid) : null;
+    const selectedSlotKey = String(state?.variables?.['booking.selectedSlotKey'] || '').trim();
+    const selectedSlotLabel = String(state?.variables?.['booking.selectedSlotLabel'] || '').trim();
+    const slotSnapshot = await appointmentBookingService.getSlotSnapshot(node, { _id: config._id, settings }, context);
+    const selectedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === selectedSlotKey) || null;
+
+    if (!selectedSlot) {
+      response.say({ voice, language }, 'We could not confirm the selected slot.');
+      this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+      return response.toString();
+    }
+
+    const reservation = await appointmentBookingService.reserveBooking({
+      workflow: {
+        _id: config._id,
+        createdBy: config.createdBy || settings.createdBy || null,
+        promptKey: settings.promptKey || ''
+      },
+      node,
+      callSid,
+      context,
+      slot: {
+        key: selectedSlot.slotKey,
+        label: selectedSlotLabel || selectedSlot.slotLabel || selectedSlot.slotKey,
+        startTime: selectedSlot.slotStart,
+        endTime: selectedSlot.slotEnd,
+        capacity: selectedSlot.capacity,
+        digit: selectedSlot?.metadata?.digit,
+        order: selectedSlot?.metadata?.order,
+        metadata: selectedSlot?.metadata || {}
+      }
+    });
+
+    if (!reservation.success) {
+      response.say({ voice, language }, reservation.error || 'Unable to reserve the selected slot.');
+      this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+      return response.toString();
+    }
+
+    if (callSid) {
+      ivrWorkflowEngine.setVariable(callSid, 'booking.reference', reservation.booking.bookingReference);
+      ivrWorkflowEngine.setVariable(callSid, 'booking.token', reservation.booking.tokenNumber);
+      ivrWorkflowEngine.setVariable(callSid, 'booking.bookingId', String(reservation.booking._id));
+      ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
+    }
+
+    const successText = this._replaceCurlyVariables(
+      callSid,
+      data.successText ||
+        data.messageText ||
+        `Your booking is confirmed for ${reservation.booking.slotLabel}. Reference ${reservation.booking.bookingReference}.`
+    );
+    if (successText) {
+      response.say({ voice, language }, successText);
+    }
+
+    this._appendNextStep(response, node.id, config.edges, config._id, 'success');
+    return response.toString();
+  }
+
+  async _handleWhatsAppNotify(response, node, config, context, callSid) {
+    const { data } = node;
+    const settings = config.settings || {};
+    const { voice, language } = this._getMergedSettings(node, settings);
+    const state = callSid ? ivrWorkflowEngine.getExecutionState(callSid) : null;
+    const bookingReference = String(state?.variables?.['booking.reference'] || '').trim();
+
+    if (!bookingReference) {
+      response.say({ voice, language }, 'Booking notification could not be sent because booking details were missing.');
+      this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+      return response.toString();
+    }
+
+    const customerRecipient = this._replaceCurlyVariables(
+      callSid,
+      data.customerRecipient || data.customer_recipient || '{{callerNumber}}'
+    );
+    const adminRecipient = this._replaceCurlyVariables(callSid, data.adminRecipient || data.admin_recipient || '');
+    const booking = {
+      _id: state?.variables?.['booking.bookingId'] || bookingReference,
+      bookingReference,
+      tokenNumber: String(state?.variables?.['booking.token'] || '').trim(),
+      customerName: String(state?.variables?.['customerName'] || state?.variables?.callerName || '').trim(),
+      customerPhone: String(context?.callerNumber || state?.variables?.callerNumber || '').trim(),
+      slotLabel: String(state?.variables?.['booking.selectedSlotLabel'] || '').trim(),
+      slotDate: String(state?.variables?.['booking.slotDate'] || '').trim(),
+      slotKey: String(state?.variables?.['booking.selectedSlotKey'] || '').trim()
+    };
+
+    const result = await appointmentBookingService.notifyBooking({
+      workflow: {
+        _id: config._id,
+        createdBy: config.createdBy || settings.createdBy || null,
+        displayName: settings.displayName || settings.promptKey || ''
+      },
+      node,
+      booking,
+      customerRecipient,
+      adminRecipient
+    });
+
+    if (!result.success) {
+      response.say({ voice, language }, 'We could not send the notification right now.');
+      this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+      return response.toString();
+    }
+
+    if (callSid) {
+      ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsSent', true);
+    }
+
+    const successText = this._replaceCurlyVariables(
+      callSid,
+      data.successText ||
+        data.messageText ||
+        'Your booking notification has been sent.'
+    );
+    if (successText) {
+      response.say({ voice, language }, successText);
+    }
+
+    this._appendNextStep(response, node.id, config.edges, config._id, 'success');
+    return response.toString();
+  }
+
+  async _handleHandoff(response, node, config, context) {
+    const { data } = node;
+    const destination = String(data.destination || data.transferNumber || '').trim();
+    if (data.announcementText || data.text) {
+      response.say(data.announcementText || data.text);
+    }
+
+    if (!destination) {
+      response.say('We are unable to connect you right now.');
+      response.hangup();
+      return response.toString();
+    }
+
+    response.dial({
+      callerId: data.callerId || context?.twilioPhoneNumber || undefined,
+      timeout: data.timeout || 30
+    }, destination);
+
+    return response.toString();
+  }
+
+  async _handleBookingEnd(response, node, config, context) {
+    const { data } = node;
+    const settings = config.settings || {};
+    const { voice, language } = this._getMergedSettings(node, settings);
+    const message = data.text || data.message || 'Your booking is complete. Goodbye.';
+    response.say({ voice, language }, this._replaceCurlyVariables(context?.callSid, message));
+    response.hangup();
     return response.toString();
   }
 

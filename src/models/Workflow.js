@@ -181,18 +181,22 @@ WorkflowSchema.pre('save', function (next) {
   // Allow draft workflows to be saved without entry nodes for flexibility
   if (this.isModified('status') && this.status === 'active' && this.nodes.length > 0) {
     // Auto-validate workflow structure when activating
-    // Supporting both legacy 'greeting' and new 'audio' node types
-    const hasEntryNode = this.nodes.some(node => node.type === 'greeting' || node.type === 'audio');
+    // Supporting legacy audio/greeting nodes and booking-capable entry nodes.
+    const hasEntryNode = this.nodes.some((node) =>
+      ['greeting', 'audio', 'availability_check', 'slot_offer', 'booking_confirm'].includes(String(node?.type || '').toLowerCase())
+    );
 
     if (!hasEntryNode) {
-      const nextErr = new Error('Workflow must have at least one greeting or audio node to be activated');
+      const nextErr = new Error('Workflow must have at least one greeting, audio, or booking entry node to be activated');
       return next(nextErr);
     }
   }
   
   // Log node modifications for debugging
   if (this.isModified('nodes')) {
-    const entryNodes = this.nodes.filter(node => node.type === 'greeting' || node.type === 'audio');
+    const entryNodes = this.nodes.filter((node) =>
+      ['greeting', 'audio', 'availability_check', 'slot_offer', 'booking_confirm'].includes(String(node?.type || '').toLowerCase())
+    );
     console.log(`📝 Workflow ${this.promptKey} nodes modified: ${this.nodes.length} total, ${entryNodes.length} entry nodes`);
   }
   

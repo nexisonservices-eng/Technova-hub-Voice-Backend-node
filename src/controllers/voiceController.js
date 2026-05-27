@@ -146,13 +146,14 @@ class CallController {
         duration: call.duration || 0
       }));
 
-      const normalizedVoiceCalls = activeVoiceCalls.map((call) => ({
-        ...call,
-        connected: call.status === 'in-progress',
-        source: call.direction === 'outbound'
-          ? 'outbound'
-          : call.direction === 'outbound-local'
-            ? 'outbound_quick_call'
+        const normalizedVoiceCalls = activeVoiceCalls.map((call) => ({
+          ...call,
+          workflowId: call.workflowId || call.providerData?.workflowId || call.providerData?.ivrWorkflowId || call.providerData?.workflow_id || '',
+          connected: call.status === 'in-progress',
+          source: call.direction === 'outbound'
+            ? 'outbound'
+            : call.direction === 'outbound-local'
+              ? 'outbound_quick_call'
             : call.routing && call.routing !== 'default'
               ? 'ivr'
               : 'inbound'

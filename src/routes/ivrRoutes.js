@@ -1206,6 +1206,39 @@ router.get('/analytics/workflow/:workflowId', async (req, res) => {
 });
 
 /**
+ * GET /ivr/analytics/workflow/:workflowId/events
+ * Get workflow-scoped event log rows
+ */
+router.get('/analytics/workflow/:workflowId/events', async (req, res) => {
+  try {
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+
+    const { workflowId } = req.params;
+    const { startDate, endDate, limit } = req.query;
+    const ownedWorkflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    if (!ownedWorkflow) {
+      return res.status(404).json({ success: false, error: 'Workflow not found' });
+    }
+
+    const eventLog = await ivrAnalyticsService.getWorkflowEventLog(
+      workflowId,
+      startDate,
+      endDate,
+      limit,
+      userId
+    );
+
+    res.json({ success: true, data: eventLog });
+  } catch (error) {
+    logger.error('Failed to get workflow event log:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * GET /ivr/analytics/nodes/:workflowId
  * Get node-level analytics (heatmap)
  */

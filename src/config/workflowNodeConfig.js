@@ -19,7 +19,13 @@ export const NODE_TYPES = {
   QUEUE: 'queue',
   SMS: 'sms',
   SET_VARIABLE: 'set_variable',
-  API_CALL: 'api_call'
+  API_CALL: 'api_call',
+  AVAILABILITY_CHECK: 'availability_check',
+  SLOT_OFFER: 'slot_offer',
+  BOOKING_CREATE: 'booking_create',
+  BOOKING_CONFIRM: 'booking_confirm',
+  WHATSAPP_NOTIFY: 'whatsapp_notify',
+  HANDOFF: 'handoff'
 };
 
 // Node Categories
@@ -294,7 +300,120 @@ export const NODE_CONFIGS = {
         maxDuration: { min: 60, max: 1800 }
       }
     }
-  }
+  },
+
+  [NODE_TYPES.AVAILABILITY_CHECK]: {
+    name: 'Availability Check',
+    category: NODE_CATEGORIES.ACTION,
+    icon: '📅',
+    description: 'Check whether a requested slot is available',
+    color: '#0EA5E9',
+    inputs: 1,
+    outputs: ['available', 'full', 'invalid'],
+    dataSchema: {
+      promptText: { type: 'string', required: true, label: 'Prompt Text', placeholder: 'Please choose a time slot.' },
+      timezone: { type: 'string', default: 'Asia/Kolkata', label: 'Timezone' },
+      numDigits: { type: 'number', default: 1, min: 1, max: 5, label: 'Digits to Read' },
+      timeoutSeconds: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout (seconds)' },
+      maxRetries: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Retries' },
+      slotDefinitions: { type: 'array', label: 'Slot Definitions' },
+      fallbackNodeId: { type: 'string', label: 'Fallback Node ID' },
+      selectionVariable: { type: 'string', default: 'booking.selectedSlotKey', label: 'Selection Variable' }
+    }
+  },
+
+  [NODE_TYPES.SLOT_OFFER]: {
+    name: 'Slot Offer',
+    category: NODE_CATEGORIES.ACTION,
+    icon: '🕒',
+    description: 'Offer the next available slot',
+    color: '#14B8A6',
+    inputs: 1,
+    outputs: ['yes', 'no', 'retry'],
+    dataSchema: {
+      promptText: { type: 'string', required: true, label: 'Prompt Text', placeholder: 'The selected slot is full.' },
+      offerText: { type: 'string', required: true, label: 'Offer Text', placeholder: 'Would you like to book the next available slot?' },
+      yesDigits: { type: 'string', default: '1', label: 'Yes Digits' },
+      noDigits: { type: 'string', default: '2', label: 'No Digits' },
+      timeoutSeconds: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout (seconds)' },
+      maxRetries: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Retries' },
+      fallbackNodeId: { type: 'string', label: 'Fallback Node ID' },
+      suggestedSlotVariable: { type: 'string', default: 'booking.nextAvailableSlotKey', label: 'Suggested Slot Variable' }
+    }
+  },
+
+  [NODE_TYPES.BOOKING_CREATE]: {
+    name: 'Booking Create',
+    category: NODE_CATEGORIES.ACTION,
+    icon: '📝',
+    description: 'Create and reserve a booking',
+    color: '#22C55E',
+    inputs: 1,
+    outputs: ['success', 'failure'],
+    dataSchema: {
+      bookingReferencePrefix: { type: 'string', default: 'BK', label: 'Booking Reference Prefix' },
+      tokenPrefix: { type: 'string', default: 'T', label: 'Token Prefix' },
+      customerNameVariable: { type: 'string', default: 'customerName', label: 'Customer Name Variable' },
+      customerPhoneVariable: { type: 'string', default: 'callerNumber', label: 'Customer Phone Variable' },
+      customerEmailVariable: { type: 'string', default: 'customerEmail', label: 'Customer Email Variable' },
+      notesVariable: { type: 'string', default: 'notes', label: 'Notes Variable' },
+      preventDuplicates: { type: 'boolean', default: true, label: 'Prevent Duplicate Booking' }
+    }
+  },
+
+  [NODE_TYPES.BOOKING_CONFIRM]: {
+    name: 'Booking Confirm',
+    category: NODE_CATEGORIES.ACTION,
+    icon: '✅',
+    description: 'Ask the caller to confirm the booking',
+    color: '#16A34A',
+    inputs: 1,
+    outputs: ['yes', 'no', 'timeout'],
+    dataSchema: {
+      promptText: { type: 'string', required: true, label: 'Prompt Text', placeholder: 'Would you like to confirm this booking?' },
+      yesDigits: { type: 'string', default: '1', label: 'Yes Digits' },
+      noDigits: { type: 'string', default: '2', label: 'No Digits' },
+      timeoutSeconds: { type: 'number', default: 10, min: 1, max: 60, label: 'Timeout (seconds)' },
+      maxRetries: { type: 'number', default: 3, min: 1, max: 10, label: 'Max Retries' }
+    }
+  },
+
+  [NODE_TYPES.WHATSAPP_NOTIFY]: {
+    name: 'WhatsApp Notify',
+    category: NODE_CATEGORIES.SERVICE,
+    icon: '💬',
+    description: 'Send WhatsApp confirmations and alerts',
+    color: '#059669',
+    inputs: 1,
+    outputs: ['success', 'failure'],
+    dataSchema: {
+      customerRecipient: { type: 'string', default: '{{callerNumber}}', label: 'Customer Recipient' },
+      adminRecipient: { type: 'string', label: 'Admin Recipient' },
+      customerTemplateName: { type: 'string', label: 'Customer Template Name' },
+      adminTemplateName: { type: 'string', label: 'Admin Template Name' },
+      customerMessageText: { type: 'string', label: 'Customer Message Text' },
+      adminMessageText: { type: 'string', label: 'Admin Message Text' },
+      customerTemplateLanguage: { type: 'string', default: 'en_US', label: 'Customer Template Language' },
+      adminTemplateLanguage: { type: 'string', default: 'en_US', label: 'Admin Template Language' }
+    }
+  },
+
+  [NODE_TYPES.HANDOFF]: {
+    name: 'Hand Off',
+    category: NODE_CATEGORIES.ACTION,
+    icon: '📞',
+    description: 'Transfer to a human operator',
+    color: '#F59E0B',
+    inputs: 1,
+    outputs: ['connected', 'failed'],
+    dataSchema: {
+      destination: { type: 'string', label: 'Destination Number', placeholder: '+1234567890' },
+      callerId: { type: 'string', label: 'Caller ID' },
+      timeout: { type: 'number', default: 30, min: 10, max: 120, label: 'Ring Timeout (seconds)' },
+      announcementText: { type: 'string', label: 'Announcement Text', placeholder: 'Connecting you now...' }
+    }
+  },
+
 };
 
 // Execution Configuration - Consolidated

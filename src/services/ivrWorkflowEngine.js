@@ -5,6 +5,7 @@ import twilio from 'twilio';
 import EventEmitter from 'events';
 import ivrExecutionEngine from './ivrExecutionEngine.js';
 import leadService from './leadService.js';
+import appointmentBookingService from './appointmentBookingService.js';
 import { emitIVRWorkflowUpdate, emitIVRWorkflowError, emitIVRWorkflowStats } from '../sockets/unifiedSocket.js';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
@@ -136,6 +137,14 @@ class IVRWorkflowEngine extends EventEmitter {
         if (t === 'transfer') return 'transfer';
         if (t === 'voicemail') return 'voicemail';
         if (t === 'end') return 'end';
+        if ([
+            'availability_check',
+            'slot_offer',
+            'booking_create',
+            'booking_confirm',
+            'whatsapp_notify',
+            'handoff'
+        ].includes(t)) return t;
         return t || 'audio';
     }
 
@@ -182,6 +191,60 @@ class IVRWorkflowEngine extends EventEmitter {
                 'greetingAudioNodeId', 'greeting_audio_node_id',
                 'maxLength', 'max_length', 'storageRoute',
                 'fallbackNodeId', 'fallback_node_id'
+            ],
+            availability_check: [
+                ...commonKeys,
+                'promptText', 'prompt_text',
+                'timezone', 'numDigits', 'num_digits',
+                'timeoutSeconds', 'timeout',
+                'maxRetries', 'max_retries',
+                'slotDefinitions', 'slot_definitions',
+                'slots', 'selectionVariable', 'selection_variable',
+                'fallbackNodeId', 'fallback_node_id'
+            ],
+            slot_offer: [
+                ...commonKeys,
+                'promptText', 'prompt_text',
+                'offerText', 'offer_text',
+                'yesDigits', 'yes_digits',
+                'noDigits', 'no_digits',
+                'timeoutSeconds', 'timeout',
+                'maxRetries', 'max_retries',
+                'fallbackNodeId', 'fallback_node_id',
+                'suggestedSlotVariable', 'suggested_slot_variable'
+            ],
+            booking_create: [
+                ...commonKeys,
+                'bookingReferencePrefix', 'booking_reference_prefix',
+                'tokenPrefix', 'token_prefix',
+                'customerNameVariable', 'customer_name_variable',
+                'customerPhoneVariable', 'customer_phone_variable',
+                'customerEmailVariable', 'customer_email_variable',
+                'notesVariable', 'notes_variable',
+                'preventDuplicates', 'prevent_duplicates'
+            ],
+            booking_confirm: [
+                ...commonKeys,
+                'promptText', 'prompt_text',
+                'yesDigits', 'yes_digits',
+                'noDigits', 'no_digits',
+                'timeoutSeconds', 'timeout',
+                'maxRetries', 'max_retries'
+            ],
+            whatsapp_notify: [
+                ...commonKeys,
+                'customerRecipient', 'customer_recipient',
+                'adminRecipient', 'admin_recipient',
+                'customerTemplateName', 'customer_template_name',
+                'adminTemplateName', 'admin_template_name',
+                'customerMessageText', 'customer_message_text',
+                'adminMessageText', 'admin_message_text',
+                'customerTemplateLanguage', 'customer_template_language',
+                'adminTemplateLanguage', 'admin_template_language'
+            ],
+            handoff: [
+                ...commonKeys,
+                'destination', 'callerId', 'caller_id', 'timeout', 'announcementText', 'announcement_text'
             ],
             end: [
                 ...commonKeys,
@@ -360,6 +423,10 @@ class IVRWorkflowEngine extends EventEmitter {
                 workflowName: workflow.promptKey,
                 callerNumber,
                 destinationNumber,
+                currentNodeId: null,
+                currentNodeType: null,
+                currentNodeLabel: null,
+                visitedNodes: [],
                 timestamp: new Date()
             });
 
@@ -457,6 +524,15 @@ class IVRWorkflowEngine extends EventEmitter {
             nodeId,
             nodeType,
             userInput,
+            currentNodeId: nodeId,
+            currentNodeType: nodeType,
+            currentNodeLabel: nodeType,
+            visitedNodes: state.visitedNodes.map((visit) => ({
+                nodeId: visit.nodeId,
+                nodeType: visit.nodeType,
+                timestamp: visit.timestamp,
+                userInput: visit.userInput
+            })),
             timestamp: new Date(),
             executionStats: {
                 nodeExecutionCount: state.nodeExecutionCount,
@@ -538,6 +614,15 @@ class IVRWorkflowEngine extends EventEmitter {
                 duration: Date.now() - state.startTime,
                 nodeExecutionCount: state.nodeExecutionCount,
                 loopIterations: state.loopIterations,
+                currentNodeId: state.currentNodeId,
+                currentNodeType: state.visitedNodes[state.visitedNodes.length - 1]?.nodeType || null,
+                currentNodeLabel: state.visitedNodes[state.visitedNodes.length - 1]?.nodeType || null,
+                visitedNodes: state.visitedNodes.map((visit) => ({
+                    nodeId: visit.nodeId,
+                    nodeType: visit.nodeType,
+                    timestamp: visit.timestamp,
+                    userInput: visit.userInput
+                })),
                 timestamp: new Date()
             });
 
@@ -769,6 +854,28 @@ class IVRWorkflowEngine extends EventEmitter {
                     text: this.replaceVariables(callSid, nodeForExecution.data.text)
                 };
             }
+            if (nodeForExecution.data && callSid) {
+                const variableTextKeys = [
+                    'messageText',
+                    'promptText',
+                    'offerText',
+                    'customerMessageText',
+                    'adminMessageText',
+                    'successText',
+                    'announcementText'
+                ];
+                const nextData = { ...nodeForExecution.data };
+                let changed = false;
+                for (const key of variableTextKeys) {
+                    if (typeof nextData[key] === 'string' && nextData[key]) {
+                        nextData[key] = this.replaceVariables(callSid, nextData[key]);
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    nodeForExecution.data = nextData;
+                }
+            }
 
             // Delegate to Execution Engine
             logger.info(`Delegating execution for node ${nodeForExecution.type} (${nodeId})`);
@@ -776,6 +883,7 @@ class IVRWorkflowEngine extends EventEmitter {
                 nodes: workflow?.nodes || [],
                 edges: workflow?.edges || [],
                 settings: workflow?.config || {},
+                createdBy: workflow?.createdBy || null,
                 _id: workflow._id,
                 workflowId: workflow._id
             };
@@ -848,6 +956,10 @@ class IVRWorkflowEngine extends EventEmitter {
                 if (state) {
                     state.nodeAttempts = state.nodeAttempts || {};
                     state.nodeAttempts[currentNodeId] = (state.nodeAttempts[currentNodeId] || 0) + 1;
+                    state.variables = state.variables || {};
+                    state.variables.lastInputValue = userInput;
+                    state.variables.lastInputNodeId = currentNodeId;
+                    state.variables[`inputValues:${currentNodeId}`] = userInput;
                     const log = await ExecutionLog.findById(state.executionLogId);
                     if (log) {
                         await log.recordUserInput(currentNodeId, userInput);
@@ -860,11 +972,168 @@ class IVRWorkflowEngine extends EventEmitter {
                 currentNode?.data?.maxAttempts ||
                 currentNode?.data?.max_attempts ||
                 currentNode?.data?.maxRetries ||
+                currentNode?.data?.max_retries ||
                 settings.maxAttempts ||
                 settings.maxRetries ||
                 3;
             const attemptCount = this.getExecutionState(callSid)?.nodeAttempts?.[currentNodeId] || 0;
-            const endNodeId = (workflow.nodes || []).find((node) => node?.type === 'end')?.id || null;
+            const endNodeId = (workflow.nodes || []).find((node) => String(node?.type || '').toLowerCase() === 'end')?.id || null;
+            const nodeType = String(currentNode?.type || '').toLowerCase();
+            const state = this.getExecutionState(callSid);
+            const setBookingVariable = (key, value) => {
+                if (!callSid) return;
+                const currentState = this.getExecutionState(callSid);
+                if (!currentState) return;
+                currentState.variables = currentState.variables || {};
+                currentState.variables[key] = value;
+                ivrWorkflowEngine.setVariable(callSid, key, value);
+            };
+            const edgeForHandle = (handle) =>
+                edges.find((edge) => edge.source === currentNodeId && edge.sourceHandle === handle) || null;
+            const redirectForHandles = (handles = []) => {
+                for (const handle of handles) {
+                    const edge = edgeForHandle(handle);
+                    if (edge) return edge.target;
+                }
+                return null;
+            };
+
+            if (callSid && state && currentNode && ['availability_check', 'slot_offer', 'booking_confirm', 'booking_create', 'whatsapp_notify', 'handoff'].includes(nodeType)) {
+                state.variables = state.variables || {};
+            }
+
+            if (nodeType === 'availability_check') {
+                const slotSnapshot = await appointmentBookingService.getSlotSnapshot(currentNode, workflow, state || {});
+                const selectedSlot = appointmentBookingService.resolveSlotFromInput(currentNode, workflow, state || {}, userInput);
+                if (!selectedSlot) {
+                    if (callSid && state) {
+                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                        state.lastInputReasonByNode[currentNodeId] = 'invalid';
+                    }
+                    if (attemptCount < maxRetries) return currentNodeId;
+                    const fallback = redirectForHandles(['invalid', 'full', 'fallback', 'no_match', 'default']) || endNodeId;
+                    return fallback;
+                }
+
+                const matchedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === String(selectedSlot.key));
+                const nextAvailableSlot = appointmentBookingService.findNextAvailableSlot(slotSnapshot);
+                setBookingVariable('booking.selectedSlotKey', selectedSlot.key);
+                setBookingVariable('booking.selectedSlotLabel', matchedSlot?.slotLabel || selectedSlot.label);
+                setBookingVariable('booking.selectedSlotDate', matchedSlot?.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}));
+                setBookingVariable('booking.selectedSlotCapacity', matchedSlot?.capacity ?? selectedSlot.capacity ?? 1);
+                setBookingVariable('booking.selectedSlotBookedCount', matchedSlot?.bookedCount ?? 0);
+                setBookingVariable('booking.available', Boolean(matchedSlot?.isAvailable));
+                if (nextAvailableSlot) {
+                    setBookingVariable('booking.nextAvailableSlotKey', nextAvailableSlot.slotKey);
+                    setBookingVariable('booking.nextAvailableSlotLabel', nextAvailableSlot.slotLabel);
+                }
+
+                if (matchedSlot?.isAvailable) {
+                    if (callSid && state) {
+                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                        state.lastInputReasonByNode[currentNodeId] = 'matched';
+                    }
+                    const nextNode = redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
+                    return nextNode;
+                }
+
+                if (callSid && state) {
+                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                    state.lastInputReasonByNode[currentNodeId] = 'full';
+                }
+                const fullNode = redirectForHandles(['full', 'retry', 'no', 'false']) || edgeForHandle('full')?.target || endNodeId;
+                return fullNode;
+            }
+
+            if (nodeType === 'slot_offer') {
+                const yesDigits = new Set(
+                    String(currentNode?.data?.yesDigits || currentNode?.data?.yes_digits || '1')
+                        .split(',')
+                        .map((v) => String(v || '').trim())
+                        .filter(Boolean)
+                );
+                const noDigits = new Set(
+                    String(currentNode?.data?.noDigits || currentNode?.data?.no_digits || '2')
+                        .split(',')
+                        .map((v) => String(v || '').trim())
+                        .filter(Boolean)
+                );
+                const normalizedInput = String(userInput || '').trim();
+                const selectedSlotKey = String(state?.variables?.['booking.nextAvailableSlotKey'] || '').trim();
+                if (yesDigits.has(normalizedInput)) {
+                    if (selectedSlotKey) {
+                        setBookingVariable('booking.selectedSlotKey', selectedSlotKey);
+                        setBookingVariable('booking.selectedSlotLabel', state?.variables?.['booking.nextAvailableSlotLabel'] || selectedSlotKey);
+                        setBookingVariable('booking.available', true);
+                    }
+                    if (callSid && state) {
+                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                        state.lastInputReasonByNode[currentNodeId] = 'matched';
+                    }
+                    return redirectForHandles(['yes', 'true', 'accept', 'success']) || edgeForHandle('yes')?.target || endNodeId;
+                }
+                if (noDigits.has(normalizedInput)) {
+                    if (callSid && state) {
+                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                        state.lastInputReasonByNode[currentNodeId] = 'matched';
+                    }
+                    return redirectForHandles(['no', 'false', 'decline', 'fallback']) || edgeForHandle('no')?.target || endNodeId;
+                }
+                if (callSid && state) {
+                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                    state.lastInputReasonByNode[currentNodeId] = 'invalid';
+                }
+                if (attemptCount < maxRetries) return currentNodeId;
+                return redirectForHandles(['retry', 'fallback', 'no_match', 'default']) || endNodeId;
+            }
+
+            if (nodeType === 'booking_confirm') {
+                const yesDigits = new Set(
+                    String(currentNode?.data?.yesDigits || currentNode?.data?.yes_digits || '1')
+                        .split(',')
+                        .map((v) => String(v || '').trim())
+                        .filter(Boolean)
+                );
+                const noDigits = new Set(
+                    String(currentNode?.data?.noDigits || currentNode?.data?.no_digits || '2')
+                        .split(',')
+                        .map((v) => String(v || '').trim())
+                        .filter(Boolean)
+                );
+                const normalizedInput = String(userInput || '').trim();
+                if (yesDigits.has(normalizedInput)) {
+                    setBookingVariable('booking.confirmed', true);
+                    if (callSid && state) {
+                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                        state.lastInputReasonByNode[currentNodeId] = 'matched';
+                    }
+                    return redirectForHandles(['yes', 'true', 'confirm', 'success']) || edgeForHandle('yes')?.target || endNodeId;
+                }
+                if (noDigits.has(normalizedInput)) {
+                    setBookingVariable('booking.confirmed', false);
+                    if (callSid && state) {
+                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                        state.lastInputReasonByNode[currentNodeId] = 'matched';
+                    }
+                    return redirectForHandles(['no', 'false', 'reject', 'fallback']) || edgeForHandle('no')?.target || endNodeId;
+                }
+                if (callSid && state) {
+                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                    state.lastInputReasonByNode[currentNodeId] = 'invalid';
+                }
+                if (attemptCount < maxRetries) return currentNodeId;
+                return redirectForHandles(['timeout', 'fallback', 'default']) || endNodeId;
+            }
+
+            if (nodeType === 'booking_create') {
+                setBookingVariable('booking.lastAction', 'create');
+                return redirectForHandles(['success', 'default', 'next']) || edgeForHandle('success')?.target || endNodeId;
+            }
+
+            if (nodeType === 'whatsapp_notify') {
+                setBookingVariable('booking.lastAction', 'notify');
+                return redirectForHandles(['success', 'default', 'next']) || edgeForHandle('success')?.target || endNodeId;
+            }
 
             // Timeout (no digits)
             if (!userInput) {
@@ -1506,7 +1775,7 @@ class IVRWorkflowEngine extends EventEmitter {
 
             const sourceNode = nodes.find((n) => n.id === edge.source);
             const sourceType = (sourceNode?.type || '').toLowerCase();
-            if (sourceType === 'input' || sourceType === 'conditional') {
+            if (['input', 'conditional', 'availability_check', 'slot_offer', 'booking_confirm', 'booking_create', 'whatsapp_notify'].includes(sourceType)) {
                 const handle = edge.sourceHandle || '__default__';
                 const handleKey = `${edge.source}:${handle}`;
                 if (sourceHandleTracker.has(handleKey)) {
@@ -1561,7 +1830,7 @@ class IVRWorkflowEngine extends EventEmitter {
         });
 
         // End state reachability
-        const endNodes = nodes.filter(n => n.type === 'end');
+        const endNodes = nodes.filter(n => String(n?.type || '').toLowerCase() === 'end');
         if (endNodes.length === 0) {
             errors.push({ code: 'NO_END', message: 'Workflow has no end node.' });
         } else {
@@ -1728,6 +1997,36 @@ class IVRWorkflowEngine extends EventEmitter {
                     errors.push({
                         code: 'INVALID_VOICEMAIL_GREETING_REF',
                         message: `Voicemail node ${node.id} greetingAudioNodeId points to non-audio node: ${greetingAudioNodeId}.`,
+                        nodeId: node.id
+                    });
+                }
+            }
+
+            if (nodeType === 'availability_check') {
+                const slots = Array.isArray(data.slotDefinitions) ? data.slotDefinitions : [];
+                if (slots.length === 0) {
+                    errors.push({
+                        code: 'MISSING_SLOT_DEFINITIONS',
+                        message: `Availability Check node ${node.id} requires at least one slot definition.`,
+                        nodeId: node.id
+                    });
+                }
+                const promptText = String(data.promptText || data.prompt_text || '').trim();
+                if (!promptText) {
+                    errors.push({
+                        code: 'MISSING_PROMPT_TEXT',
+                        message: `Availability Check node ${node.id} requires prompt text.`,
+                        nodeId: node.id
+                    });
+                }
+            }
+
+            if (nodeType === 'slot_offer' || nodeType === 'booking_confirm') {
+                const promptText = String(data.promptText || data.prompt_text || '').trim();
+                if (!promptText) {
+                    errors.push({
+                        code: 'MISSING_PROMPT_TEXT',
+                        message: `${nodeType} node ${node.id} requires prompt text.`,
                         nodeId: node.id
                     });
                 }
