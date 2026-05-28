@@ -325,7 +325,11 @@ class IVRAnalyticsService {
                     type: visit.nodeType,
                     data: {}
                 }));
-                const status = String(execution.status || 'running').toLowerCase();
+                const rawStatus = String(execution.status || 'running').toLowerCase();
+                const terminalNodeType = normalizeType(lastVisit?.nodeType || currentNode?.type || '');
+                const status = rawStatus === 'running' && terminalNodeType === 'end'
+                    ? 'completed'
+                    : rawStatus;
                 const bookingStatus = booking ? String(booking.status || 'confirmed').toLowerCase() : 'not booked';
                 const finalResult = booking
                     ? (booking.status === 'cancelled'
@@ -333,12 +337,12 @@ class IVRAnalyticsService {
                         : booking.status === 'rejected'
                             ? 'Rejected'
                             : 'Booked')
-                    : (status === 'completed'
-                        ? 'Completed'
-                        : status === 'failed'
-                            ? 'Failed'
-                            : status === 'timeout'
-                                ? 'Timed out'
+                        : (status === 'completed'
+                            ? 'Completed'
+                            : status === 'failed'
+                                ? 'Failed'
+                                : status === 'timeout'
+                                    ? 'Timed out'
                                 : 'Running');
                 const bookingState = booking
                     ? {
@@ -389,7 +393,7 @@ class IVRAnalyticsService {
                     callStatus: status,
                     finalResult,
                     currentNodeId: lastVisit?.nodeId || null,
-                    currentNodeType: normalizeType(lastVisit?.nodeType || currentNode?.type || ''),
+                    currentNodeType: terminalNodeType,
                     currentNodeLabel,
                     entryNodeId: firstVisit?.nodeId || null,
                     entryNodeType: normalizeType(firstVisit?.nodeType || entryNode?.type || ''),
@@ -618,7 +622,16 @@ class IVRAnalyticsService {
      */
     async getActiveCalls(userId = null) {
         try {
-            return await ExecutionLog.find({ status: 'running', ...(userId ? { userId } : {}) });
+            const runningExecutions = await ExecutionLog.find({ status: 'running', ...(userId ? { userId } : {}) })
+                .sort({ startTime: -1, createdAt: -1 })
+                .lean();
+
+            return runningExecutions.filter((execution) => {
+                const visitedNodes = Array.isArray(execution.visitedNodes) ? execution.visitedNodes : [];
+                const lastVisit = visitedNodes.length > 0 ? visitedNodes[visitedNodes.length - 1] : null;
+                const lastNodeType = normalizeType(lastVisit?.nodeType || '');
+                return lastNodeType !== 'end';
+            });
         } catch (error) {
             logger.error('Error getting active calls:', error);
             throw error;

@@ -545,6 +545,14 @@ class IVRExecutionEngine {
       ivrWorkflowEngine.setVariable(context.callSid, 'end.contact_method', String(contactMethod));
     }
 
+    if (context?.callSid) {
+      try {
+        await ivrWorkflowEngine.endExecution(context.callSid, 'normal');
+      } catch (error) {
+        logger.error(`Failed to finalize execution for end node ${node?.id || 'unknown'}:`, error);
+      }
+    }
+
     response.hangup();
     return response.toString();
   }
@@ -587,6 +595,13 @@ class IVRExecutionEngine {
     } else {
       // Fallback if no edge defined
       logger.warn(`No edge defined for condition result ${targetHandle} at node ${node.id}`);
+      if (context?.callSid) {
+        try {
+          await ivrWorkflowEngine.endExecution(context.callSid, 'normal');
+        } catch (error) {
+          logger.error(`Failed to finalize execution after condition fallback for node ${node?.id || 'unknown'}:`, error);
+        }
+      }
       response.hangup();
     }
 
