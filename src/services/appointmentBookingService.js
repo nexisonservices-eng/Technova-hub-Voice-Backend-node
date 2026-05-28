@@ -89,7 +89,16 @@ class AppointmentBookingService {
   }
 
   getSlotDefinitions(node = {}) {
-    return normalizeSlotList(node?.data?.slotDefinitions || node?.data?.slots || node?.data?.slotOptions || []);
+    const data = node?.data || {};
+    return normalizeSlotList(
+      data.slotDefinitions ??
+      data.slot_definitions ??
+      data.slotDefinitionsText ??
+      data.slot_definitions_text ??
+      data.slots ??
+      data.slotOptions ??
+      []
+    );
   }
 
   getDateKey(node = {}, workflow = {}, context = {}) {

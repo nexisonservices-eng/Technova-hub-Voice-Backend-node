@@ -199,7 +199,8 @@ class IVRWorkflowEngine extends EventEmitter {
                 'timeoutSeconds', 'timeout',
                 'maxRetries', 'max_retries',
                 'slotDefinitions', 'slot_definitions',
-                'slots', 'selectionVariable', 'selection_variable',
+                'slotDefinitionsText', 'slot_definitions_text',
+                'slots', 'slotOptions', 'selectionVariable', 'selection_variable',
                 'fallbackNodeId', 'fallback_node_id'
             ],
             slot_offer: [
@@ -293,6 +294,29 @@ class IVRWorkflowEngine extends EventEmitter {
                 }
             }
         });
+
+        if (nodeType === 'availability_check' && sanitized.slotDefinitions === undefined) {
+            const rawSlots =
+                sanitized.slot_definitions ??
+                sanitized.slotDefinitionsText ??
+                sanitized.slot_definitions_text ??
+                sanitized.slots ??
+                sanitized.slotOptions;
+            if (rawSlots !== undefined) {
+                if (Array.isArray(rawSlots)) {
+                    sanitized.slotDefinitions = rawSlots;
+                } else if (typeof rawSlots === 'string') {
+                    try {
+                        const parsed = JSON.parse(rawSlots);
+                        if (Array.isArray(parsed)) {
+                            sanitized.slotDefinitions = parsed;
+                        }
+                    } catch {
+                        sanitized.slotDefinitions = [];
+                    }
+                }
+            }
+        }
 
         return sanitized;
     }
@@ -980,16 +1004,35 @@ class IVRWorkflowEngine extends EventEmitter {
             const endNodeId = (workflow.nodes || []).find((node) => String(node?.type || '').toLowerCase() === 'end')?.id || null;
             const nodeType = String(currentNode?.type || '').toLowerCase();
             const state = this.getExecutionState(callSid);
+            const normalizeDtmfValue = (value) => String(value ?? '').trim();
+            const normalizeHandleValue = (value) => normalizeDtmfValue(value).toLowerCase();
+            const normalizedUserInput = normalizeDtmfValue(userInput);
+            const normalizedUserInputLower = normalizeHandleValue(userInput);
+            const splitDigitSet = (value, fallback = '') => new Set(
+                String(String(value ?? '').trim() || fallback)
+                    .split(',')
+                    .map((v) => normalizeHandleValue(v))
+                    .filter(Boolean)
+            );
+            const markInputReason = (reason) => {
+                if (!callSid) return;
+                const currentState = this.getExecutionState(callSid);
+                if (!currentState) return;
+                currentState.lastInputReasonByNode = currentState.lastInputReasonByNode || {};
+                currentState.lastInputReasonByNode[currentNodeId] = reason;
+            };
             const setBookingVariable = (key, value) => {
                 if (!callSid) return;
                 const currentState = this.getExecutionState(callSid);
                 if (!currentState) return;
                 currentState.variables = currentState.variables || {};
-                currentState.variables[key] = value;
-                ivrWorkflowEngine.setVariable(callSid, key, value);
+                this.setVariable(callSid, key, value);
             };
             const edgeForHandle = (handle) =>
-                edges.find((edge) => edge.source === currentNodeId && edge.sourceHandle === handle) || null;
+                edges.find((edge) =>
+                    edge.source === currentNodeId &&
+                    normalizeHandleValue(edge.sourceHandle) === normalizeHandleValue(handle)
+                ) || null;
             const redirectForHandles = (handles = []) => {
                 for (const handle of handles) {
                     const edge = edgeForHandle(handle);
@@ -1005,7 +1048,6 @@ class IVRWorkflowEngine extends EventEmitter {
             try {
             if (nodeType === 'availability_check') {
                 const slotSnapshot = await appointmentBookingService.getSlotSnapshot(currentNode, workflow, state || {});
-                const normalizedInput = String(userInput || '').trim().toLowerCase();
                 const selectedSlot = appointmentBookingService.resolveSlotFromInput(currentNode, workflow, state || {}, userInput);
                 const selectionVariable = String(
                     currentNode?.data?.selectionVariable ||
@@ -1014,12 +1056,6 @@ class IVRWorkflowEngine extends EventEmitter {
                 ).trim() || 'booking.selectedSlotKey';
                 const yesLike = new Set(['1', 'y', 'yes', 'true', 'confirm', 'confirmed', 'ok', 'okay']);
                 const noLike = new Set(['2', 'n', 'no', 'false', 'cancel', 'cancelled', 'canceled']);
-
-                const markReason = (reason) => {
-                    if (!callSid || !state) return;
-                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                    state.lastInputReasonByNode[currentNodeId] = reason;
-                };
 
                 const routeToFallback = (preferredHandles = ['full', 'fallback', 'no_match', 'default']) =>
                     redirectForHandles(preferredHandles) || endNodeId;
@@ -1042,12 +1078,12 @@ class IVRWorkflowEngine extends EventEmitter {
                 };
 
                 if (slotSnapshot.length === 0) {
-                    markReason('full');
+                    markInputReason('full');
                     return routeToFallback();
                 }
 
                 if (!selectedSlot) {
-                    if (yesLike.has(normalizedInput)) {
+                    if (yesLike.has(normalizedUserInputLower)) {
                         const firstAvailable = slotSnapshot.find((slot) => slot?.isAvailable) || null;
                         if (firstAvailable) {
                             setBookingVariable(selectionVariable, firstAvailable.slotKey);
@@ -1076,17 +1112,17 @@ class IVRWorkflowEngine extends EventEmitter {
                                     metadata: nextAvailableSlot?.metadata || {}
                                 });
                             }
-                            markReason('matched');
+                            markInputReason('matched');
                             return redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
                         }
                     }
 
-                    if (noLike.has(normalizedInput)) {
-                        markReason('full');
+                    if (noLike.has(normalizedUserInputLower)) {
+                        markInputReason('full');
                         return routeToFallback(['full', 'fallback', 'no_match', 'default']);
                     }
 
-                    markReason('invalid');
+                    markInputReason('invalid');
                     if (attemptCount < maxRetries) return currentNodeId;
                     return routeToFallback(['invalid', 'full', 'fallback', 'no_match', 'default']);
                 }
@@ -1120,31 +1156,20 @@ class IVRWorkflowEngine extends EventEmitter {
                 }
 
                 if (matchedSlot?.isAvailable) {
-                    markReason('matched');
+                    markInputReason('matched');
                     const nextNode = redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
                     return nextNode;
                 }
 
-                markReason('full');
+                markInputReason('full');
                 return routeToFallback(['full', 'retry', 'no', 'false']);
             }
 
             if (nodeType === 'slot_offer') {
-                const yesDigits = new Set(
-                    String(currentNode?.data?.yesDigits || currentNode?.data?.yes_digits || '1')
-                        .split(',')
-                        .map((v) => String(v || '').trim())
-                        .filter(Boolean)
-                );
-                const noDigits = new Set(
-                    String(currentNode?.data?.noDigits || currentNode?.data?.no_digits || '2')
-                        .split(',')
-                        .map((v) => String(v || '').trim())
-                        .filter(Boolean)
-                );
-                const normalizedInput = String(userInput || '').trim();
+                const yesDigits = splitDigitSet(currentNode?.data?.yesDigits || currentNode?.data?.yes_digits, '1');
+                const noDigits = splitDigitSet(currentNode?.data?.noDigits || currentNode?.data?.no_digits, '2');
                 const selectedSlotKey = String(state?.variables?.['booking.nextAvailableSlotKey'] || '').trim();
-                if (yesDigits.has(normalizedInput)) {
+                if (yesDigits.has(normalizedUserInputLower)) {
                     if (selectedSlotKey) {
                         setBookingVariable('booking.selectedSlotKey', selectedSlotKey);
                         setBookingVariable('booking.selectedSlotLabel', state?.variables?.['booking.nextAvailableSlotLabel'] || selectedSlotKey);
@@ -1158,61 +1183,32 @@ class IVRWorkflowEngine extends EventEmitter {
                             });
                         }
                     }
-                    if (callSid && state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
+                    markInputReason('matched');
                     return redirectForHandles(['yes', 'true', 'accept', 'success']) || edgeForHandle('yes')?.target || endNodeId;
                 }
-                if (noDigits.has(normalizedInput)) {
-                    if (callSid && state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
+                if (noDigits.has(normalizedUserInputLower)) {
+                    markInputReason('matched');
                     return redirectForHandles(['no', 'false', 'decline', 'fallback']) || edgeForHandle('no')?.target || endNodeId;
                 }
-                if (callSid && state) {
-                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                    state.lastInputReasonByNode[currentNodeId] = 'invalid';
-                }
+                markInputReason('invalid');
                 if (attemptCount < maxRetries) return currentNodeId;
                 return redirectForHandles(['retry', 'fallback', 'no_match', 'default']) || endNodeId;
             }
 
             if (nodeType === 'booking_confirm') {
-                const yesDigits = new Set(
-                    String(currentNode?.data?.yesDigits || currentNode?.data?.yes_digits || '1')
-                        .split(',')
-                        .map((v) => String(v || '').trim())
-                        .filter(Boolean)
-                );
-                const noDigits = new Set(
-                    String(currentNode?.data?.noDigits || currentNode?.data?.no_digits || '2')
-                        .split(',')
-                        .map((v) => String(v || '').trim())
-                        .filter(Boolean)
-                );
-                const normalizedInput = String(userInput || '').trim();
-                if (yesDigits.has(normalizedInput)) {
+                const yesDigits = splitDigitSet(currentNode?.data?.yesDigits || currentNode?.data?.yes_digits, '1');
+                const noDigits = splitDigitSet(currentNode?.data?.noDigits || currentNode?.data?.no_digits, '2');
+                if (yesDigits.has(normalizedUserInputLower)) {
                     setBookingVariable('booking.confirmed', true);
-                    if (callSid && state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
+                    markInputReason('matched');
                     return redirectForHandles(['yes', 'true', 'confirm', 'success']) || edgeForHandle('yes')?.target || endNodeId;
                 }
-                if (noDigits.has(normalizedInput)) {
+                if (noDigits.has(normalizedUserInputLower)) {
                     setBookingVariable('booking.confirmed', false);
-                    if (callSid && state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
+                    markInputReason('matched');
                     return redirectForHandles(['no', 'false', 'reject', 'fallback']) || edgeForHandle('no')?.target || endNodeId;
                 }
-                if (callSid && state) {
-                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                    state.lastInputReasonByNode[currentNodeId] = 'invalid';
-                }
+                markInputReason('invalid');
                 if (attemptCount < maxRetries) return currentNodeId;
                 return redirectForHandles(['timeout', 'fallback', 'default']) || endNodeId;
             }
@@ -1228,61 +1224,43 @@ class IVRWorkflowEngine extends EventEmitter {
             }
             } catch (bookingFlowError) {
                 logger.error(`Booking flow input handling failed at node ${currentNodeId}:`, bookingFlowError);
-                if (callSid && state) {
-                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                    state.lastInputReasonByNode[currentNodeId] = 'error';
-                }
+                markInputReason('error');
                 if (attemptCount < maxRetries) return currentNodeId;
                 return redirectForHandles(['failure', 'error', 'fallback', 'no_match', 'default']) || endNodeId;
             }
 
             // Timeout (no digits)
-            if (!userInput) {
-                if (callSid) {
-                    const state = this.getExecutionState(callSid);
-                    if (state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'timeout';
-                    }
-                }
+            if (!normalizedUserInput) {
+                markInputReason('timeout');
                 // Retry-first behavior: timeout should not branch immediately.
                 if (attemptCount < maxRetries) return currentNodeId;
-                const fallback = edges.find(e => e.sourceHandle === 'no_match' || e.sourceHandle === 'default');
-                if (fallback) return fallback.target;
+                const fallback = redirectForHandles(['no_match', 'default', 'fallback', 'timeout']);
+                if (fallback) return fallback;
                 return endNodeId;
             }
 
             // Find edge matching userInput (digit)
-            const edge = edges.find(e => e.sourceHandle === userInput || e.data?.digit === userInput);
+            const edge = edges.find((e) =>
+                normalizeHandleValue(e.sourceHandle) === normalizedUserInputLower ||
+                normalizeHandleValue(e.data?.digit) === normalizedUserInputLower
+            );
             if (edge) {
-                if (callSid) {
-                    const state = this.getExecutionState(callSid);
-                    if (state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
-                }
+                markInputReason('matched');
                 return edge.target;
             }
 
             // Support legacy/compact input-node destination routing when no explicit edge is present.
             // This keeps "action + destination(nodeId)" configurations functional.
-            if (hasDestinationNode) {
-                if (callSid) {
-                    const state = this.getExecutionState(callSid);
-                    if (state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
-                }
+            const inputAction = String(currentNode?.data?.action || '').trim().toLowerCase();
+            const inputDestination = String(currentNode?.data?.destination || '').trim();
+            const configuredDigit = normalizeDtmfValue(currentNode?.data?.digit);
+            const digitMatches = !configuredDigit || normalizedUserInput === configuredDigit;
+            if (hasDestinationNode && digitMatches) {
+                markInputReason('matched');
                 return destinationNodeId;
             }
 
             // Support action-based execution directly on input node when graph edges are not defined.
-            const inputAction = String(currentNode?.data?.action || '').trim().toLowerCase();
-            const inputDestination = String(currentNode?.data?.destination || '').trim();
-            const configuredDigit = String(currentNode?.data?.digit || '').trim();
-            const digitMatches = !configuredDigit || String(userInput || '').trim() === configuredDigit;
             const actionRequiresDestination = ['transfer', 'submenu'].includes(inputAction);
             if (callSid && digitMatches && inputAction && (!actionRequiresDestination || inputDestination)) {
                 const state = this.getExecutionState(callSid);
@@ -1297,16 +1275,10 @@ class IVRWorkflowEngine extends EventEmitter {
             }
 
             // Invalid input
-            if (callSid) {
-                const state = this.getExecutionState(callSid);
-                if (state) {
-                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                    state.lastInputReasonByNode[currentNodeId] = 'invalid';
-                }
-            }
+            markInputReason('invalid');
             if (attemptCount < maxRetries) return currentNodeId;
-            const fallbackEdge = edges.find(e => e.sourceHandle === 'no_match' || e.sourceHandle === 'default');
-            if (fallbackEdge) return fallbackEdge.target;
+            const fallbackEdge = redirectForHandles(['no_match', 'default', 'fallback', 'invalid']);
+            if (fallbackEdge) return fallbackEdge;
             return endNodeId;
         } catch (error) {
             logger.error('Error handling user input:', error);

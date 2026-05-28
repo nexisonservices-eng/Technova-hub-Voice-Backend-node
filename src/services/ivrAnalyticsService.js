@@ -7,6 +7,7 @@ import logger from '../utils/logger.js';
 import { parseDateOnlyInTimezone } from '../utils/timezoneDate.js';
 
 const VOICE_TIME_ZONE = 'Asia/Kolkata';
+const STALE_RUNNING_EXECUTION_MS = 30 * 60 * 1000;
 
 const WORKFLOW_CAPABILITY_DEFS = [
     { key: 'audio', label: 'Audio', types: ['audio', 'greeting'] },
@@ -327,9 +328,19 @@ class IVRAnalyticsService {
                 }));
                 const rawStatus = String(execution.status || 'running').toLowerCase();
                 const terminalNodeType = normalizeType(lastVisit?.nodeType || currentNode?.type || '');
+                const lastActivityAt = new Date(
+                    lastVisit?.timestamp ||
+                    execution.updatedAt ||
+                    execution.startTime ||
+                    Date.now()
+                ).getTime();
+                const isStaleRunning =
+                    rawStatus === 'running' &&
+                    Number.isFinite(lastActivityAt) &&
+                    Date.now() - lastActivityAt > STALE_RUNNING_EXECUTION_MS;
                 const status = rawStatus === 'running' && terminalNodeType === 'end'
                     ? 'completed'
-                    : rawStatus;
+                    : (isStaleRunning ? 'abandoned' : rawStatus);
                 const bookingStatus = booking ? String(booking.status || 'confirmed').toLowerCase() : 'not booked';
                 const finalResult = booking
                     ? (booking.status === 'cancelled'
@@ -343,6 +354,8 @@ class IVRAnalyticsService {
                                 ? 'Failed'
                                 : status === 'timeout'
                                     ? 'Timed out'
+                                    : status === 'abandoned'
+                                        ? 'Abandoned'
                                 : 'Running');
                 const bookingState = booking
                     ? {
