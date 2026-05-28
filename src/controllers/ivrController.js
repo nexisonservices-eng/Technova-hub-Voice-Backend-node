@@ -116,16 +116,63 @@ class IVRController {
 
       if (!nextNodeId) {
         logger.warn(`No matching path for input ${Digits} at node ${currentNodeId}`);
-        // Send back to current node or error
-        const twiml = TwiMLHelper.createErrorResponse("Invalid selection. Please try again.");
-        return this.send(res, twiml);
+        try {
+          const retryTwiml = await ivrWorkflowEngine.generateTwiML(workflowId, currentNodeId, null, CallSid);
+          return this.send(res, retryTwiml);
+        } catch (retryErr) {
+          logger.error('Fallback retry failed after missing next node:', retryErr);
+          const twiml = TwiMLHelper.createErrorResponse("Invalid selection. Please try again.");
+          return this.send(res, twiml);
+        }
       }
 
-      const twiml = await ivrWorkflowEngine.generateTwiML(workflowId, nextNodeId, Digits, CallSid);
-      this.send(res, twiml);
+      try {
+        const twiml = await ivrWorkflowEngine.generateTwiML(workflowId, nextNodeId, Digits, CallSid);
+        this.send(res, twiml);
+        return;
+      } catch (nextErr) {
+        logger.error(`Failed to generate TwiML for next node ${nextNodeId}; retrying current node`, nextErr);
+        try {
+          const retryTwiml = await ivrWorkflowEngine.generateTwiML(workflowId, currentNodeId, null, CallSid);
+          return this.send(res, retryTwiml);
+        } catch (retryErr) {
+          logger.error(`Failed to regenerate current node ${currentNodeId} after next-node failure:`, retryErr);
+          const fallbackTwiml = TwiMLHelper.createGatherResponse(
+            'We could not process that selection. Please try again.',
+            `/ivr/handle-input?workflowId=${workflowId}&currentNodeId=${currentNodeId}`,
+            {
+              say: {
+                voice: 'alice',
+                language: 'en-US',
+                rate: 'slow'
+              },
+              gather: {
+                numDigits: 1,
+                timeout: 10
+              }
+            }
+          );
+          return this.send(res, fallbackTwiml);
+        }
+      }
     } catch (err) {
       logger.error("Handle input error:", err);
-      this.send(res, TwiMLHelper.createErrorResponse());
+      const fallbackTwiml = TwiMLHelper.createGatherResponse(
+        'We could not process that selection. Please try again.',
+        `/ivr/handle-input?workflowId=${workflowId || ''}&currentNodeId=${currentNodeId || ''}`,
+        {
+          say: {
+            voice: 'alice',
+            language: 'en-US',
+            rate: 'slow'
+          },
+          gather: {
+            numDigits: 1,
+            timeout: 10
+          }
+        }
+      );
+      this.send(res, fallbackTwiml);
     }
   }
 
