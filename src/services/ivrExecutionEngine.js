@@ -796,6 +796,7 @@ class IVRExecutionEngine {
     const { data } = node;
     const settings = config.settings || {};
     const nodes = Array.isArray(config.nodes) ? config.nodes : [];
+    const edges = Array.isArray(config.edges) ? config.edges : [];
     const { voice, language } = this._getMergedSettings(node, settings);
     const slotSnapshot = await appointmentBookingService.getSlotSnapshot(
       node,
@@ -807,6 +808,18 @@ class IVRExecutionEngine {
       slotSnapshot,
       data.promptText || data.prompt_text || 'Please choose an available slot.'
     );
+    const fullNodeTarget = this._resolveBookingActionTarget(edges, node.id, ['full', 'fallback', 'no_match', 'default']);
+
+    if (slotSnapshot.length === 0) {
+      response.say({ voice, language }, this._replaceCurlyVariables(callSid, promptText));
+      response.say({ voice, language }, 'No slots are available right now. Please try again later.');
+      if (fullNodeTarget) {
+        response.redirect(`/ivr/next-step?workflowId=${config._id}&currentNodeId=${fullNodeTarget}`);
+      } else {
+        this._appendNextStep(response, node.id, config.edges, config._id, 'full');
+      }
+      return response.toString();
+    }
 
     const gather = response.gather({
       numDigits: data.numDigits || data.num_digits || 1,
@@ -816,10 +829,6 @@ class IVRExecutionEngine {
     });
 
     gather.say({ voice, language }, this._replaceCurlyVariables(callSid, promptText));
-    if (slotSnapshot.length === 0) {
-      gather.say({ voice, language }, 'No slots are available right now. Please try again later.');
-    }
-
     return response.toString();
   }
 

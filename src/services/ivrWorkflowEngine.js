@@ -1004,19 +1004,64 @@ class IVRWorkflowEngine extends EventEmitter {
 
             if (nodeType === 'availability_check') {
                 const slotSnapshot = await appointmentBookingService.getSlotSnapshot(currentNode, workflow, state || {});
+                const normalizedInput = String(userInput || '').trim().toLowerCase();
                 const selectedSlot = appointmentBookingService.resolveSlotFromInput(currentNode, workflow, state || {}, userInput);
+                const selectionVariable = String(
+                    currentNode?.data?.selectionVariable ||
+                    currentNode?.data?.selection_variable ||
+                    'booking.selectedSlotKey'
+                ).trim() || 'booking.selectedSlotKey';
+                const yesLike = new Set(['1', 'y', 'yes', 'true', 'confirm', 'confirmed', 'ok', 'okay']);
+                const noLike = new Set(['2', 'n', 'no', 'false', 'cancel', 'cancelled', 'canceled']);
+
+                const markReason = (reason) => {
+                    if (!callSid || !state) return;
+                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                    state.lastInputReasonByNode[currentNodeId] = reason;
+                };
+
+                const routeToFallback = (preferredHandles = ['full', 'fallback', 'no_match', 'default']) =>
+                    redirectForHandles(preferredHandles) || endNodeId;
+
+                if (slotSnapshot.length === 0) {
+                    markReason('full');
+                    return routeToFallback();
+                }
+
                 if (!selectedSlot) {
-                    if (callSid && state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'invalid';
+                    if (yesLike.has(normalizedInput)) {
+                        const firstAvailable = slotSnapshot.find((slot) => slot?.isAvailable) || null;
+                        if (firstAvailable) {
+                            setBookingVariable(selectionVariable, firstAvailable.slotKey);
+                            setBookingVariable('booking.selectedSlotKey', firstAvailable.slotKey);
+                            setBookingVariable('booking.selectedSlotLabel', firstAvailable.slotLabel);
+                            setBookingVariable('booking.selectedSlotDate', firstAvailable.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}));
+                            setBookingVariable('booking.selectedSlotCapacity', firstAvailable?.capacity ?? 1);
+                            setBookingVariable('booking.selectedSlotBookedCount', firstAvailable?.bookedCount ?? 0);
+                            setBookingVariable('booking.available', true);
+                            const nextAvailableSlot = appointmentBookingService.findNextAvailableSlot(slotSnapshot);
+                            if (nextAvailableSlot) {
+                                setBookingVariable('booking.nextAvailableSlotKey', nextAvailableSlot.slotKey);
+                                setBookingVariable('booking.nextAvailableSlotLabel', nextAvailableSlot.slotLabel);
+                            }
+                            markReason('matched');
+                            return redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
+                        }
                     }
+
+                    if (noLike.has(normalizedInput)) {
+                        markReason('full');
+                        return routeToFallback(['full', 'fallback', 'no_match', 'default']);
+                    }
+
+                    markReason('invalid');
                     if (attemptCount < maxRetries) return currentNodeId;
-                    const fallback = redirectForHandles(['invalid', 'full', 'fallback', 'no_match', 'default']) || endNodeId;
-                    return fallback;
+                    return routeToFallback(['invalid', 'full', 'fallback', 'no_match', 'default']);
                 }
 
                 const matchedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === String(selectedSlot.key));
                 const nextAvailableSlot = appointmentBookingService.findNextAvailableSlot(slotSnapshot);
+                setBookingVariable(selectionVariable, selectedSlot.key);
                 setBookingVariable('booking.selectedSlotKey', selectedSlot.key);
                 setBookingVariable('booking.selectedSlotLabel', matchedSlot?.slotLabel || selectedSlot.label);
                 setBookingVariable('booking.selectedSlotDate', matchedSlot?.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}));
@@ -1029,20 +1074,13 @@ class IVRWorkflowEngine extends EventEmitter {
                 }
 
                 if (matchedSlot?.isAvailable) {
-                    if (callSid && state) {
-                        state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                        state.lastInputReasonByNode[currentNodeId] = 'matched';
-                    }
+                    markReason('matched');
                     const nextNode = redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
                     return nextNode;
                 }
 
-                if (callSid && state) {
-                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
-                    state.lastInputReasonByNode[currentNodeId] = 'full';
-                }
-                const fullNode = redirectForHandles(['full', 'retry', 'no', 'false']) || edgeForHandle('full')?.target || endNodeId;
-                return fullNode;
+                markReason('full');
+                return routeToFallback(['full', 'retry', 'no', 'false']);
             }
 
             if (nodeType === 'slot_offer') {
