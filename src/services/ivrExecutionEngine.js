@@ -788,6 +788,9 @@ class IVRExecutionEngine {
     if (!callSid || !base) return base;
     const state = ivrWorkflowEngine.getExecutionState(callSid);
     const variables = {
+      callerNumber: state?.callerNumber || '',
+      destinationNumber: state?.destinationNumber || '',
+      callSid: state?.callSid || callSid,
       ...(state?.variables || {}),
       ...(extraVariables || {})
     };
@@ -1027,7 +1030,8 @@ class IVRExecutionEngine {
 
     const customerRecipient = this._replaceCurlyVariables(
       callSid,
-      data.customerRecipient || data.customer_recipient || '{{callerNumber}}'
+      data.customerRecipient || data.customer_recipient || '{{callerNumber}}',
+      { callerNumber: context?.callerNumber || state?.callerNumber || state?.variables?.callerNumber || '' }
     );
     const adminRecipient = this._replaceCurlyVariables(callSid, data.adminRecipient || data.admin_recipient || '');
     const booking = {

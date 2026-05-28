@@ -428,7 +428,10 @@ class IVRWorkflowEngine extends EventEmitter {
                 startTime: Date.now(),
                 currentNodeId: null,
                 visitedNodes: [],
-                variables: {},
+                variables: {
+                    callerNumber,
+                    destinationNumber
+                },
                 nodeAttempts: {},
                 lastInputReasonByNode: {},
                 loopIterations: 0,
@@ -595,6 +598,15 @@ class IVRWorkflowEngine extends EventEmitter {
         if (!state || !text) return text;
 
         let result = text;
+        const builtInVariables = {
+            callerNumber: state.callerNumber || '',
+            destinationNumber: state.destinationNumber || '',
+            callSid: state.callSid || ''
+        };
+        for (const [key, value] of Object.entries(builtInVariables)) {
+            const pattern = new RegExp(`\\$\\{${key}\\}|\\$${key}\\b`, 'g');
+            result = result.replace(pattern, value);
+        }
         for (const [key, value] of Object.entries(state.variables)) {
             const pattern = new RegExp(`\\$\\{${key}\\}|\\$${key}\\b`, 'g');
             result = result.replace(pattern, value);

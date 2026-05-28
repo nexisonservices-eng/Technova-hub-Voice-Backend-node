@@ -9,7 +9,7 @@ const trimOrNull = (value) => {
 
 class WhatsAppNotificationBridge {
   constructor() {
-    this.baseUrl = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_URL) || 'http://localhost:3000';
+    this.baseUrl = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_URL) || 'http://localhost:3001';
     this.apiKey = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY || process.env.INTERNAL_API_KEY || process.env.ADMIN_INTERNAL_API_KEY);
     this.timeoutMs = Number(process.env.WHATSAPP_BACKEND_INTERNAL_TIMEOUT_MS || 15000);
     this.notifyPath = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_NOTIFY_PATH) || '/internal/ivr/notify';
@@ -38,10 +38,20 @@ class WhatsAppNotificationBridge {
       );
       return response.data || { success: true };
     } catch (error) {
-      logger.warn(`WhatsApp notification bridge failed: ${error?.message || error}`);
+      const responseData = error?.response?.data;
+      const responseError =
+        responseData?.error?.message ||
+        responseData?.error?.error_user_msg ||
+        responseData?.error ||
+        responseData?.message ||
+        (typeof responseData === 'string' ? responseData : '') ||
+        error?.message ||
+        'WhatsApp bridge request failed';
+      const status = error?.response?.status || null;
+      logger.warn(`WhatsApp notification bridge failed: ${status ? `${status} ` : ''}${responseError}`);
       return {
         success: false,
-        error: error?.response?.data?.error || error?.response?.data?.message || error?.message || 'WhatsApp bridge request failed'
+        error: status ? `${status}: ${responseError}` : responseError
       };
     }
   }
