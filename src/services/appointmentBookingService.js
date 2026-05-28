@@ -278,7 +278,7 @@ class AppointmentBookingService {
     return `${promptText} The next available slot is ${suggestion}. Would you like to book it?`;
   }
 
-  async reserveBooking({ workflow = {}, node = {}, callSid = '', context = {}, slot = null } = {}) {
+  async reserveBooking({ workflow = {}, node = {}, callSid = '', context = {}, slot = null, preventDuplicates = true } = {}) {
     if (!workflow?._id || !node?.id || !callSid || !slot) {
       return { success: false, error: 'Missing booking context' };
     }
@@ -286,16 +286,18 @@ class AppointmentBookingService {
     const slotDate = this.getDateKey(node, workflow, context);
     const slotCapacity = toPositiveInt(slot.capacity, 1);
     const customer = this.getCallerProfile(context);
-    const duplicate = await AppointmentBooking.findOne({
-      workflowId: workflow._id,
-      callSid
-    }).lean();
-    if (duplicate) {
-      return {
-        success: false,
-        error: 'A booking already exists for this call',
-        booking: duplicate
-      };
+    if (preventDuplicates) {
+      const duplicate = await AppointmentBooking.findOne({
+        workflowId: workflow._id,
+        callSid
+      }).lean();
+      if (duplicate) {
+        return {
+          success: false,
+          error: 'A booking already exists for this call',
+          booking: duplicate
+        };
+      }
     }
 
     const slotDocument = await BookingSlot.findOneAndUpdate(

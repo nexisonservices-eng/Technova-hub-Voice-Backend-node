@@ -1002,6 +1002,7 @@ class IVRWorkflowEngine extends EventEmitter {
                 state.variables = state.variables || {};
             }
 
+            try {
             if (nodeType === 'availability_check') {
                 const slotSnapshot = await appointmentBookingService.getSlotSnapshot(currentNode, workflow, state || {});
                 const normalizedInput = String(userInput || '').trim().toLowerCase();
@@ -1022,6 +1023,23 @@ class IVRWorkflowEngine extends EventEmitter {
 
                 const routeToFallback = (preferredHandles = ['full', 'fallback', 'no_match', 'default']) =>
                     redirectForHandles(preferredHandles) || endNodeId;
+                const persistSelectedSlot = (slot = null) => {
+                    if (!slot) return;
+                    const slotData = {
+                        key: slot.slotKey || slot.key || '',
+                        label: slot.slotLabel || slot.label || '',
+                        startTime: slot.slotStart || slot.startTime || '',
+                        endTime: slot.slotEnd || slot.endTime || '',
+                        capacity: slot.capacity ?? 1,
+                        bookedCount: slot.bookedCount ?? slot.booked_count ?? 0,
+                        digit: slot?.metadata?.digit || slot.digit || '',
+                        order: slot?.metadata?.order ?? slot.order ?? 0,
+                        active: slot.status !== 'disabled',
+                        slotDate: slot.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}),
+                        metadata: slot?.metadata || {}
+                    };
+                    setBookingVariable('booking.selectedSlotData', slotData);
+                };
 
                 if (slotSnapshot.length === 0) {
                     markReason('full');
@@ -1039,10 +1057,24 @@ class IVRWorkflowEngine extends EventEmitter {
                             setBookingVariable('booking.selectedSlotCapacity', firstAvailable?.capacity ?? 1);
                             setBookingVariable('booking.selectedSlotBookedCount', firstAvailable?.bookedCount ?? 0);
                             setBookingVariable('booking.available', true);
+                            persistSelectedSlot(firstAvailable);
                             const nextAvailableSlot = appointmentBookingService.findNextAvailableSlot(slotSnapshot);
                             if (nextAvailableSlot) {
                                 setBookingVariable('booking.nextAvailableSlotKey', nextAvailableSlot.slotKey);
                                 setBookingVariable('booking.nextAvailableSlotLabel', nextAvailableSlot.slotLabel);
+                                setBookingVariable('booking.nextAvailableSlotData', {
+                                    key: nextAvailableSlot.slotKey,
+                                    label: nextAvailableSlot.slotLabel,
+                                    startTime: nextAvailableSlot.slotStart || '',
+                                    endTime: nextAvailableSlot.slotEnd || '',
+                                    capacity: nextAvailableSlot.capacity ?? 1,
+                                    bookedCount: nextAvailableSlot.bookedCount ?? 0,
+                                    digit: nextAvailableSlot?.metadata?.digit || '',
+                                    order: nextAvailableSlot?.metadata?.order ?? 0,
+                                    active: nextAvailableSlot.status !== 'disabled',
+                                    slotDate: nextAvailableSlot.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}),
+                                    metadata: nextAvailableSlot?.metadata || {}
+                                });
                             }
                             markReason('matched');
                             return redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
@@ -1068,9 +1100,23 @@ class IVRWorkflowEngine extends EventEmitter {
                 setBookingVariable('booking.selectedSlotCapacity', matchedSlot?.capacity ?? selectedSlot.capacity ?? 1);
                 setBookingVariable('booking.selectedSlotBookedCount', matchedSlot?.bookedCount ?? 0);
                 setBookingVariable('booking.available', Boolean(matchedSlot?.isAvailable));
+                persistSelectedSlot(matchedSlot || selectedSlot);
                 if (nextAvailableSlot) {
                     setBookingVariable('booking.nextAvailableSlotKey', nextAvailableSlot.slotKey);
                     setBookingVariable('booking.nextAvailableSlotLabel', nextAvailableSlot.slotLabel);
+                    setBookingVariable('booking.nextAvailableSlotData', {
+                        key: nextAvailableSlot.slotKey,
+                        label: nextAvailableSlot.slotLabel,
+                        startTime: nextAvailableSlot.slotStart || '',
+                        endTime: nextAvailableSlot.slotEnd || '',
+                        capacity: nextAvailableSlot.capacity ?? 1,
+                        bookedCount: nextAvailableSlot.bookedCount ?? 0,
+                        digit: nextAvailableSlot?.metadata?.digit || '',
+                        order: nextAvailableSlot?.metadata?.order ?? 0,
+                        active: nextAvailableSlot.status !== 'disabled',
+                        slotDate: nextAvailableSlot.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}),
+                        metadata: nextAvailableSlot?.metadata || {}
+                    });
                 }
 
                 if (matchedSlot?.isAvailable) {
@@ -1103,6 +1149,14 @@ class IVRWorkflowEngine extends EventEmitter {
                         setBookingVariable('booking.selectedSlotKey', selectedSlotKey);
                         setBookingVariable('booking.selectedSlotLabel', state?.variables?.['booking.nextAvailableSlotLabel'] || selectedSlotKey);
                         setBookingVariable('booking.available', true);
+                        const nextAvailableSlotData = state?.variables?.['booking.nextAvailableSlotData'];
+                        if (nextAvailableSlotData) {
+                            setBookingVariable('booking.selectedSlotData', {
+                                ...nextAvailableSlotData,
+                                key: nextAvailableSlotData.key || selectedSlotKey,
+                                label: nextAvailableSlotData.label || state?.variables?.['booking.nextAvailableSlotLabel'] || selectedSlotKey
+                            });
+                        }
                     }
                     if (callSid && state) {
                         state.lastInputReasonByNode = state.lastInputReasonByNode || {};
@@ -1171,6 +1225,15 @@ class IVRWorkflowEngine extends EventEmitter {
             if (nodeType === 'whatsapp_notify') {
                 setBookingVariable('booking.lastAction', 'notify');
                 return redirectForHandles(['success', 'default', 'next']) || edgeForHandle('success')?.target || endNodeId;
+            }
+            } catch (bookingFlowError) {
+                logger.error(`Booking flow input handling failed at node ${currentNodeId}:`, bookingFlowError);
+                if (callSid && state) {
+                    state.lastInputReasonByNode = state.lastInputReasonByNode || {};
+                    state.lastInputReasonByNode[currentNodeId] = 'error';
+                }
+                if (attemptCount < maxRetries) return currentNodeId;
+                return redirectForHandles(['failure', 'error', 'fallback', 'no_match', 'default']) || endNodeId;
             }
 
             // Timeout (no digits)

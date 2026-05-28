@@ -883,63 +883,118 @@ class IVRExecutionEngine {
     const settings = config.settings || {};
     const { voice, language } = this._getMergedSettings(node, settings);
     const state = callSid ? ivrWorkflowEngine.getExecutionState(callSid) : null;
+    const customerNameVariable = String(data.customerNameVariable || data.customer_name_variable || 'customerName').trim() || 'customerName';
+    const customerPhoneVariable = String(data.customerPhoneVariable || data.customer_phone_variable || 'callerNumber').trim() || 'callerNumber';
+    const customerEmailVariable = String(data.customerEmailVariable || data.customer_email_variable || 'customerEmail').trim() || 'customerEmail';
+    const notesVariable = String(data.notesVariable || data.notes_variable || 'notes').trim() || 'notes';
     const selectedSlotKey = String(state?.variables?.['booking.selectedSlotKey'] || '').trim();
     const selectedSlotLabel = String(state?.variables?.['booking.selectedSlotLabel'] || '').trim();
     const slotSnapshot = await appointmentBookingService.getSlotSnapshot(node, { _id: config._id, settings }, context);
-    const selectedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === selectedSlotKey) || null;
-
-    if (!selectedSlot) {
-      response.say({ voice, language }, 'We could not confirm the selected slot.');
-      this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
-      return response.toString();
-    }
-
-    const reservation = await appointmentBookingService.reserveBooking({
-      workflow: {
-        _id: config._id,
-        createdBy: config.createdBy || settings.createdBy || null,
-        promptKey: settings.promptKey || ''
-      },
-      node,
-      callSid,
-      context,
-      slot: {
-        key: selectedSlot.slotKey,
-        label: selectedSlotLabel || selectedSlot.slotLabel || selectedSlot.slotKey,
-        startTime: selectedSlot.slotStart,
-        endTime: selectedSlot.slotEnd,
-        capacity: selectedSlot.capacity,
-        digit: selectedSlot?.metadata?.digit,
-        order: selectedSlot?.metadata?.order,
-        metadata: selectedSlot?.metadata || {}
+    const selectedSlotState = state?.variables?.['booking.selectedSlotData'] || null;
+    const nextAvailableSlotState = state?.variables?.['booking.nextAvailableSlotData'] || null;
+    try {
+      let selectedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === selectedSlotKey) || null;
+      if (!selectedSlot && selectedSlotState && selectedSlotKey) {
+        selectedSlot = {
+          slotKey: selectedSlotState.key || selectedSlotKey,
+          slotLabel: selectedSlotState.label || selectedSlotLabel || selectedSlotKey,
+          slotStart: selectedSlotState.startTime || '',
+          slotEnd: selectedSlotState.endTime || '',
+          capacity: selectedSlotState.capacity ?? 1,
+          bookedCount: selectedSlotState.bookedCount ?? 0,
+          status: selectedSlotState.active === false ? 'disabled' : 'available',
+          metadata: selectedSlotState.metadata || {
+            digit: selectedSlotState.digit || '',
+            order: selectedSlotState.order ?? 0
+          }
+        };
       }
-    });
+      if (!selectedSlot && nextAvailableSlotState && selectedSlotKey) {
+        selectedSlot = {
+          slotKey: nextAvailableSlotState.key || selectedSlotKey,
+          slotLabel: nextAvailableSlotState.label || selectedSlotLabel || selectedSlotKey,
+          slotStart: nextAvailableSlotState.startTime || '',
+          slotEnd: nextAvailableSlotState.endTime || '',
+          capacity: nextAvailableSlotState.capacity ?? 1,
+          bookedCount: nextAvailableSlotState.bookedCount ?? 0,
+          status: nextAvailableSlotState.active === false ? 'disabled' : 'available',
+          metadata: nextAvailableSlotState.metadata || {
+            digit: nextAvailableSlotState.digit || '',
+            order: nextAvailableSlotState.order ?? 0
+          }
+        };
+      }
 
-    if (!reservation.success) {
-      response.say({ voice, language }, reservation.error || 'Unable to reserve the selected slot.');
+      if (!selectedSlot) {
+        response.say({ voice, language }, 'We could not confirm the selected slot.');
+        this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        return response.toString();
+      }
+
+      const bookingContext = {
+        ...context,
+        variables: {
+          ...(context?.variables || {}),
+          customerName: context?.variables?.[customerNameVariable] || context?.variables?.customerName || '',
+          callerNumber: context?.variables?.[customerPhoneVariable] || context?.variables?.callerNumber || context?.callerNumber || '',
+          customerEmail: context?.variables?.[customerEmailVariable] || context?.variables?.customerEmail || '',
+          notes: context?.variables?.[notesVariable] || context?.variables?.notes || ''
+        }
+      };
+
+      const reservation = await appointmentBookingService.reserveBooking({
+        workflow: {
+          _id: config._id,
+          createdBy: config.createdBy || settings.createdBy || null,
+          promptKey: settings.promptKey || ''
+        },
+        node,
+        callSid,
+        context: bookingContext,
+        preventDuplicates: this._toBoolean(data.preventDuplicates ?? data.prevent_duplicates, true),
+        slot: {
+          key: selectedSlot.slotKey,
+          label: selectedSlotLabel || selectedSlot.slotLabel || selectedSlot.slotKey,
+          startTime: selectedSlot.slotStart,
+          endTime: selectedSlot.slotEnd,
+          capacity: selectedSlot.capacity,
+          digit: selectedSlot?.metadata?.digit,
+          order: selectedSlot?.metadata?.order,
+          metadata: selectedSlot?.metadata || {}
+        }
+      });
+
+      if (!reservation.success) {
+        response.say({ voice, language }, reservation.error || 'Unable to reserve the selected slot.');
+        this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        return response.toString();
+      }
+
+      if (callSid) {
+        ivrWorkflowEngine.setVariable(callSid, 'booking.reference', reservation.booking.bookingReference);
+        ivrWorkflowEngine.setVariable(callSid, 'booking.token', reservation.booking.tokenNumber);
+        ivrWorkflowEngine.setVariable(callSid, 'booking.bookingId', String(reservation.booking._id));
+        ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
+      }
+
+      const successText = this._replaceCurlyVariables(
+        callSid,
+        data.successText ||
+          data.messageText ||
+          `Your booking is confirmed for ${reservation.booking.slotLabel}. Reference ${reservation.booking.bookingReference}.`
+      );
+      if (successText) {
+        response.say({ voice, language }, successText);
+      }
+
+      this._appendNextStep(response, node.id, config.edges, config._id, 'success');
+      return response.toString();
+    } catch (error) {
+      logger.error(`Booking create failed for node ${node?.id || 'unknown'}:`, error);
+      response.say({ voice, language }, data.failureText || 'We could not complete your booking right now. Please try again.');
       this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
       return response.toString();
     }
-
-    if (callSid) {
-      ivrWorkflowEngine.setVariable(callSid, 'booking.reference', reservation.booking.bookingReference);
-      ivrWorkflowEngine.setVariable(callSid, 'booking.token', reservation.booking.tokenNumber);
-      ivrWorkflowEngine.setVariable(callSid, 'booking.bookingId', String(reservation.booking._id));
-      ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
-    }
-
-    const successText = this._replaceCurlyVariables(
-      callSid,
-      data.successText ||
-        data.messageText ||
-        `Your booking is confirmed for ${reservation.booking.slotLabel}. Reference ${reservation.booking.bookingReference}.`
-    );
-    if (successText) {
-      response.say({ voice, language }, successText);
-    }
-
-    this._appendNextStep(response, node.id, config.edges, config._id, 'success');
-    return response.toString();
   }
 
   async _handleWhatsAppNotify(response, node, config, context, callSid) {
@@ -971,40 +1026,47 @@ class IVRExecutionEngine {
       slotKey: String(state?.variables?.['booking.selectedSlotKey'] || '').trim()
     };
 
-    const result = await appointmentBookingService.notifyBooking({
-      workflow: {
-        _id: config._id,
-        createdBy: config.createdBy || settings.createdBy || null,
-        displayName: settings.displayName || settings.promptKey || ''
-      },
-      node,
-      booking,
-      customerRecipient,
-      adminRecipient
-    });
+    try {
+      const result = await appointmentBookingService.notifyBooking({
+        workflow: {
+          _id: config._id,
+          createdBy: config.createdBy || settings.createdBy || null,
+          displayName: settings.displayName || settings.promptKey || ''
+        },
+        node,
+        booking,
+        customerRecipient,
+        adminRecipient
+      });
 
-    if (!result.success) {
-      response.say({ voice, language }, 'We could not send the notification right now.');
+      if (!result.success) {
+        response.say({ voice, language }, 'We could not send the notification right now.');
+        this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        return response.toString();
+      }
+
+      if (callSid) {
+        ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsSent', true);
+      }
+
+      const successText = this._replaceCurlyVariables(
+        callSid,
+        data.successText ||
+          data.messageText ||
+          'Your booking notification has been sent.'
+      );
+      if (successText) {
+        response.say({ voice, language }, successText);
+      }
+
+      this._appendNextStep(response, node.id, config.edges, config._id, 'success');
+      return response.toString();
+    } catch (error) {
+      logger.error(`WhatsApp notify failed for node ${node?.id || 'unknown'}:`, error);
+      response.say({ voice, language }, data.failureText || 'We could not send the notification right now.');
       this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
       return response.toString();
     }
-
-    if (callSid) {
-      ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsSent', true);
-    }
-
-    const successText = this._replaceCurlyVariables(
-      callSid,
-      data.successText ||
-        data.messageText ||
-        'Your booking notification has been sent.'
-    );
-    if (successText) {
-      response.say({ voice, language }, successText);
-    }
-
-    this._appendNextStep(response, node.id, config.edges, config._id, 'success');
-    return response.toString();
   }
 
   async _handleHandoff(response, node, config, context) {
