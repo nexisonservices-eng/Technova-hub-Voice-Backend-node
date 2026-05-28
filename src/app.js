@@ -19,6 +19,7 @@ import analyticsRoutes from "./routes/analyticsRoutes.js";
 import callDetailsRoutes from "./routes/callDetailsRoutes.js";
 import voiceOutboundRoutes from "./routes/voiceOutboundRoutes.js";
 import internalCleanupRoutes from "./routes/internalCleanupRoutes.js";
+import internalIvrRoutes from "./routes/internalIvrRoutes.js";
 
 
 import path from 'path';
@@ -59,6 +60,7 @@ app.use('/api/analytics', analyticsRoutes); // Analytics endpoints
 app.use('/api/calls', callDetailsRoutes); // Call details endpoints
 app.use('/api/voice', voiceOutboundRoutes); // Exotel outbound local endpoints
 app.use('/internal/cleanup', internalCleanupRoutes);
+app.use('/internal/ivr', internalIvrRoutes);
 
 // Health check
 app.get('/', (req, res) => {
