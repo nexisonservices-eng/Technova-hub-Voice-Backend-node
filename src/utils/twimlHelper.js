@@ -90,8 +90,7 @@ export class TwiMLHelper {
     
     response.say({
       voice: 'alice',
-      language: 'en-US',
-      rate: 'slow'
+      language: 'en-US'
     }, message);
     
     // Add retry option
@@ -104,8 +103,7 @@ export class TwiMLHelper {
     
     gather.say({
       voice: 'alice',
-      language: 'en-US',
-      rate: 'slow'
+      language: 'en-US'
     }, 'Press 1 to try again, or hang up to disconnect.');
     
     response.hangup();

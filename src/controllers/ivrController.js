@@ -143,8 +143,7 @@ class IVRController {
             {
               say: {
                 voice: 'alice',
-                language: 'en-US',
-                rate: 'slow'
+                language: 'en-US'
               },
               gather: {
                 numDigits: 1,
@@ -163,8 +162,7 @@ class IVRController {
         {
           say: {
             voice: 'alice',
-            language: 'en-US',
-            rate: 'slow'
+            language: 'en-US'
           },
           gather: {
             numDigits: 1,
