@@ -10,17 +10,16 @@ import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
 import IVRExecutionEngine from '../services/ivrExecutionEngine.js';
 import workflowNodeService from '../services/workflowNodeService.js';
+import ivrCascadeDeleteService from '../services/ivrCascadeDeleteService.js';
 import { NODE_TYPES, NODE_CONFIGS } from '../config/workflowNodeConfig.js';
 import { authenticate } from '../middleware/auth.js';
 import twilio from 'twilio';
 import { getSocketIO, getUserRoom } from '../sockets/unifiedSocket.js';
-import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
 const router = express.Router();
 router.use(authenticate);
-router.use(resolveUserTwilioContext);
 
 const getAuthenticatedUserId = (req) => {
   const rawUserId = req.user?._id || req.user?.id || req.user?.sub || req.user?.userId;
@@ -883,17 +882,20 @@ router.delete('/:workflowId', authenticate, async (req, res) => {
       });
     }
 
-    // Use ivrWorkflowEngine to delete workflow and clean up audio files
-    const result = await ivrWorkflowEngine.deleteWorkflow(workflowId);
+    const result = await ivrCascadeDeleteService.deleteWorkflow({ workflowId, userId });
 
     res.json({
       success: true,
       data: {
         workflowId,
         deleted: true,
-        deletedNodes: result.deletedNodes,
+        deletedCounts: result.deletedCounts,
+        deletedAudioAssetIds: result.deletedAudioAssetIds,
+        activeExecutionsClosed: result.activeExecutionsClosed,
+        campaignReferencesUnlinked: result.campaignReferencesUnlinked,
+        leadsPreserved: result.leadsPreserved,
         cloudinary: result.cloudinary,
-        message: `Workflow ${workflowId} and ${result.deletedNodes} associated audio files deleted successfully`
+        message: `Workflow ${workflowId} and related IVR data deleted successfully`
       }
     });
   } catch (error) {

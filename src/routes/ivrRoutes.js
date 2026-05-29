@@ -12,9 +12,8 @@ import workflowNodeService from '../services/workflowNodeService.js';
 import { NODE_TYPES, NODE_CONFIGS } from '../config/workflowNodeConfig.js';
 import { authenticate } from '../middleware/auth.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
-import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 import twilio from 'twilio';
-import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
+import ivrCascadeDeleteService from '../services/ivrCascadeDeleteService.js';
 
 import IVRAudioController from '../controllers/IVRAudioController.js';
 
@@ -70,7 +69,6 @@ router.post('/tts/preview', authenticate, (req, res) => IVRAudioController.ttsPr
 
 // Apply authentication for all management endpoints below
 router.use(authenticate);
-router.use(resolveUserTwilioContext);
 
 // Management endpoints for audio generation and management
 
@@ -1062,14 +1060,7 @@ router.delete('/menus/:id', async (req, res) => {
       });
     }
 
-    const cloudinaryCleanup = await deleteVoiceAudioAssets([menu], {
-      type: 'ivr-menu',
-      workflowId: String(menu._id),
-      userId: String(userId)
-    });
-
-    // Hard delete from MongoDB
-    await Workflow.deleteOne({ _id: menu._id });
+    const result = await ivrCascadeDeleteService.deleteWorkflow({ workflowId: menu._id, userId });
 
     logger.info(`Deleted IVR menu: ${id}`);
 
@@ -1078,7 +1069,12 @@ router.delete('/menus/:id', async (req, res) => {
       message: 'IVR menu deleted successfully',
       deleted: {
         workflowId: menu._id,
-        cloudinary: cloudinaryCleanup
+        deletedAudioAssetIds: result.deletedAudioAssetIds,
+        deletedCounts: result.deletedCounts,
+        activeExecutionsClosed: result.activeExecutionsClosed,
+        campaignReferencesUnlinked: result.campaignReferencesUnlinked,
+        leadsPreserved: true,
+        cloudinary: result.cloudinary
       }
     });
   } catch (error) {

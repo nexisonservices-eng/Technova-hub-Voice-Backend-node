@@ -387,6 +387,31 @@ class AnalyticsController {
       }
     }
 
+    if (this.shouldIncludeExecutionLogs(callType)) {
+      const executionRows = await ExecutionLog.aggregate([
+        { $match: this.buildExecutionMatch(dateRange, status, userId) },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            active: { $sum: { $cond: [{ $eq: ['$status', 'running'] }, 1, 0] } },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'timeout']] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ['$status', 'abandoned'] }, 1, 0] } },
+            totalDuration: {
+              $sum: {
+                $divide: [{ $ifNull: ['$duration', 0] }, 1000]
+              }
+            }
+          }
+        }
+      ]);
+
+      if (executionRows[0]) {
+        this.mergeMetricBucket(channels.ivr, executionRows[0]);
+      }
+    }
+
     channels.inboundIvr = this.getEmptyChannelMetrics();
     this.mergeMetricBucket(channels.inboundIvr, channels.inbound);
     this.mergeMetricBucket(channels.inboundIvr, channels.ivr);
@@ -467,6 +492,7 @@ class AnalyticsController {
       total: 0,
       completed: 0,
       failed: 0,
+      missed: 0,
       inbound: 0,
       ivr: 0,
       inboundIvr: 0,
@@ -503,6 +529,34 @@ class AnalyticsController {
         bucket.total += row.total;
         bucket.completed += row.completed;
         bucket.failed += row.failed;
+      });
+    }
+
+    if (this.shouldIncludeExecutionLogs(callType)) {
+      const executionRows = await ExecutionLog.aggregate([
+        { $match: this.buildExecutionMatch(dateRange, status, userId) },
+        {
+          $group: {
+            _id: { hour: { $hour: { date: '$startTime', timezone: VOICE_TIME_ZONE } } },
+            total: { $sum: 1 },
+            active: { $sum: { $cond: [{ $eq: ['$status', 'running'] }, 1, 0] } },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'timeout']] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ['$status', 'abandoned'] }, 1, 0] } }
+          }
+        },
+        { $sort: { '_id.hour': 1 } }
+      ]);
+
+      executionRows.forEach((row) => {
+        const bucket = hours[row._id.hour];
+        if (!bucket) return;
+        bucket.ivr += row.total;
+        bucket.calls += row.total;
+        bucket.total += row.total;
+        bucket.completed += row.completed;
+        bucket.failed += row.failed;
+        bucket.missed += row.missed;
       });
     }
 
@@ -563,6 +617,14 @@ class AnalyticsController {
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ]);
       broadcastRows.forEach((row) => addStatus(row._id, row.count));
+    }
+
+    if (this.shouldIncludeExecutionLogs(callType)) {
+      const executionRows = await ExecutionLog.aggregate([
+        { $match: this.buildExecutionMatch(dateRange, status, userId) },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]);
+      executionRows.forEach((row) => addStatus(this.normalizeExecutionStatus(row._id), row.count));
     }
 
     return breakdown;
@@ -713,7 +775,7 @@ class AnalyticsController {
     const stats = await Call.aggregate(pipeline);
 
     if (stats.length === 0) {
-      return {
+      const empty = {
         totalCalls: 0,
         inboundCalls: 0,
         ivrCalls: 0,
@@ -730,10 +792,72 @@ class AnalyticsController {
         totalDuration: 0,
         successRate: 0
       };
+
+      if (this.shouldIncludeExecutionLogs(callType)) {
+        const executionStats = await ExecutionLog.aggregate([
+          { $match: this.buildExecutionMatch(dateRange, status, ownerFilter?.user || null) },
+          {
+            $group: {
+              _id: null,
+              totalCalls: { $sum: 1 },
+              ivrCalls: { $sum: 1 },
+              completedCalls: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+              failedCalls: { $sum: { $cond: [{ $in: ['$status', ['failed', 'timeout']] }, 1, 0] } },
+              missedCalls: { $sum: { $cond: [{ $eq: ['$status', 'abandoned'] }, 1, 0] } },
+              totalDuration: { $sum: { $divide: [{ $ifNull: ['$duration', 0] }, 1000] } }
+            }
+          }
+        ]);
+
+        const execution = executionStats[0];
+        if (execution) {
+          empty.totalCalls += Number(execution.totalCalls || 0);
+          empty.ivrCalls += Number(execution.ivrCalls || 0);
+          empty.completedCalls += Number(execution.completedCalls || 0);
+          empty.failedCalls += Number(execution.failedCalls || 0);
+          empty.missedCalls += Number(execution.missedCalls || 0);
+          empty.totalDuration += Number(execution.totalDuration || 0);
+          empty.avgDuration = empty.totalCalls > 0 ? Math.round(empty.totalDuration / empty.totalCalls) : 0;
+          empty.successRate = empty.totalCalls > 0
+            ? Math.round((empty.completedCalls / empty.totalCalls) * 100)
+            : 0;
+          empty.answerRate = empty.successRate;
+        }
+      }
+
+      return empty;
     }
 
     const result = stats[0];
+    if (this.shouldIncludeExecutionLogs(callType)) {
+      const executionStats = await ExecutionLog.aggregate([
+        { $match: this.buildExecutionMatch(dateRange, status, ownerFilter?.user || null) },
+        {
+          $group: {
+            _id: null,
+            totalCalls: { $sum: 1 },
+            ivrCalls: { $sum: 1 },
+            completedCalls: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failedCalls: { $sum: { $cond: [{ $in: ['$status', ['failed', 'timeout']] }, 1, 0] } },
+            missedCalls: { $sum: { $cond: [{ $eq: ['$status', 'abandoned'] }, 1, 0] } },
+            totalDuration: { $sum: { $divide: [{ $ifNull: ['$duration', 0] }, 1000] } }
+          }
+        }
+      ]);
+
+      const execution = executionStats[0];
+      if (execution) {
+        result.totalCalls += Number(execution.totalCalls || 0);
+        result.ivrCalls += Number(execution.ivrCalls || 0);
+        result.completedCalls += Number(execution.completedCalls || 0);
+        result.failedCalls += Number(execution.failedCalls || 0);
+        result.missedCalls += Number(execution.missedCalls || 0);
+        result.totalDuration += Number(execution.totalDuration || 0);
+      }
+    }
+
     result.avgDuration = Math.round(result.avgDuration || 0);
+    result.avgDuration = result.totalCalls > 0 ? Math.round(result.totalDuration / result.totalCalls) : 0;
     result.successRate = result.totalCalls > 0 
       ? Math.round((result.completedCalls / result.totalCalls) * 100) 
       : 0;
@@ -795,10 +919,7 @@ class AnalyticsController {
    * Get IVR breakdown
    */
   async getIVRBreakdown(dateRange, userId = null) {
-    const executionFilter = {
-      startTime: { $gte: dateRange.start, $lte: dateRange.end }
-    };
-    if (userId) executionFilter.userId = userId;
+    const executionFilter = this.buildExecutionMatch(dateRange, 'all', userId);
     const data = await ExecutionLog.aggregate([
       {
         $match: executionFilter
@@ -907,10 +1028,7 @@ class AnalyticsController {
     // Get flow performance
     const flows = await ExecutionLog.aggregate([
       {
-        $match: {
-          startTime: { $gte: dateRange.start, $lte: dateRange.end },
-          ...(userId ? { userId } : {})
-        }
+        $match: this.buildExecutionMatch(dateRange, 'all', userId)
       },
       {
         $group: {
@@ -1053,12 +1171,14 @@ class AnalyticsController {
       );
 
       rows.push(...calls
-        .map((call) => ({
+        .map((call) => {
+          const type = this.resolveCallType(call);
+          return {
           id: String(call._id || call.callSid || ''),
           callSid: call.callSid || '',
           phoneNumber: call.phoneNumber || call.from || call.to || '-',
-          type: this.resolveCallType(call),
-          callType: this.resolveCallType(call),
+          type,
+          callType: type,
           status: call.status || 'unknown',
           duration: Number(call.duration || 0),
           provider: call.provider || '',
@@ -1066,8 +1186,47 @@ class AnalyticsController {
           createdAt: call.createdAt,
           updatedAt: call.updatedAt,
           source: 'call'
-        }))
+          };
+        })
         .filter(matchesRequestedType));
+    }
+
+    if (this.shouldIncludeExecutionLogs(callType)) {
+      const executions = await ExecutionLog.find(this.buildExecutionMatch(dateRange, status, userId))
+        .sort({ startTime: -1, createdAt: -1 })
+        .limit(safeLimit)
+        .select('callSid workflowId workflowName callerNumber destinationNumber status duration startTime endTime reason errorMessage visitedNodes userInputs transferAttempted transferDestination voicemailRecorded recordingUrl createdAt updatedAt')
+        .lean();
+
+      rows.push(...executions.map((execution) => {
+        const lastVisitedNode = Array.isArray(execution.visitedNodes) && execution.visitedNodes.length > 0
+          ? execution.visitedNodes[execution.visitedNodes.length - 1]
+          : null;
+        return {
+          id: String(execution._id || execution.callSid || ''),
+          callSid: execution.callSid || '',
+          phoneNumber: execution.callerNumber || '-',
+          type: 'inboundIvr',
+          callType: 'inboundIvr',
+          status: this.normalizeExecutionStatus(execution.status),
+          duration: Math.round(Number(execution.duration || 0) / 1000),
+          provider: 'ivr',
+          campaignName: execution.workflowName || '',
+          workflowId: String(execution.workflowId || ''),
+          workflowName: execution.workflowName || '',
+          currentNode: lastVisitedNode?.nodeId || lastVisitedNode?.nodeType || '',
+          currentNodeType: lastVisitedNode?.nodeType || '',
+          reason: execution.reason || '',
+          error: execution.errorMessage || '',
+          transferAttempted: Boolean(execution.transferAttempted),
+          transferDestination: execution.transferDestination || '',
+          voicemailRecorded: Boolean(execution.voicemailRecorded),
+          recordingUrl: execution.recordingUrl || '',
+          createdAt: execution.startTime || execution.createdAt,
+          updatedAt: execution.updatedAt || execution.endTime || execution.createdAt,
+          source: 'ivr'
+        };
+      }));
     }
 
     if (this.shouldIncludeBroadcastModel(callType)) {
@@ -1098,9 +1257,21 @@ class AnalyticsController {
       })));
     }
 
-    return rows
+    const dedupedRows = [];
+    const seenKeys = new Set();
+
+    rows
       .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
-      .slice(0, safeLimit);
+      .forEach((row) => {
+        const key = row.callSid || row.id;
+        if (key && seenKeys.has(key)) return;
+        if (key) seenKeys.add(key);
+        if (dedupedRows.length < safeLimit) {
+          dedupedRows.push(row);
+        }
+      });
+
+    return dedupedRows;
   }
 
   getEmptyChannelMetrics() {
@@ -1180,6 +1351,67 @@ class AnalyticsController {
     }
 
     return matchStage;
+  }
+
+  buildExecutionMatch(dateRange, status = 'all', userId = null) {
+    const matchStage = {
+      startTime: { $gte: dateRange.start, $lte: dateRange.end }
+    };
+
+    const executionUserId = this.toObjectId(userId);
+    if (executionUserId) {
+      matchStage.userId = executionUserId;
+    }
+
+    if (status && status !== 'all') {
+      if (status === 'missed') {
+        matchStage.status = { $in: ['abandoned'] };
+      } else if (status === 'failed') {
+        matchStage.status = { $in: ['failed', 'timeout'] };
+      } else if (status === 'active') {
+        matchStage.status = { $in: ['running'] };
+      } else {
+        matchStage.status = status;
+      }
+    }
+
+    return matchStage;
+  }
+
+  shouldIncludeExecutionLogs(callType) {
+    return !callType || callType === 'all' || ['ivr', 'inboundIvr'].includes(callType);
+  }
+
+  normalizeExecutionStatus(status) {
+    const normalized = String(status || 'unknown').toLowerCase();
+    if (normalized === 'running') return 'active';
+    if (normalized === 'completed') return 'completed';
+    if (normalized === 'abandoned') return 'missed';
+    if (normalized === 'timeout') return 'failed';
+    if (normalized === 'failed') return 'failed';
+    return normalized.replace(/_/g, '-');
+  }
+
+  getExecutionBucketCounts() {
+    return {
+      total: 0,
+      active: 0,
+      completed: 0,
+      failed: 0,
+      missed: 0,
+      totalDuration: 0
+    };
+  }
+
+  mergeExecutionMetricBucket(target, source = {}) {
+    target.total += Number(source.total || 0);
+    target.active += Number(source.active || 0);
+    target.completed += Number(source.completed || 0);
+    target.failed += Number(source.failed || 0);
+    target.missed += Number(source.missed || 0);
+    target.totalDuration += Number(source.totalDuration || 0);
+    target.avgDuration = target.total > 0 ? Math.round(target.totalDuration / target.total) : 0;
+    target.successRate = target.total > 0 ? Math.round((target.completed / target.total) * 100) : 0;
   }
 
   getComputedCallTypeStage() {
@@ -1318,6 +1550,7 @@ class AnalyticsController {
           total: 0,
           completed: 0,
           failed: 0,
+          missed: 0,
           inbound: 0,
           ivr: 0,
           inboundIvr: 0,
@@ -1360,6 +1593,33 @@ class AnalyticsController {
         day.total += row.total;
         day.completed += row.completed;
         day.failed += row.failed;
+      });
+    }
+
+    if (this.shouldIncludeExecutionLogs(callType)) {
+      const executionRows = await ExecutionLog.aggregate([
+        { $match: this.buildExecutionMatch(dateRange, status, userId) },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$startTime', timezone: VOICE_TIME_ZONE } }
+            },
+            total: { $sum: 1 },
+            completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } },
+            failed: { $sum: { $cond: [{ $in: ['$status', ['failed', 'timeout']] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ['$status', 'abandoned'] }, 1, 0] } }
+          }
+        },
+        { $sort: { '_id.date': 1 } }
+      ]);
+
+      executionRows.forEach((row) => {
+        const day = ensureDay(row._id.date);
+        day.ivr += row.total;
+        day.total += row.total;
+        day.completed += row.completed;
+        day.failed += row.failed;
+        day.missed += row.missed;
       });
     }
 
@@ -1574,7 +1834,7 @@ class AnalyticsController {
 
   async getIVRContainmentRate(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
+      { $match: this.buildExecutionMatch(dateRange, 'all', userId) },
       {
         $group: {
           _id: null,
@@ -1591,7 +1851,7 @@ class AnalyticsController {
 
   async getIVRAbandonRate(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
+      { $match: this.buildExecutionMatch(dateRange, 'all', userId) },
       {
         $group: {
           _id: null,
@@ -1608,15 +1868,15 @@ class AnalyticsController {
 
   async getIVRAvgDuration(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
+      { $match: this.buildExecutionMatch(dateRange, 'all', userId) },
       { $group: { _id: null, avg: { $avg: '$duration' } } }
     ]);
-    return result[0]?.avg || 0;
+    return Math.round((result[0]?.avg || 0) / 1000);
   }
 
   async getIVRTransferRate(dateRange, userId = null) {
     const result = await ExecutionLog.aggregate([
-      { $match: { startTime: { $gte: dateRange.start, $lte: dateRange.end }, ...(userId ? { userId } : {}) } },
+      { $match: this.buildExecutionMatch(dateRange, 'all', userId) },
       {
         $group: {
           _id: null,

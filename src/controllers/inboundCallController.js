@@ -12,6 +12,7 @@ import mongoose from 'mongoose';
 import { getUserRoom } from '../sockets/unifiedSocket.js';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 import { buildIVRMenuListPayload } from '../services/ivrMenuSnapshotService.js';
+import ivrCascadeDeleteService from '../services/ivrCascadeDeleteService.js';
 
 // Import Socket.IO instance for real-time events
 let io = null;
@@ -1463,21 +1464,7 @@ class InboundCallController {
         });
       }
 
-      // Import Workflow model
-      const { default: Workflow } = await import('../models/Workflow.js');
-
-      // Find menu by ID (safer than name-based deletion)
-      let menu = null;
-      try {
-        const { ObjectId } = await import('mongodb');
-        menu = await Workflow.findOne({ _id: new ObjectId(menuId), createdBy: userId });
-      } catch (err) {
-        logger.error('Invalid ObjectId format:', menuId, err);
-        return res.status(400).json({
-          error: 'Invalid menu ID format',
-          code: 'INVALID_MENU_ID'
-        });
-      }
+      const menu = await ivrCascadeDeleteService.resolveWorkflow({ workflowId: menuId, userId });
 
       if (!menu) {
         return res.status(404).json({
@@ -1486,57 +1473,7 @@ class InboundCallController {
         });
       }
 
-      // Check if menu is being used in any active calls
-      // PERFORMANCE NOTE: Ensure MongoDB has compound index on { routing: 1, status: 1 } for optimal performance
-      const activeCallsWithMenu = await Call.countDocuments({
-        user: userId,
-        routing: menu.promptKey,
-        status: { $in: ['initiated', 'ringing', 'in-progress'] }
-      });
-
-      if (activeCallsWithMenu > 0) {
-        return res.status(400).json({
-          error: `Cannot delete IVR menu '${menu.promptKey}' - ${activeCallsWithMenu} active calls are using it`,
-          code: 'IVR_MENU_IN_USE'
-        });
-      }
-
-      // Ã°Å¸â€”â€˜Ã¯Â¸Â STEP 1: Delete Cloudinary audio assets (VERY IMPORTANT)
-      let cloudinaryAssetsDeleted = false;
-      const deletedAudioAssetIds = []; // Track deleted asset IDs for response
-
-      try {
-        // Gather ALL possible Cloudinary public IDs from legacy + current schema.
-        const allAudioAssetIds = new Set([
-          ...this.collectLegacyAudioAssetIds(menu.audioFiles || []),
-          ...this.collectMenuOptionAudioAssetIds(menu.menuOptions || []),
-          ...this.collectMenuOptionAudioAssetIds(menu.config?.options || []),
-          ...this.collectNodeAudioAssetIds(menu.nodes || []),
-          ...this.collectNodeAudioAssetIds(menu.workflowConfig?.nodes || [])
-        ]);
-
-        for (const audioAssetId of allAudioAssetIds) {
-          try {
-            await deleteFromCloudinary(audioAssetId);
-            deletedAudioAssetIds.push(audioAssetId);
-            logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â Deleted audio from Cloudinary: ${audioAssetId}`);
-          } catch (deleteError) {
-            // Continue deleting others even if one fails.
-            logger.warn(`âš ï¸ Failed deleting Cloudinary asset ${audioAssetId}: ${deleteError.message}`);
-          }
-        }
-
-        cloudinaryAssetsDeleted = true;
-      } catch (cloudinaryError) {
-        logger.error('Ã¢Å¡Â Ã¯Â¸Â Failed to delete Cloudinary assets:', cloudinaryError);
-        // Continue with DB deletion even if Cloudinary fails
-      }
-
-      // Ã°Å¸â€”â€˜Ã¯Â¸Â STEP 2: Delete from database (hard delete, not soft delete)
-      await Workflow.deleteOne({ _id: menu._id, createdBy: userId });
-
-      // Remove from in-memory service
-      inboundCallService.ivrMenus.delete(menu.promptKey);
+      const result = await ivrCascadeDeleteService.deleteWorkflow({ workflowId: menu._id, userId });
 
       logger.info(`Ã°Å¸â€”â€˜Ã¯Â¸Â IVR menu deleted from database: ${menu.promptKey} (ID: ${menuId})`);
 
@@ -1545,8 +1482,12 @@ class InboundCallController {
         const eventData = {
           menuId: menu._id,
           menuName: menu.promptKey || menu.ivrName,
-          cloudinaryAssetsDeleted,
-          deletedAudioAssetIds, // Include deleted asset IDs for frontend tracking
+          cloudinaryAssetsDeleted: true,
+          deletedAudioAssetIds: result.deletedAudioAssetIds,
+          deletedCounts: result.deletedCounts,
+          activeExecutionsClosed: result.activeExecutionsClosed,
+          campaignReferencesUnlinked: result.campaignReferencesUnlinked,
+          leadsPreserved: true,
           deletedAt: new Date().toISOString()
         };
 
@@ -1561,8 +1502,12 @@ class InboundCallController {
         data: {
           menuId: menu._id,
           menuName: menu.promptKey || menu.ivrName,
-          cloudinaryAssetsDeleted,
-          deletedAudioAssetIds, // Include deleted asset IDs for frontend consistency
+          cloudinaryAssetsDeleted: true,
+          deletedAudioAssetIds: result.deletedAudioAssetIds,
+          deletedCounts: result.deletedCounts,
+          activeExecutionsClosed: result.activeExecutionsClosed,
+          campaignReferencesUnlinked: result.campaignReferencesUnlinked,
+          leadsPreserved: true,
           deletedAt: new Date().toISOString()
         }
       });

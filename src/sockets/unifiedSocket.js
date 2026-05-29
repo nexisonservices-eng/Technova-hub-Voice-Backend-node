@@ -18,7 +18,7 @@ import {
   buildRoutingRulesPayload,
   mapRoutingRuleResponse
 } from '../services/inboundSnapshotService.js';
-import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
+import ivrCascadeDeleteService from '../services/ivrCascadeDeleteService.js';
 
 let io;
 let initialized = false;
@@ -236,40 +236,6 @@ const saveIVRMenuFromSocket = async (payload = {}, userId) => {
   return { workflow, action };
 };
 
-const collectAudioAssetIds = (workflow) => {
-  const publicIds = new Set();
-  const add = (value) => {
-    if (typeof value === 'string' && value.trim()) {
-      publicIds.add(value.trim());
-    }
-  };
-  const collectFromNode = (node = {}) => {
-    const data = node.data || {};
-    [
-      node.audioPublicId,
-      node.audio_public_id,
-      node.audioAssetId,
-      node.audio_asset_id,
-      node.cloudinaryPublicId,
-      node.publicId,
-      data.audioPublicId,
-      data.audio_public_id,
-      data.audioAssetId,
-      data.audio_asset_id,
-      data.cloudinaryPublicId,
-      data.publicId
-    ].forEach(add);
-  };
-
-  (workflow?.nodes || []).forEach(collectFromNode);
-  (workflow?.workflowConfig?.nodes || []).forEach(collectFromNode);
-  (workflow?.audioFiles || []).forEach((file) => {
-    [file?.audioAssetId, file?.cloudinaryPublicId, file?.publicId].forEach(add);
-  });
-
-  return [...publicIds];
-};
-
 const deleteIVRMenuFromSocket = async (payload = {}, userId) => {
   const menuId = String(payload.menuId || payload.id || payload._id || '').trim();
   if (!menuId) {
@@ -281,18 +247,8 @@ const deleteIVRMenuFromSocket = async (payload = {}, userId) => {
     throw new Error('IVR menu not found');
   }
 
-  const deletedAudioAssetIds = [];
-  for (const publicId of collectAudioAssetIds(workflow)) {
-    try {
-      await deleteFromCloudinary(publicId);
-      deletedAudioAssetIds.push(publicId);
-    } catch (error) {
-      logger.warn(`Failed deleting Cloudinary asset ${publicId}: ${error.message}`);
-    }
-  }
-
-  await Workflow.deleteOne({ _id: workflow._id, createdBy: userId });
-  return { workflow, deletedAudioAssetIds };
+  const result = await ivrCascadeDeleteService.deleteWorkflow({ workflowId: workflow._id, userId });
+  return { workflow, result };
 };
 
 export function initializeSocketIO(socketIo) {
@@ -708,19 +664,23 @@ export function initializeSocketIO(socketIo) {
         const userId = resolveUserId(socket.user);
         if (!userId) throw new Error('Unauthorized');
 
-        const { workflow, deletedAudioAssetIds } = await deleteIVRMenuFromSocket(data, userId);
+        const { workflow, result } = await deleteIVRMenuFromSocket(data, userId);
         const eventData = {
           action: 'deleted',
           menuId: workflow._id,
           menuName: workflow.promptKey,
-          deletedAudioAssetIds,
+          deletedAudioAssetIds: result.deletedAudioAssetIds,
+          deletedCounts: result.deletedCounts,
+          activeExecutionsClosed: result.activeExecutionsClosed,
+          campaignReferencesUnlinked: result.campaignReferencesUnlinked,
+          leadsPreserved: true,
           timestamp: new Date().toISOString()
         };
 
         io.to(getUserRoom(userId)).emit('ivr_menu:changed', eventData);
         io.to(getUserRoom(userId)).emit('ivr_config_deleted', eventData);
         const snapshot = await emitIVRMenuSnapshotToUser(userId);
-        const response = { success: true, action: 'deleted', menuId: workflow._id, snapshot, timestamp: eventData.timestamp };
+        const response = { success: true, action: 'deleted', menuId: workflow._id, snapshot, ...result, timestamp: eventData.timestamp };
         if (typeof ack === 'function') ack(response);
       } catch (error) {
         logger.error(`IVR menu delete socket error for ${socket.id}:`, error);
