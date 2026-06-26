@@ -1016,7 +1016,13 @@ class IVRWorkflowEngine extends EventEmitter {
             const endNodeId = (workflow.nodes || []).find((node) => String(node?.type || '').toLowerCase() === 'end')?.id || null;
             const nodeType = String(currentNode?.type || '').toLowerCase();
             const state = this.getExecutionState(callSid);
-            const normalizeDtmfValue = (value) => String(value ?? '').trim();
+            const normalizeDtmfValue = (value) => {
+                const normalized = String(value ?? '').trim();
+                const normalizedLower = normalized.toLowerCase();
+                if (['star', 'asterisk'].includes(normalizedLower)) return '*';
+                if (['hash', 'pound'].includes(normalizedLower)) return '#';
+                return normalized;
+            };
             const normalizeHandleValue = (value) => normalizeDtmfValue(value).toLowerCase();
             const normalizedUserInput = normalizeDtmfValue(userInput);
             const normalizedUserInputLower = normalizeHandleValue(userInput);
@@ -1045,11 +1051,80 @@ class IVRWorkflowEngine extends EventEmitter {
                     edge.source === currentNodeId &&
                     normalizeHandleValue(edge.sourceHandle) === normalizeHandleValue(handle)
                 ) || null;
+            const edgeForNodeHandle = (nodeId, handle) =>
+                (workflow.edges || []).find((edge) =>
+                    edge.source === nodeId &&
+                    normalizeHandleValue(edge.sourceHandle) === normalizeHandleValue(handle)
+                ) || null;
             const redirectForHandles = (handles = []) => {
                 for (const handle of handles) {
                     const edge = edgeForHandle(handle);
                     if (edge) return edge.target;
                 }
+                return null;
+            };
+            const nodeExists = (nodeId = '') =>
+                Boolean(String(nodeId || '').trim() && (workflow.nodes || []).some((node) => node.id === nodeId));
+            const resolveInputOptionTarget = (inputNode) => {
+                if (!inputNode) return null;
+                const inputNodeId = inputNode.id;
+                const inputData = inputNode.data || {};
+                const inputDigit = normalizeDtmfValue(inputData.digit);
+                const digitEdge = inputDigit ? edgeForNodeHandle(inputNodeId, inputDigit) : null;
+                if (digitEdge) return digitEdge.target;
+
+                const defaultEdge =
+                    edgeForNodeHandle(inputNodeId, 'default') ||
+                    edgeForNodeHandle(inputNodeId, 'success') ||
+                    edgeForNodeHandle(inputNodeId, 'next');
+                if (defaultEdge) return defaultEdge.target;
+
+                const outgoingEdges = (workflow.edges || []).filter((edge) => edge.source === inputNodeId);
+                if (outgoingEdges.length === 1) return outgoingEdges[0].target;
+
+                const inputAction = String(inputData.action || '').trim().toLowerCase();
+                const inputDestination = String(inputData.destination || '').trim();
+                if (nodeExists(inputDestination)) return inputDestination;
+
+                const actionRequiresExecution = ['transfer', 'queue', 'voicemail'].includes(inputAction);
+                if (callSid && inputAction && (actionRequiresExecution || inputDestination)) {
+                    const currentState = this.getExecutionState(callSid);
+                    if (currentState) {
+                        currentState.variables = currentState.variables || {};
+                        currentState.variables[`inputAction:${inputNodeId}`] = {
+                            action: inputAction,
+                            destination: inputDestination
+                        };
+                    }
+                    return inputNodeId;
+                }
+
+                return null;
+            };
+            const resolveAudioFanOutTarget = () => {
+                if (!['audio', 'greeting'].includes(nodeType)) return null;
+
+                const directEdge = edges.find((edge) =>
+                    normalizeHandleValue(edge.sourceHandle) === normalizedUserInputLower ||
+                    normalizeHandleValue(edge.data?.digit) === normalizedUserInputLower
+                );
+                if (directEdge) {
+                    const targetNode = (workflow.nodes || []).find((node) => node.id === directEdge.target);
+                    if (String(targetNode?.type || '').toLowerCase() === 'input') {
+                        return resolveInputOptionTarget(targetNode) || targetNode.id;
+                    }
+                    return directEdge.target;
+                }
+
+                for (const edge of edges) {
+                    const targetNode = (workflow.nodes || []).find((node) => node.id === edge.target);
+                    if (String(targetNode?.type || '').toLowerCase() !== 'input') continue;
+                    const targetDigit = normalizeHandleValue(targetNode?.data?.digit);
+                    if (!targetDigit || targetDigit !== normalizedUserInputLower) continue;
+
+                    return resolveInputOptionTarget(targetNode);
+                }
+
                 return null;
             };
 
@@ -1249,6 +1324,12 @@ class IVRWorkflowEngine extends EventEmitter {
                 const fallback = redirectForHandles(['no_match', 'default', 'fallback', 'timeout']);
                 if (fallback) return fallback;
                 return endNodeId;
+            }
+
+            const audioFanOutTarget = resolveAudioFanOutTarget();
+            if (audioFanOutTarget) {
+                markInputReason('matched');
+                return audioFanOutTarget;
             }
 
             // Find edge matching userInput (digit)
