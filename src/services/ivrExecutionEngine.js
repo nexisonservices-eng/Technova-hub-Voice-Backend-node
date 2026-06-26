@@ -1059,8 +1059,17 @@ class IVRExecutionEngine {
       });
 
       if (!result.success) {
-        response.say({ voice, language }, 'We could not send the notification right now.');
-        this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        logger.warn(
+          `WhatsApp notify failed for node ${node?.id || 'unknown'}; continuing call flow:`,
+          JSON.stringify(result.results || [])
+        );
+        if (callSid) {
+          ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsSent', false);
+          ivrWorkflowEngine.setVariable(callSid, 'booking.notificationError', JSON.stringify(result.results || []));
+        }
+        if (!this._appendNextStep(response, node.id, config.edges, config._id, 'success')) {
+          this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        }
         return response.toString();
       }
 
@@ -1155,9 +1164,11 @@ class IVRExecutionEngine {
 
     if (edge) {
       response.redirect(`/ivr/next-step?workflowId=${workflowId}&currentNodeId=${edge.target}`);
+      return true;
     } else {
       // If no edge, maybe hangup or default end?
       // response.hangup();
+      return false;
     }
   }
 }

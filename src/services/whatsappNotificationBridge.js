@@ -7,6 +7,29 @@ const trimOrNull = (value) => {
   return normalized ? normalized : null;
 };
 
+const normalizeBridgeError = (value, fallback = 'WhatsApp bridge request failed') => {
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return value.message || fallback;
+  if (typeof value === 'object') {
+    const nested =
+      value.message ||
+      value.error_user_msg ||
+      value.error_user_title ||
+      value.details ||
+      value.error ||
+      value.title ||
+      value.description;
+    if (nested && nested !== value) return normalizeBridgeError(nested, fallback);
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return fallback;
+    }
+  }
+  return String(value || fallback);
+};
+
 class WhatsAppNotificationBridge {
   constructor() {
     this.baseUrl = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_URL) || 'http://localhost:3001';
@@ -40,13 +63,13 @@ class WhatsAppNotificationBridge {
     } catch (error) {
       const responseData = error?.response?.data;
       const responseError =
-        responseData?.error?.message ||
-        responseData?.error?.error_user_msg ||
-        responseData?.error ||
-        responseData?.message ||
-        (typeof responseData === 'string' ? responseData : '') ||
-        error?.message ||
-        'WhatsApp bridge request failed';
+        normalizeBridgeError(
+          responseData?.error ||
+            responseData?.message ||
+            responseData ||
+            error?.message,
+          'WhatsApp bridge request failed'
+        );
       const status = error?.response?.status || null;
       logger.warn(`WhatsApp notification bridge failed: ${status ? `${status} ` : ''}${responseError}`);
       return {

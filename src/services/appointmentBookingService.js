@@ -37,6 +37,29 @@ const isTemplateSpecificFailure = (errorMessage = '') => {
   );
 };
 
+const normalizeErrorMessage = (value, fallback = 'Unknown WhatsApp error') => {
+  if (!value) return fallback;
+  if (typeof value === 'string') return value;
+  if (value instanceof Error) return value.message || fallback;
+  if (typeof value === 'object') {
+    return (
+      value.message ||
+      value.error_user_msg ||
+      value.error_user_title ||
+      value.details ||
+      value.error ||
+      (() => {
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return fallback;
+        }
+      })()
+    );
+  }
+  return String(value || fallback);
+};
+
 const normalizeSlotObject = (slot, index = 0) => {
   const raw = slot && typeof slot === 'object' ? slot : {};
   const key = toTrimmedString(raw.key || raw.slotKey || raw.id || raw.digit || raw.value || `slot_${index + 1}`);
@@ -519,7 +542,7 @@ class AppointmentBookingService {
           sendResult?.data?.messages?.[0]?.id ||
           sendResult?.data?.messageId ||
           '';
-        logEntry.errorMessage = sendResult.success ? '' : String(sendResult.error || 'Unknown WhatsApp error');
+        logEntry.errorMessage = sendResult.success ? '' : normalizeErrorMessage(sendResult.error);
         logEntry.payload = {
           ...payload,
           ...extraPayload
@@ -546,7 +569,10 @@ class AppointmentBookingService {
         };
       }
 
-      const shouldFallbackToText = !normalizedTemplateName || isTemplateSpecificFailure(sendTemplateResult.error);
+      const shouldFallbackToText =
+        preferredMessageType === 'template' ||
+        !normalizedTemplateName ||
+        isTemplateSpecificFailure(sendTemplateResult.error);
       if (shouldFallbackToText && normalizedText) {
         const fallbackPayload = {
           ...payload,
@@ -561,16 +587,18 @@ class AppointmentBookingService {
           ...fallbackPayload,
           deliveryMode: 'text',
           fallbackUsed: true,
-          fallbackReason: sendTemplateResult.error || null
+          fallbackReason: normalizeErrorMessage(sendTemplateResult.error, '')
         });
         return {
           success: fallbackSuccess,
           data: fallbackResult.data || null,
-          error: fallbackSuccess ? null : fallbackResult.error || sendTemplateResult.error || null,
+          error: fallbackSuccess
+            ? null
+            : normalizeErrorMessage(fallbackResult.error || sendTemplateResult.error),
           channel,
-          deliveryMode: fallbackSuccess ? 'text' : preferredMessageType,
+          deliveryMode: 'text',
           fallbackUsed: true,
-          fallbackReason: sendTemplateResult.error || null
+          fallbackReason: normalizeErrorMessage(sendTemplateResult.error, '')
         };
       }
 
@@ -582,7 +610,7 @@ class AppointmentBookingService {
       return {
         success: false,
         data: sendTemplateResult.data || null,
-        error: sendTemplateResult.error || null,
+        error: normalizeErrorMessage(sendTemplateResult.error, ''),
         channel,
         deliveryMode: 'template',
         fallbackUsed: false
