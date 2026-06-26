@@ -17,7 +17,12 @@ class AdminCredentialsService {
   }
 
   get internalApiKey() {
-    return process.env.INTERNAL_API_KEY || '';
+    return (
+      process.env.INTERNAL_API_KEY ||
+      process.env.ADMIN_INTERNAL_API_KEY ||
+      process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY ||
+      ''
+    );
   }
 
   isReady() {
@@ -61,7 +66,7 @@ class AdminCredentialsService {
       }
       return data;
     } catch (error) {
-      logger.warn('Failed to resolve admin Twilio credentials', {
+      logger.warn('Failed to resolve admin credentials/profile', {
         path,
         message: error.message
       });

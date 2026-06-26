@@ -57,10 +57,24 @@ const resolveCompanyIdentity = async (context = {}) => {
   if ((!companyId || !companyName) && userId) {
     const profile = await adminCredentialsService.getUserProfileByUserId(userId);
     username = username || String(profile?.username || '').trim();
-    companyId = companyId || String(profile?.companyId || '').trim();
-    companyName = companyName || String(profile?.companyName || '').trim();
-    companySlug = companySlug || String(profile?.companySlug || '').trim();
+    companyId = companyId || String(
+      profile?.companyId ||
+      profile?.workspaceOwnerId ||
+      profile?.ownerId ||
+      profile?.parentUserId ||
+      profile?.createdBy ||
+      profile?.credentialOwnerUserId ||
+      ''
+    ).trim();
+    companyName = companyName || String(profile?.companyName || profile?.createdByName || profile?.username || '').trim();
+    companySlug = companySlug || String(profile?.companySlug || profile?.companyName || profile?.createdByName || profile?.username || '').trim();
     cloudinaryFolderRoot = cloudinaryFolderRoot || String(profile?.cloudinaryFolderRoot || '').trim();
+  }
+
+  if (!companyId && userId) {
+    companyId = userId;
+    companyName = companyName || username || 'User';
+    companySlug = companySlug || username || 'user';
   }
 
   if (!companyId) {
