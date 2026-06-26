@@ -10,10 +10,21 @@ const trimOrNull = (value) => {
 const LOCAL_WHATSAPP_BACKEND_URL = 'http://localhost:3001';
 const PRODUCTION_WHATSAPP_BACKEND_URL = 'https://nexion-broadcast-backend-s9av.onrender.com';
 
+const isHostedRuntime = () => {
+  const baseUrl = trimOrNull(process.env.BASE_URL) || '';
+  return Boolean(
+    process.env.NODE_ENV === 'production' ||
+    process.env.RENDER ||
+    process.env.RENDER_SERVICE_ID ||
+    process.env.RENDER_SERVICE_NAME ||
+    (baseUrl && !baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1'))
+  );
+};
+
 const resolveBridgeBaseUrl = () => {
   const configuredUrl = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_URL);
   if (configuredUrl) return configuredUrl;
-  return process.env.NODE_ENV === 'production'
+  return isHostedRuntime()
     ? PRODUCTION_WHATSAPP_BACKEND_URL
     : LOCAL_WHATSAPP_BACKEND_URL;
 };
@@ -47,6 +58,7 @@ class WhatsAppNotificationBridge {
     this.apiKey = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY || process.env.INTERNAL_API_KEY || process.env.ADMIN_INTERNAL_API_KEY);
     this.timeoutMs = Number(process.env.WHATSAPP_BACKEND_INTERNAL_TIMEOUT_MS || 15000);
     this.notifyPath = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_NOTIFY_PATH) || '/internal/ivr/notify';
+    logger.info(`WhatsApp notification bridge target: ${this.baseUrl}${this.notifyPath}; enabled=${this.enabled}`);
   }
 
   get enabled() {
@@ -82,7 +94,7 @@ class WhatsAppNotificationBridge {
           'WhatsApp bridge request failed'
         );
       const status = error?.response?.status || null;
-      logger.warn(`WhatsApp notification bridge failed: ${status ? `${status} ` : ''}${responseError}`);
+      logger.warn(`WhatsApp notification bridge failed at ${this.baseUrl}${this.notifyPath}: ${status ? `${status} ` : ''}${responseError}`);
       return {
         success: false,
         error: status ? `${status}: ${responseError}` : responseError

@@ -11,21 +11,23 @@ const trimOrNull = (value) => {
 };
 
 const requireInternalApiKey = (req, res, next) => {
-  const expected = trimOrNull(
-    process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY ||
-    process.env.INTERNAL_API_KEY ||
-    process.env.ADMIN_INTERNAL_API_KEY
-  );
+  const expectedKeys = [
+    process.env.INTERNAL_API_KEY,
+    process.env.ADMIN_INTERNAL_API_KEY,
+    process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY
+  ]
+    .map((value) => trimOrNull(value))
+    .filter(Boolean);
   const provided = trimOrNull(req.headers['x-internal-api-key']);
 
-  if (!expected) {
+  if (expectedKeys.length === 0) {
     return res.status(503).json({
       success: false,
       error: 'Internal IVR endpoint is not configured'
     });
   }
 
-  if (!provided || provided !== expected) {
+  if (!provided || !expectedKeys.includes(provided)) {
     return res.status(401).json({
       success: false,
       error: 'Unauthorized internal request'

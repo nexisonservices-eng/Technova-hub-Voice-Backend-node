@@ -134,7 +134,19 @@ class IVRAudioController {
             });
         } catch (error) {
             logger.error('TTS preview generation failed:', error);
-            res.status(500).json({ success: false, error: error.message });
+            const message = error?.message || 'TTS preview generation failed';
+            const statusCode = error?.response?.status || 500;
+            res.status(500).json({
+                success: false,
+                error: message,
+                details: {
+                    statusCode,
+                    code: error?.code || '',
+                    upstream: error?.response?.data
+                        ? String(Buffer.isBuffer(error.response.data) ? error.response.data.toString() : JSON.stringify(error.response.data)).slice(0, 500)
+                        : ''
+                }
+            });
         }
     }
 

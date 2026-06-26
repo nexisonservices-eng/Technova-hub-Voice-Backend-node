@@ -9,10 +9,7 @@ import Workflow from '../models/Workflow.js';
 
 class PythonTTSService {
   constructor() {
-    this.pythonServiceUrl =
-      process.env.AI_SERVICE_HTTP ||
-      process.env.PYTHON_TTS_SERVICE_URL ||
-      'http://localhost:4000';
+    this.pythonServiceUrl = this.resolvePythonServiceUrl();
 
     // Edge TTS free tier only supports these voices (now synced with Python service)
     this.allowedVoices = [
@@ -55,6 +52,29 @@ class PythonTTSService {
 
     this.tempDir = path.join(process.cwd(), 'temp', 'tts');
     if (!fs.existsSync(this.tempDir)) fs.mkdirSync(this.tempDir, { recursive: true });
+  }
+
+  resolvePythonServiceUrl() {
+    const cleanUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
+    const configuredUrl =
+      cleanUrl(process.env.AI_SERVICE_HTTP) ||
+      cleanUrl(process.env.PYTHON_TTS_SERVICE_URL) ||
+      cleanUrl(process.env.PYTHON_TTS_URL);
+
+    if (configuredUrl) return configuredUrl;
+
+    const baseUrl = cleanUrl(process.env.BASE_URL);
+    const hostedRuntime = Boolean(
+      process.env.NODE_ENV === 'production' ||
+      process.env.RENDER ||
+      process.env.RENDER_SERVICE_ID ||
+      process.env.RENDER_SERVICE_NAME ||
+      (baseUrl && !baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1'))
+    );
+
+    return hostedRuntime
+      ? 'https://technova-hub-voice-backend-python-jzxq.onrender.com'
+      : 'http://localhost:4000';
   }
 
   generateTextHash(text) {
@@ -101,7 +121,7 @@ class PythonTTSService {
     
     // Check if Python service is accessible first
     try {
-      await axios.get(`${this.pythonServiceUrl}/health`, { timeout: 5000 });
+      await axios.get(`${this.pythonServiceUrl}/health`, { timeout: Number(process.env.PYTHON_TTS_HEALTH_TIMEOUT_MS || 15000) });
     } catch (healthError) {
       throw new Error(`Python TTS service not accessible at ${this.pythonServiceUrl}: ${healthError.message}`);
     }
