@@ -72,6 +72,7 @@ const bookingNotificationLogSchema = new mongoose.Schema(
 );
 
 bookingNotificationLogSchema.index({ workflowId: 1, bookingId: 1, channel: 1 });
+bookingNotificationLogSchema.index({ providerMessageId: 1 }, { sparse: true });
 
 const BookingNotificationLog = mongoose.model('BookingNotificationLog', bookingNotificationLogSchema);
 

@@ -109,7 +109,7 @@ const resolveNodeSummary = (node = {}) => {
       data.adminRecipient || data.admin_recipient ? `Admin ${data.adminRecipient || data.admin_recipient}` : null,
       data.customerTemplateName || data.customer_template_name || data.requestedTemplateName ? `Customer template ${data.customerTemplateName || data.customer_template_name || data.requestedTemplateName}` : null,
       data.adminTemplateName || data.admin_template_name || data.requestedTemplateName ? `Admin template ${data.adminTemplateName || data.admin_template_name || data.requestedTemplateName}` : null,
-      'Template-first with text fallback'
+      'Template-only live send'
     ].filter(Boolean).join(' • ') || 'WhatsApp notify';
   }
 
@@ -225,7 +225,7 @@ const buildWorkflowEventLogSummary = (rows = []) => {
     bookedCalls: safeRows.filter((row) => ['reserved', 'confirmed'].includes(normalizeStatus(row.bookingStatus))).length,
     cancelledCalls: safeRows.filter((row) => normalizeStatus(row.bookingStatus) === 'cancelled').length,
     rejectedCalls: safeRows.filter((row) => normalizeStatus(row.bookingStatus) === 'rejected').length,
-    whatsappSent: safeRows.filter((row) => normalizeStatus(row.customerWhatsAppStatus) === 'sent' || normalizeStatus(row.adminWhatsAppStatus) === 'sent').length,
+    whatsappSent: safeRows.filter((row) => ['sent', 'delivered', 'read'].includes(normalizeStatus(row.customerWhatsAppStatus)) || ['sent', 'delivered', 'read'].includes(normalizeStatus(row.adminWhatsAppStatus))).length,
     whatsappFailed: safeRows.filter((row) => normalizeStatus(row.customerWhatsAppStatus) === 'failed' || normalizeStatus(row.adminWhatsAppStatus) === 'failed').length,
     transfers: safeRows.filter((row) => row.transferAttempted || row.transferDestination).length,
     voicemailCalls: safeRows.filter((row) => row.voicemailRecorded).length,

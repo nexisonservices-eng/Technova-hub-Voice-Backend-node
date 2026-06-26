@@ -1,6 +1,12 @@
 import axios from 'axios';
 import logger from '../utils/logger.js';
 
+const trimOrNull = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized ? normalized : null;
+};
+
 class AdminCredentialsService {
   constructor() {
     this.cache = new Map();
@@ -8,25 +14,32 @@ class AdminCredentialsService {
   }
 
   get adminBaseUrl() {
-    return (
+    return trimOrNull(
       process.env.ADMIN_BACKEND_URL ||
       process.env.ADMIN_API_BASE_URL ||
-      process.env.ADMIN_SERVICE_URL ||
-      ''
-    ).replace(/\/$/, '');
+      process.env.ADMIN_SERVICE_URL
+    )?.replace(/\/$/, '') || '';
   }
 
   get internalApiKey() {
-    return (
+    return trimOrNull(
       process.env.INTERNAL_API_KEY ||
       process.env.ADMIN_INTERNAL_API_KEY ||
-      process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY ||
-      ''
-    );
+      process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY
+    ) || '';
   }
 
   isReady() {
     return Boolean(this.adminBaseUrl && this.internalApiKey);
+  }
+
+  get configurationError() {
+    const missing = [];
+    if (!this.adminBaseUrl) missing.push('ADMIN_BACKEND_URL or ADMIN_API_BASE_URL');
+    if (!this.internalApiKey) missing.push('ADMIN_INTERNAL_API_KEY');
+    return missing.length > 0
+      ? `Admin backend credentials lookup is not configured (${missing.join(', ')})`
+      : null;
   }
 
   getFromCache(key) {
@@ -47,7 +60,12 @@ class AdminCredentialsService {
   }
 
   async fetchCredentials(path, cacheKey) {
-    if (!this.isReady() || !path || !cacheKey) return null;
+    if (!this.isReady() || !path || !cacheKey) {
+      if (!this.isReady()) {
+        logger.warn(this.configurationError);
+      }
+      return null;
+    }
     const cached = this.getFromCache(cacheKey);
     if (cached) return cached;
 

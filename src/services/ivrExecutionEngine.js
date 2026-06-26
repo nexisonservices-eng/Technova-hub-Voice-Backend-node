@@ -1070,7 +1070,7 @@ class IVRExecutionEngine {
         );
         if (callSid) {
           ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsSent', false);
-          ivrWorkflowEngine.setVariable(callSid, 'booking.notificationError', JSON.stringify(result.results || []));
+          ivrWorkflowEngine.setVariable(callSid, 'booking.notificationError', result.error || JSON.stringify(result.results || []));
         }
         if (!this._appendNextStep(response, node.id, config.edges, config._id, 'success')) {
           this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
@@ -1083,6 +1083,10 @@ class IVRExecutionEngine {
           `WhatsApp notify completed with partial failure for node ${node?.id || 'unknown'}:`,
           JSON.stringify(result.results || [])
         );
+        if (callSid) {
+          ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsPartialFailure', true);
+          ivrWorkflowEngine.setVariable(callSid, 'booking.notificationError', JSON.stringify(result.results || []));
+        }
       }
 
       if (callSid) {

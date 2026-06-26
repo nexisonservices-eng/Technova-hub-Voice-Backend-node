@@ -13,7 +13,6 @@ const toPositiveInt = (value, fallback = 1) => {
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.floor(parsed);
 };
-const normalizeStatusText = (value) => String(value || '').trim().toLowerCase();
 
 const buildSequentialVariables = (values = []) =>
   values.map((value) => toTrimmedString(value));
@@ -21,25 +20,6 @@ const buildSequentialVariables = (values = []) =>
 const templateValue = (value, fallback = 'N/A') => {
   const normalized = toTrimmedString(value);
   return normalized || fallback;
-};
-
-const isTemplateSpecificFailure = (errorMessage = '') => {
-  const normalized = normalizeStatusText(errorMessage);
-  if (!normalized) return false;
-  return (
-    normalized.includes('template') ||
-    normalized.includes('message template') ||
-    normalized.includes('not found') ||
-    normalized.includes('does not exist') ||
-    normalized.includes('missing') ||
-    normalized.includes('unavailable') ||
-    normalized.includes('invalid template') ||
-    normalized.includes('language') ||
-    normalized.includes('parameter') ||
-    normalized.includes('component') ||
-    normalized.includes('header') ||
-    normalized.includes('body')
-  );
 };
 
 const normalizeErrorMessage = (value, fallback = 'Unknown WhatsApp error') => {
@@ -469,6 +449,7 @@ class AppointmentBookingService {
   }
 
   buildCustomerVariables(booking = {}) {
+    // Sequential variable order must match the approved customer WhatsApp template.
     return [
       templateValue(booking.customerName, 'Customer'),
       templateValue(booking.bookingReference),
@@ -479,6 +460,7 @@ class AppointmentBookingService {
   }
 
   buildAdminVariables(booking = {}) {
+    // Sequential variable order must match the approved admin WhatsApp template.
     return [
       templateValue(booking.customerName, 'Customer'),
       templateValue(booking.customerPhone),
@@ -514,7 +496,7 @@ class AppointmentBookingService {
       const normalizedTemplateName = toTrimmedString(templateName);
       const normalizedText = toTrimmedString(text);
       const normalizedVariables = buildSequentialVariables(variables);
-      const preferredMessageType = normalizedTemplateName ? 'template' : 'text';
+      const preferredMessageType = 'template';
       const payload = {
         userId: String(workflow?.createdBy || '').trim(),
         companyId: String(workflow?.companyId || '').trim() || null,
@@ -542,11 +524,13 @@ class AppointmentBookingService {
 
       const updateLogEntry = async (sendResult, extraPayload = {}) => {
         if (!logEntry) return;
-        logEntry.status = sendResult.success ? 'sent' : 'failed';
-        logEntry.providerMessageId =
+        const providerMessageId =
+          sendResult?.providerMessageId ||
           sendResult?.data?.messages?.[0]?.id ||
           sendResult?.data?.messageId ||
           '';
+        logEntry.status = sendResult.success ? 'sent' : 'failed';
+        logEntry.providerMessageId = String(providerMessageId || '').trim();
         logEntry.errorMessage = sendResult.success ? '' : normalizeErrorMessage(sendResult.error);
         logEntry.payload = {
           ...payload,
@@ -555,93 +539,103 @@ class AppointmentBookingService {
         await logEntry.save();
       };
 
-      const sendTemplateResult = normalizedTemplateName
-        ? await whatsappNotificationBridge.sendNotification(payload)
-        : { success: false, error: 'Template name not configured' };
-
-      if (sendTemplateResult.success) {
-        await updateLogEntry(sendTemplateResult, {
-          deliveryMode: 'template',
-          fallbackUsed: false
-        });
-        return {
-          success: true,
-          data: sendTemplateResult.data || null,
-          error: null,
+      if (!normalizedTemplateName) {
+        const result = {
+          success: false,
+          data: null,
+          error: 'Template name not configured',
           channel,
           deliveryMode: 'template',
           fallbackUsed: false
         };
-      }
-
-      const shouldFallbackToText =
-        preferredMessageType === 'template' ||
-        !normalizedTemplateName ||
-        isTemplateSpecificFailure(sendTemplateResult.error);
-      if (shouldFallbackToText && normalizedText) {
-        const fallbackPayload = {
-          ...payload,
-          messageType: 'text',
-          templateName: '',
-          variables: [],
-          text: normalizedText
-        };
-        const fallbackResult = await whatsappNotificationBridge.sendNotification(fallbackPayload);
-        const fallbackSuccess = Boolean(fallbackResult.success);
-        await updateLogEntry(fallbackResult, {
-          ...fallbackPayload,
-          deliveryMode: 'text',
-          fallbackUsed: true,
-          fallbackReason: normalizeErrorMessage(sendTemplateResult.error, '')
+        await updateLogEntry(result, {
+          deliveryMode: 'template',
+          fallbackUsed: false
         });
-        return {
-          success: fallbackSuccess,
-          data: fallbackResult.data || null,
-          error: fallbackSuccess
-            ? null
-            : normalizeErrorMessage(fallbackResult.error || sendTemplateResult.error),
-          channel,
-          deliveryMode: 'text',
-          fallbackUsed: true,
-          fallbackReason: normalizeErrorMessage(sendTemplateResult.error, '')
-        };
+        return result;
       }
 
-      await updateLogEntry(sendTemplateResult, {
+      const sendResult = await whatsappNotificationBridge.sendNotification(payload);
+      await updateLogEntry(sendResult, {
         deliveryMode: 'template',
-        fallbackUsed: false
+        fallbackUsed: false,
+        normalizedTemplateName,
+        normalizedText
       });
 
       return {
-        success: false,
-        data: sendTemplateResult.data || null,
-        error: normalizeErrorMessage(sendTemplateResult.error, ''),
+        success: Boolean(sendResult.success),
+        data: sendResult.data || null,
+        error: sendResult.success ? null : normalizeErrorMessage(sendResult.error, ''),
         channel,
         deliveryMode: 'template',
-        fallbackUsed: false
+        fallbackUsed: false,
+        providerMessageId:
+          sendResult?.providerMessageId ||
+          sendResult?.data?.messages?.[0]?.id ||
+          sendResult?.data?.messageId ||
+          ''
       };
     };
 
+    const sendJobs = [];
     if (customerRecipient) {
-      results.push(await sendTarget(
-        'customer',
-        customerRecipient,
-        customerTemplateName,
-        customerLanguage,
-        customerText,
-        this.buildCustomerVariables(booking)
-      ));
+      sendJobs.push({
+        channel: 'customer',
+        promise: sendTarget(
+          'customer',
+          customerRecipient,
+          customerTemplateName,
+          customerLanguage,
+          customerText,
+          this.buildCustomerVariables(booking)
+        )
+      });
     }
 
     if (adminRecipient) {
-      results.push(await sendTarget(
-        'admin',
-        adminRecipient,
-        adminTemplateName,
-        adminLanguage,
-        adminText,
-        this.buildAdminVariables(booking, workflow)
-      ));
+      sendJobs.push({
+        channel: 'admin',
+        promise: sendTarget(
+          'admin',
+          adminRecipient,
+          adminTemplateName,
+          adminLanguage,
+          adminText,
+          this.buildAdminVariables(booking, workflow)
+        )
+      });
+    }
+
+    if (sendJobs.length > 0) {
+      const settledResults = await Promise.allSettled(sendJobs.map((job) => job.promise));
+      settledResults.forEach((entry, index) => {
+        const channel = sendJobs[index]?.channel || (index === 0 && customerRecipient ? 'customer' : 'admin');
+        if (entry.status === 'fulfilled') {
+          results.push({
+            ...entry.value,
+            channel: entry.value?.channel || channel
+          });
+          return;
+        }
+        results.push({
+          success: false,
+          data: null,
+          error: normalizeErrorMessage(entry.reason),
+          channel,
+          deliveryMode: 'template',
+          fallbackUsed: false
+        });
+      });
+    }
+
+    if (results.length === 0) {
+      return {
+        success: false,
+        partialFailure: false,
+        error: 'No WhatsApp recipients were configured for this booking notification',
+        results
+      };
     }
 
     return {

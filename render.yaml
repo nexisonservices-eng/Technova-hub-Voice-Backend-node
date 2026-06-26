@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: voice-call-backend
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 5000
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        description: MongoDB connection string for the voice backend.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PUBLIC_BACKEND_URL
+        description: Public HTTPS URL for the voice backend.
+      - key: FRONTEND_URL
+        description: Frontend app URL used for callback and origin checks.
+      - key: ADMIN_BACKEND_URL
+        description: Admin backend base URL used for credential lookups.
+      - key: ADMIN_INTERNAL_API_KEY
+        description: Shared secret used for admin backend lookups.
+      - key: WHATSAPP_BACKEND_INTERNAL_URL
+        description: Broadcast backend base URL used for IVR WhatsApp notifications.
+      - key: WHATSAPP_BACKEND_INTERNAL_API_KEY
+        description: Shared secret used when calling the broadcast backend IVR notify endpoint.
+    plan: free
+    autoDeploy: true
