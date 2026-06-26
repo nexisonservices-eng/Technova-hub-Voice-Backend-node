@@ -321,6 +321,7 @@ class IVRExecutionEngine {
     const gather = response.gather({
       numDigits: data.numDigits || 1,
       timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      finishOnKey: data.finishOnKey ?? data.finish_on_key ?? '',
       action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
       method: 'POST'
     });
@@ -719,6 +720,7 @@ class IVRExecutionEngine {
       const gather = response.gather({
         numDigits: data.numDigits || 1,
         timeout: data.timeoutSeconds || settings.timeout || 10,
+        finishOnKey: data.finishOnKey ?? data.finish_on_key ?? '',
         action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
         method: 'POST'
       });
@@ -842,6 +844,7 @@ class IVRExecutionEngine {
     const gather = response.gather({
       numDigits: data.numDigits || data.num_digits || 1,
       timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      finishOnKey: data.finishOnKey ?? data.finish_on_key ?? '',
       action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
       method: 'POST'
     });
@@ -864,6 +867,7 @@ class IVRExecutionEngine {
     const gather = response.gather({
       numDigits: 1,
       timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      finishOnKey: data.finishOnKey ?? data.finish_on_key ?? '',
       action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
       method: 'POST'
     });
@@ -888,6 +892,7 @@ class IVRExecutionEngine {
     const gather = response.gather({
       numDigits: 1,
       timeout: data.timeoutSeconds || data.timeout || settings.timeout || 10,
+      finishOnKey: data.finishOnKey ?? data.finish_on_key ?? '',
       action: `/ivr/handle-input?workflowId=${config._id}&currentNodeId=${node.id}`,
       method: 'POST'
     });

@@ -31,6 +31,7 @@ export class TwiMLHelper {
       action: actionUrl,
       method: 'POST',
       timeout: 10,
+      finishOnKey: '',
       ...options.gather
     });
     
@@ -97,6 +98,7 @@ export class TwiMLHelper {
     const gather = response.gather({
       numDigits: 1,
       timeout: 5,
+      finishOnKey: '',
       action: '/ivr/welcome',
       method: 'POST'
     });
@@ -127,6 +129,7 @@ export class TwiMLHelper {
     const gather = response.gather({
       numDigits: 1,
       timeout: 10,
+      finishOnKey: '',
       action: actionUrl,
       method: 'POST'
     });
@@ -148,6 +151,7 @@ export class TwiMLHelper {
     const gather = response.gather({
       numDigits: 1,
       timeout: 10,
+      finishOnKey: '',
       action: actionUrl,
       method: 'POST'
     });
