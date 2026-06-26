@@ -18,6 +18,11 @@ const normalizeStatusText = (value) => String(value || '').trim().toLowerCase();
 const buildSequentialVariables = (values = []) =>
   values.map((value) => toTrimmedString(value));
 
+const templateValue = (value, fallback = 'N/A') => {
+  const normalized = toTrimmedString(value);
+  return normalized || fallback;
+};
+
 const isTemplateSpecificFailure = (errorMessage = '') => {
   const normalized = normalizeStatusText(errorMessage);
   if (!normalized) return false;
@@ -465,21 +470,21 @@ class AppointmentBookingService {
 
   buildCustomerVariables(booking = {}) {
     return [
-      booking.customerName || '',
-      booking.bookingReference || '',
-      booking.slotLabel || '',
-      booking.slotDate || '',
-      booking.tokenNumber || ''
+      templateValue(booking.customerName, 'Customer'),
+      templateValue(booking.bookingReference),
+      templateValue(booking.slotLabel),
+      templateValue(booking.slotDate),
+      templateValue(booking.tokenNumber)
     ];
   }
 
   buildAdminVariables(booking = {}) {
     return [
-      booking.customerName || '',
-      booking.customerPhone || '',
-      booking.slotLabel || '',
-      booking.slotDate || '',
-      booking.tokenNumber || ''
+      templateValue(booking.customerName, 'Customer'),
+      templateValue(booking.customerPhone),
+      templateValue(booking.slotLabel),
+      templateValue(booking.slotDate),
+      templateValue(booking.tokenNumber)
     ];
   }
 
