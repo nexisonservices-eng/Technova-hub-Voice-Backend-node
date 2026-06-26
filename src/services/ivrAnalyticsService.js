@@ -376,7 +376,15 @@ class IVRAnalyticsService {
                         customer: buildNotificationStatus(customerNotification),
                         admin: buildNotificationStatus(adminNotification),
                         providerMessageId: customerNotification?.providerMessageId || adminNotification?.providerMessageId || '',
-                        templateName: customerNotification?.templateName || adminNotification?.templateName || ''
+                        templateName: customerNotification?.templateName || adminNotification?.templateName || customerNotification?.payload?.requestedTemplateName || adminNotification?.payload?.requestedTemplateName || '',
+                        customerTemplateName: customerNotification?.templateName || customerNotification?.payload?.requestedTemplateName || '',
+                        adminTemplateName: adminNotification?.templateName || adminNotification?.payload?.requestedTemplateName || '',
+                        customerError: customerNotification?.errorMessage || '',
+                        adminError: adminNotification?.errorMessage || '',
+                        customerDeliveryMode: customerNotification?.payload?.deliveryMode || customerNotification?.messageType || '',
+                        adminDeliveryMode: adminNotification?.payload?.deliveryMode || adminNotification?.messageType || '',
+                        customerFallbackReason: customerNotification?.payload?.fallbackReason || '',
+                        adminFallbackReason: adminNotification?.payload?.fallbackReason || ''
                     }
                     : null;
 
@@ -439,6 +447,14 @@ class IVRAnalyticsService {
                     bookingNotes: bookingState?.notes || '',
                     customerWhatsAppStatus: whatsappState?.customer || 'not sent',
                     adminWhatsAppStatus: whatsappState?.admin || 'not sent',
+                    customerWhatsAppError: whatsappState?.customerError || '',
+                    adminWhatsAppError: whatsappState?.adminError || '',
+                    customerWhatsAppTemplateName: whatsappState?.customerTemplateName || '',
+                    adminWhatsAppTemplateName: whatsappState?.adminTemplateName || '',
+                    customerWhatsAppDeliveryMode: whatsappState?.customerDeliveryMode || '',
+                    adminWhatsAppDeliveryMode: whatsappState?.adminDeliveryMode || '',
+                    customerWhatsAppFallbackReason: whatsappState?.customerFallbackReason || '',
+                    adminWhatsAppFallbackReason: whatsappState?.adminFallbackReason || '',
                     whatsappState,
                     queueState,
                     booking,
@@ -514,7 +530,13 @@ class IVRAnalyticsService {
                 { key: 'slotDate', label: 'Slot Date', type: 'date', group: 'booking' },
                 { key: 'tokenNumber', label: 'Token', type: 'text', group: 'booking' },
                 { key: 'customerWhatsAppStatus', label: 'Customer WhatsApp', type: 'status', group: 'whatsapp' },
+                { key: 'customerWhatsAppTemplateName', label: 'Customer Template', type: 'text', group: 'whatsapp' },
+                { key: 'customerWhatsAppDeliveryMode', label: 'Customer Mode', type: 'text', group: 'whatsapp' },
+                { key: 'customerWhatsAppError', label: 'Customer Error', type: 'text', group: 'whatsapp' },
                 { key: 'adminWhatsAppStatus', label: 'Admin WhatsApp', type: 'status', group: 'whatsapp' },
+                { key: 'adminWhatsAppTemplateName', label: 'Admin Template', type: 'text', group: 'whatsapp' },
+                { key: 'adminWhatsAppDeliveryMode', label: 'Admin Mode', type: 'text', group: 'whatsapp' },
+                { key: 'adminWhatsAppError', label: 'Admin Error', type: 'text', group: 'whatsapp' },
                 { key: 'voicemailRecorded', label: 'Voicemail', type: 'boolean', group: 'voicemail' }
             ].filter((column) => {
                 if (column.group === 'input') return capabilityState.capabilities.some((capability) => capability.key === 'input');

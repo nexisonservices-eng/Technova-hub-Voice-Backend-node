@@ -107,8 +107,9 @@ const resolveNodeSummary = (node = {}) => {
     return [
       data.customerRecipient || data.customer_recipient ? `Customer ${data.customerRecipient || data.customer_recipient}` : null,
       data.adminRecipient || data.admin_recipient ? `Admin ${data.adminRecipient || data.admin_recipient}` : null,
-      data.customerTemplateName || data.customer_template_name ? `Customer template ${data.customerTemplateName || data.customer_template_name}` : null,
-      data.adminTemplateName || data.admin_template_name ? `Admin template ${data.adminTemplateName || data.admin_template_name}` : null
+      data.customerTemplateName || data.customer_template_name || data.requestedTemplateName ? `Customer template ${data.customerTemplateName || data.customer_template_name || data.requestedTemplateName}` : null,
+      data.adminTemplateName || data.admin_template_name || data.requestedTemplateName ? `Admin template ${data.adminTemplateName || data.admin_template_name || data.requestedTemplateName}` : null,
+      'Template-first with text fallback'
     ].filter(Boolean).join(' • ') || 'WhatsApp notify';
   }
 
@@ -186,7 +187,13 @@ const buildWorkflowEventLogColumns = (capabilityState = {}) => {
     { key: 'slotDate', label: 'Slot Date', type: 'date', group: 'booking' },
     { key: 'tokenNumber', label: 'Token', type: 'text', group: 'booking' },
     { key: 'customerWhatsAppStatus', label: 'Customer WhatsApp', type: 'status', group: 'whatsapp' },
+    { key: 'customerWhatsAppTemplateName', label: 'Customer Template', type: 'text', group: 'whatsapp' },
+    { key: 'customerWhatsAppDeliveryMode', label: 'Customer Mode', type: 'text', group: 'whatsapp' },
+    { key: 'customerWhatsAppError', label: 'Customer Error', type: 'text', group: 'whatsapp' },
     { key: 'adminWhatsAppStatus', label: 'Admin WhatsApp', type: 'status', group: 'whatsapp' },
+    { key: 'adminWhatsAppTemplateName', label: 'Admin Template', type: 'text', group: 'whatsapp' },
+    { key: 'adminWhatsAppDeliveryMode', label: 'Admin Mode', type: 'text', group: 'whatsapp' },
+    { key: 'adminWhatsAppError', label: 'Admin Error', type: 'text', group: 'whatsapp' },
     { key: 'voicemailRecorded', label: 'Voicemail', type: 'boolean', group: 'voicemail' }
   ].filter((column) => {
     if (column.group === 'core') return true;

@@ -13,6 +13,29 @@ const toPositiveInt = (value, fallback = 1) => {
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.floor(parsed);
 };
+const normalizeStatusText = (value) => String(value || '').trim().toLowerCase();
+
+const buildSequentialVariables = (values = []) =>
+  values.map((value) => toTrimmedString(value));
+
+const isTemplateSpecificFailure = (errorMessage = '') => {
+  const normalized = normalizeStatusText(errorMessage);
+  if (!normalized) return false;
+  return (
+    normalized.includes('template') ||
+    normalized.includes('message template') ||
+    normalized.includes('not found') ||
+    normalized.includes('does not exist') ||
+    normalized.includes('missing') ||
+    normalized.includes('unavailable') ||
+    normalized.includes('invalid template') ||
+    normalized.includes('language') ||
+    normalized.includes('parameter') ||
+    normalized.includes('component') ||
+    normalized.includes('header') ||
+    normalized.includes('body')
+  );
+};
 
 const normalizeSlotObject = (slot, index = 0) => {
   const raw = slot && typeof slot === 'object' ? slot : {};
@@ -420,23 +443,20 @@ class AppointmentBookingService {
   buildCustomerVariables(booking = {}) {
     return [
       booking.customerName || '',
+      booking.bookingReference || '',
       booking.slotLabel || '',
       booking.slotDate || '',
-      booking.tokenNumber || '',
-      booking.bookingReference || '',
-      booking.customerPhone || ''
+      booking.tokenNumber || ''
     ];
   }
 
-  buildAdminVariables(booking = {}, workflow = {}) {
+  buildAdminVariables(booking = {}) {
     return [
       booking.customerName || '',
       booking.customerPhone || '',
       booking.slotLabel || '',
       booking.slotDate || '',
-      booking.tokenNumber || '',
-      booking.bookingReference || '',
-      workflow?.displayName || workflow?.promptKey || ''
+      booking.tokenNumber || ''
     ];
   }
 
@@ -463,16 +483,20 @@ class AppointmentBookingService {
     const results = [];
     const sendTarget = async (channel, recipient, templateName, language, text, variables) => {
       if (!recipient) return { success: false, error: 'Recipient missing' };
-      const messageType = templateName ? 'template' : 'text';
+      const normalizedTemplateName = toTrimmedString(templateName);
+      const normalizedText = toTrimmedString(text);
+      const normalizedVariables = buildSequentialVariables(variables);
+      const preferredMessageType = normalizedTemplateName ? 'template' : 'text';
       const payload = {
         userId: String(workflow?.createdBy || '').trim(),
         companyId: String(workflow?.companyId || '').trim() || null,
         recipient,
-        messageType,
-        templateName,
+        messageType: preferredMessageType,
+        templateName: normalizedTemplateName,
+        requestedTemplateName: normalizedTemplateName,
         language,
-        variables,
-        text
+        variables: normalizedVariables,
+        text: normalizedText
       };
 
       const logEntry = await this.sendNotificationLog({
@@ -481,30 +505,87 @@ class AppointmentBookingService {
         booking,
         channel,
         recipient,
-        messageType,
-        templateName,
+        messageType: preferredMessageType,
+        templateName: normalizedTemplateName,
         language,
         payload,
         status: 'pending'
       });
 
-      const sendResult = await whatsappNotificationBridge.sendNotification(payload);
-      if (logEntry) {
+      const updateLogEntry = async (sendResult, extraPayload = {}) => {
+        if (!logEntry) return;
         logEntry.status = sendResult.success ? 'sent' : 'failed';
         logEntry.providerMessageId =
           sendResult?.data?.messages?.[0]?.id ||
           sendResult?.data?.messageId ||
           '';
         logEntry.errorMessage = sendResult.success ? '' : String(sendResult.error || 'Unknown WhatsApp error');
-        logEntry.payload = payload;
+        logEntry.payload = {
+          ...payload,
+          ...extraPayload
+        };
         await logEntry.save();
+      };
+
+      const sendTemplateResult = normalizedTemplateName
+        ? await whatsappNotificationBridge.sendNotification(payload)
+        : { success: false, error: 'Template name not configured' };
+
+      if (sendTemplateResult.success) {
+        await updateLogEntry(sendTemplateResult, {
+          deliveryMode: 'template',
+          fallbackUsed: false
+        });
+        return {
+          success: true,
+          data: sendTemplateResult.data || null,
+          error: null,
+          channel,
+          deliveryMode: 'template',
+          fallbackUsed: false
+        };
       }
 
+      const shouldFallbackToText = !normalizedTemplateName || isTemplateSpecificFailure(sendTemplateResult.error);
+      if (shouldFallbackToText && normalizedText) {
+        const fallbackPayload = {
+          ...payload,
+          messageType: 'text',
+          templateName: '',
+          variables: [],
+          text: normalizedText
+        };
+        const fallbackResult = await whatsappNotificationBridge.sendNotification(fallbackPayload);
+        const fallbackSuccess = Boolean(fallbackResult.success);
+        await updateLogEntry(fallbackResult, {
+          ...fallbackPayload,
+          deliveryMode: 'text',
+          fallbackUsed: true,
+          fallbackReason: sendTemplateResult.error || null
+        });
+        return {
+          success: fallbackSuccess,
+          data: fallbackResult.data || null,
+          error: fallbackSuccess ? null : fallbackResult.error || sendTemplateResult.error || null,
+          channel,
+          deliveryMode: fallbackSuccess ? 'text' : preferredMessageType,
+          fallbackUsed: true,
+          fallbackReason: sendTemplateResult.error || null
+        };
+      }
+
+      await updateLogEntry(sendTemplateResult, {
+        deliveryMode: 'template',
+        fallbackUsed: false
+      });
+
       return {
-        success: Boolean(sendResult.success),
-        data: sendResult.data || null,
-        error: sendResult.error || null,
-        channel
+        success: false,
+        data: sendTemplateResult.data || null,
+        error: sendTemplateResult.error || null,
+        channel,
+        deliveryMode: 'template',
+        fallbackUsed: false
       };
     };
 
@@ -531,7 +612,8 @@ class AppointmentBookingService {
     }
 
     return {
-      success: results.every((result) => result.success),
+      success: results.length > 0 ? results.some((result) => result.success) : false,
+      partialFailure: results.some((result) => !result.success) && results.some((result) => result.success),
       results
     };
   }

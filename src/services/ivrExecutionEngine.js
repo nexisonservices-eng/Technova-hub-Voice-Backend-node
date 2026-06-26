@@ -1064,6 +1064,13 @@ class IVRExecutionEngine {
         return response.toString();
       }
 
+      if (result.partialFailure) {
+        logger.warn(
+          `WhatsApp notify completed with partial failure for node ${node?.id || 'unknown'}:`,
+          JSON.stringify(result.results || [])
+        );
+      }
+
       if (callSid) {
         ivrWorkflowEngine.setVariable(callSid, 'booking.notificationsSent', true);
       }
