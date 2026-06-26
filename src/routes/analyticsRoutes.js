@@ -1,7 +1,6 @@
 import express from 'express';
 import analyticsController from '../controllers/analyticsController.js';
 import { authenticate } from '../middleware/auth.js';
-import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 
 const router = express.Router();
 
@@ -10,28 +9,28 @@ const router = express.Router();
  * @desc    Get comprehensive inbound call analytics
  * @access  Private
  */
-router.get('/inbound', authenticate, resolveUserTwilioContext, analyticsController.getInboundAnalytics.bind(analyticsController));
+router.get('/inbound', authenticate, analyticsController.getInboundAnalytics.bind(analyticsController));
 
 /**
  * @route   GET /api/analytics/voice/today
  * @desc    Get unified today's voice dashboard stats
  * @access  Private
  */
-router.get('/voice/today', authenticate, resolveUserTwilioContext, analyticsController.getVoiceTodayStats.bind(analyticsController));
+router.get('/voice/today', authenticate, analyticsController.getVoiceTodayStats.bind(analyticsController));
 
 /**
  * @route   GET /api/analytics/export
  * @desc    Export analytics data as CSV
  * @access  Private
  */
-router.get('/export', authenticate, resolveUserTwilioContext, analyticsController.exportAnalytics.bind(analyticsController));
+router.get('/export', authenticate, analyticsController.exportAnalytics.bind(analyticsController));
 
 /**
  * @route   POST /api/analytics/cache/clear
  * @desc    Clear analytics cache (admin only)
  * @access  Private/Admin
  */
-router.post('/cache/clear', authenticate, resolveUserTwilioContext, (req, res) => {
+router.post('/cache/clear', authenticate, (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ success: false, error: 'Admin access required' });
   }

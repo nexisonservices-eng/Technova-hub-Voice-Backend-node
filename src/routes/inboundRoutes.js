@@ -4,7 +4,6 @@ import InboundCallController from '../controllers/inboundCallController.js';
 import inboundWebhooks from '../webhooks/inboundWebhooks.js';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import { authenticate } from '../middleware/auth.js';
-import { resolveUserTwilioContext } from '../middleware/userTwilioContext.js';
 import InboundRoutingRule from '../models/InboundRoutingRule.js';
 import Workflow from '../models/Workflow.js';
 import mongoose from 'mongoose';
@@ -85,7 +84,6 @@ router.use((req, res, next) => {
 });
 
 router.use(authenticate);
-router.use(resolveUserTwilioContext);
 router.get('/analytics', inboundCallController.getInboundAnalytics.bind(inboundCallController));
 router.get('/analytics/export', inboundCallController.exportAnalytics.bind(inboundCallController));
 router.get('/queues', inboundCallController.getQueueStatus.bind(inboundCallController));
