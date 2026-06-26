@@ -7,6 +7,17 @@ const trimOrNull = (value) => {
   return normalized ? normalized : null;
 };
 
+const LOCAL_WHATSAPP_BACKEND_URL = 'http://localhost:3001';
+const PRODUCTION_WHATSAPP_BACKEND_URL = 'https://nexion-broadcast-backend-s9av.onrender.com';
+
+const resolveBridgeBaseUrl = () => {
+  const configuredUrl = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_URL);
+  if (configuredUrl) return configuredUrl;
+  return process.env.NODE_ENV === 'production'
+    ? PRODUCTION_WHATSAPP_BACKEND_URL
+    : LOCAL_WHATSAPP_BACKEND_URL;
+};
+
 const normalizeBridgeError = (value, fallback = 'WhatsApp bridge request failed') => {
   if (!value) return fallback;
   if (typeof value === 'string') return value;
@@ -32,7 +43,7 @@ const normalizeBridgeError = (value, fallback = 'WhatsApp bridge request failed'
 
 class WhatsAppNotificationBridge {
   constructor() {
-    this.baseUrl = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_URL) || 'http://localhost:3001';
+    this.baseUrl = resolveBridgeBaseUrl();
     this.apiKey = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_API_KEY || process.env.INTERNAL_API_KEY || process.env.ADMIN_INTERNAL_API_KEY);
     this.timeoutMs = Number(process.env.WHATSAPP_BACKEND_INTERNAL_TIMEOUT_MS || 15000);
     this.notifyPath = trimOrNull(process.env.WHATSAPP_BACKEND_INTERNAL_NOTIFY_PATH) || '/internal/ivr/notify';
