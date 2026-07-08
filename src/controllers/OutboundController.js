@@ -440,7 +440,7 @@ class OutboundLocalController {
     try {
       const userId = getUserIdString(req);
       const userObjectId = getUserObjectId(req);
-      const provider = String(req.body?.provider || 'exotel').trim().toLowerCase();
+      const provider = String(req.body?.provider || 'twilio').trim().toLowerCase();
       const scheduleType = String(req.body?.scheduleType || 'immediate').trim().toLowerCase();
       const workflowId = String(req.body?.workflowId || '').trim();
       const scheduledAt = req.body?.scheduledAt || null;
@@ -717,10 +717,13 @@ class OutboundLocalController {
       });
     } catch (error) {
       logger.error('Outbound Local quick call failed:', error);
-      return res.status(500).json({
+      const statusCode = Number(error?.statusCode || error?.status || 500);
+      const isProviderSpecificError = Number.isFinite(statusCode) && statusCode !== 500;
+      return res.status(Number.isFinite(statusCode) && statusCode > 0 ? statusCode : 500).json({
         success: false,
-        message: 'Failed to initiate outbound local call',
-        error: error.message
+        message: isProviderSpecificError ? error.message : 'Failed to initiate outbound local call',
+        error: error.message,
+        details: error?.upstreamMessage || undefined
       });
     }
   }

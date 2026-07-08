@@ -54,7 +54,7 @@ const rateLimitOutboundLocal = (req, res, next) => {
 };
 
 const validateQuickCallPayload = (req, res, next) => {
-  const provider = String(req.body?.provider || 'exotel').trim().toLowerCase();
+  const provider = String(req.body?.provider || 'twilio').trim().toLowerCase();
   const from =
     provider === 'exotel'
       ? String(req.body?.from || process.env.EXOTEL_NUMBER || '').trim()
@@ -101,8 +101,11 @@ const validateQuickCallPayload = (req, res, next) => {
 };
 
 const validateBulkPayload = (req, res, next) => {
-  const provider = String(req.body?.provider || 'exotel').trim().toLowerCase();
-  const from = String(req.body?.from || process.env.EXOTEL_NUMBER || '').trim();
+  const provider = String(req.body?.provider || 'twilio').trim().toLowerCase();
+  const from =
+    provider === 'exotel'
+      ? String(req.body?.from || process.env.EXOTEL_NUMBER || '').trim()
+      : String(req.body?.from || '').trim();
   const campaignName = String(req.body?.campaignName || '').trim();
   const customMessage = String(req.body?.customMessage || req.body?.message || '').trim();
   const numbers = Array.isArray(req.body?.numbers) ? req.body.numbers : [];
