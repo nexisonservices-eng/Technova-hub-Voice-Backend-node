@@ -1040,7 +1040,7 @@ class IVRExecutionEngine {
     const customerRecipient = this._replaceCurlyVariables(
       callSid,
       data.customerRecipient || data.customer_recipient || '{{callerNumber}}',
-      { callerNumber: context?.callerNumber || state?.callerNumber || state?.variables?.callerNumber || '' }
+      { callerNumber: state?.variables?.callerNumber || context?.callerNumber || state?.callerNumber || '' }
     );
     const adminRecipient = this._replaceCurlyVariables(callSid, data.adminRecipient || data.admin_recipient || '');
     const booking = {
@@ -1048,7 +1048,7 @@ class IVRExecutionEngine {
       bookingReference,
       tokenNumber: String(state?.variables?.['booking.token'] || '').trim(),
       customerName: String(state?.variables?.['customerName'] || state?.variables?.callerName || '').trim(),
-      customerPhone: String(context?.callerNumber || state?.variables?.callerNumber || '').trim(),
+      customerPhone: String(state?.variables?.callerNumber || context?.callerNumber || '').trim(),
       slotLabel: String(state?.variables?.['booking.selectedSlotLabel'] || '').trim(),
       slotDate: String(state?.variables?.['booking.slotDate'] || '').trim(),
       slotKey: String(state?.variables?.['booking.selectedSlotKey'] || '').trim()
@@ -1101,7 +1101,7 @@ class IVRExecutionEngine {
         callSid,
         data.successText ||
           data.messageText ||
-          'Your booking notification has been sent.'
+          'Your WhatsApp notification request has been submitted.'
       );
       if (successText) {
         response.say({ voice, language }, successText);

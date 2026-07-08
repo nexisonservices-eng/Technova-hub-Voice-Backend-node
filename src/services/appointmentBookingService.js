@@ -544,7 +544,10 @@ class AppointmentBookingService {
         const metaMessage = Array.isArray(sendResult?.data?.messages)
           ? sendResult.data.messages[0] || null
           : null;
-        logEntry.status = sendResult.success ? 'sent' : 'failed';
+        const providerStatus = String(metaMessage?.message_status || '').trim().toLowerCase();
+        logEntry.status = sendResult.success
+          ? (providerStatus === 'accepted' ? 'accepted' : 'sent')
+          : 'failed';
         logEntry.providerMessageId = String(providerMessageId || '').trim();
         logEntry.errorMessage = sendResult.success ? '' : normalizeErrorMessage(sendResult.error);
         logEntry.payload = {

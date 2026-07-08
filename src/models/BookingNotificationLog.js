@@ -47,7 +47,7 @@ const bookingNotificationLogSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'sent', 'delivered', 'read', 'failed'],
+      enum: ['pending', 'accepted', 'sent', 'delivered', 'read', 'failed'],
       default: 'pending',
       index: true
     },

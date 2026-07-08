@@ -39,7 +39,7 @@ const requireInternalApiKey = (req, res, next) => {
 
 const normalizeStatus = (status) => {
   const normalized = String(status || '').trim().toLowerCase();
-  if (['sent', 'delivered', 'read', 'failed'].includes(normalized)) {
+  if (['accepted', 'sent', 'delivered', 'read', 'failed'].includes(normalized)) {
     return normalized;
   }
   return '';
