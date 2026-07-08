@@ -12,15 +12,6 @@ class ExotelService {
     this.rotationCursor = 0;
   }
 
-  normalizeBaseUrl(value = '') {
-    const trimmed = String(value || '').trim().replace(/\/+$/, '');
-    if (!trimmed) return '';
-    if (/^https?:\/\//i.test(trimmed)) {
-      return trimmed.replace(/\/+$/, '');
-    }
-    return `https://${trimmed}`;
-  }
-
   isConfigured() {
     return Boolean(
       this.apiKey &&
@@ -45,10 +36,7 @@ class ExotelService {
   }
 
   buildConnectUrl() {
-    const baseUrl =
-      this.normalizeBaseUrl(process.env.EXOTEL_API_BASE_URL || process.env.EXOTEL_BASE_URL || this.subdomain) ||
-      'https://api.exotel.com';
-    return `${baseUrl}/v1/Accounts/${this.accountSid}/Calls/connect`;
+    return `https://${this.subdomain}/v1/Accounts/${this.accountSid}/Calls/connect.json`;
   }
 
   getWebhookUrl() {
@@ -183,35 +171,16 @@ class ExotelService {
       payload.append('CustomField', JSON.stringify(appParams));
     }
 
-    let response;
-    try {
-      response = await axios.post(this.buildConnectUrl(), payload, {
-        auth: {
-          username: this.apiKey,
-          password: this.apiToken
-        },
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        },
-        timeout: Number(process.env.EXOTEL_API_TIMEOUT_MS || 15000)
-      });
-    } catch (error) {
-      const status = Number(error?.response?.status || 0);
-      const responseBody = error?.response?.data || null;
-      const responseMessage =
-        String(responseBody?.message || responseBody?.error || responseBody?.Message || responseBody?.Error || '').trim();
-      const normalizedMessage = responseMessage || String(error?.message || 'Exotel request failed').trim();
-      const authFailure = status === 401 || status === 403 || /authenticate/i.test(normalizedMessage);
-      const serviceError = new Error(
-        authFailure
-          ? 'Exotel authentication failed. Verify EXOTEL_API_KEY, EXOTEL_API_TOKEN, EXOTEL_ACCOUNT_SID, and EXOTEL_SUBDOMAIN.'
-          : `Exotel request failed${status ? ` with status ${status}` : ''}: ${normalizedMessage}`
-      );
-      serviceError.statusCode = authFailure ? 502 : (status || 500);
-      serviceError.responseBody = responseBody;
-      serviceError.upstreamMessage = normalizedMessage;
-      throw serviceError;
-    }
+    const response = await axios.post(this.buildConnectUrl(), payload, {
+      auth: {
+        username: this.apiKey,
+        password: this.apiToken
+      },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: Number(process.env.EXOTEL_API_TIMEOUT_MS || 15000)
+    });
 
     const callData = response?.data?.Call || response?.data?.call || {};
     const callSid = callData?.Sid || callData?.sid || callData?.CallSid || callData?.call_sid;
