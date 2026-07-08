@@ -104,7 +104,10 @@ router.post('/outbound-local/workflow/start/:workflowId', verifyTwilioRequest, a
       return res.status(400).type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Workflow start node missing.</Say><Hangup/></Response>');
     }
 
-    await ivrWorkflowEngine.startExecution(workflow._id, CallSid, From, To, workflow.createdBy || null);
+    // For outbound/test IVR calls, Twilio sends From as the voice number and
+    // To as the customer. Keep callerNumber aligned with the IVR placeholders
+    // used by booking/WhatsApp nodes, where callerNumber means customer phone.
+    await ivrWorkflowEngine.startExecution(workflow._id, CallSid, To, From, workflow.createdBy || null);
     await outboundCampaignService.annotateExecution(CallSid, {
       campaignId: String(req.query?.campaignId || ''),
       campaignContactId: String(req.query?.contactId || ''),

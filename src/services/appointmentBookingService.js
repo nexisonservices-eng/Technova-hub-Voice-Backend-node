@@ -541,11 +541,17 @@ class AppointmentBookingService {
           sendResult?.data?.messages?.[0]?.id ||
           sendResult?.data?.messageId ||
           '';
+        const metaMessage = Array.isArray(sendResult?.data?.messages)
+          ? sendResult.data.messages[0] || null
+          : null;
         logEntry.status = sendResult.success ? 'sent' : 'failed';
         logEntry.providerMessageId = String(providerMessageId || '').trim();
         logEntry.errorMessage = sendResult.success ? '' : normalizeErrorMessage(sendResult.error);
         logEntry.payload = {
           ...payload,
+          providerMessageId: String(providerMessageId || '').trim(),
+          providerResponse: sendResult?.data || null,
+          metaMessageStatus: metaMessage?.message_status || '',
           ...extraPayload
         };
         await logEntry.save();
