@@ -896,7 +896,9 @@ class IVRWorkflowEngine extends EventEmitter {
                     'promptText',
                     'offerText',
                     'customerMessageText',
+                    'customer_message_text',
                     'adminMessageText',
+                    'admin_message_text',
                     'successText',
                     'announcementText'
                 ];

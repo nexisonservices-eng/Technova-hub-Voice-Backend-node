@@ -736,8 +736,12 @@ class IVRExecutionEngine {
       } else {
         gather.say({ voice, language }, textToPlay);
       }
-      // Gather is non-blocking in TwiML, it will repeat if no input
-      // If we want to move to next node ON TIMEOUT after wait, we need to handle it in handleUserInput
+      // If the caller does not press a digit, Twilio continues with the TwiML
+      // after <Gather>. Continue the configured route instead of leaving the
+      // workflow open until the call status callback closes it.
+      this._appendNextStep(response, node.id, config.edges, config._id, 'timeout') ||
+        this._appendNextStep(response, node.id, config.edges, config._id, 'default') ||
+        this._appendNextStep(response, node.id, config.edges, config._id);
     } else {
       // Handle Playback mode (TTS vs Upload)
       if (hasUploadAudio) {

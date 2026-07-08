@@ -479,16 +479,28 @@ class AppointmentBookingService {
     const adminTemplateName = toTrimmedString(node?.data?.adminTemplateName || node?.data?.admin_template_name || '');
     const customerText = toTrimmedString(
       node?.data?.customerMessageText ||
+      node?.data?.customer_message_text ||
       node?.data?.customerText ||
       `Your booking for ${booking.slotLabel} is confirmed. Reference: ${booking.bookingReference}.`
     );
     const adminText = toTrimmedString(
       node?.data?.adminMessageText ||
+      node?.data?.admin_message_text ||
       node?.data?.adminText ||
       `New booking confirmed for ${booking.customerName || booking.customerPhone || 'a customer'} at ${booking.slotLabel}.`
     );
-    const customerLanguage = toTrimmedString(node?.data?.customerTemplateLanguage || node?.data?.customer_language || 'en_US') || 'en_US';
-    const adminLanguage = toTrimmedString(node?.data?.adminTemplateLanguage || node?.data?.admin_language || 'en_US') || 'en_US';
+    const customerLanguage = toTrimmedString(
+      node?.data?.customerTemplateLanguage ||
+      node?.data?.customer_template_language ||
+      node?.data?.customer_language ||
+      'en_US'
+    ) || 'en_US';
+    const adminLanguage = toTrimmedString(
+      node?.data?.adminTemplateLanguage ||
+      node?.data?.admin_template_language ||
+      node?.data?.admin_language ||
+      'en_US'
+    ) || 'en_US';
 
     const results = [];
     const sendTarget = async (channel, recipient, templateName, language, text, variables) => {
