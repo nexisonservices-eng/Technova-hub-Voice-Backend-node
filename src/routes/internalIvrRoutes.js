@@ -10,6 +10,16 @@ const trimOrNull = (value) => {
   return normalized.length > 0 ? normalized : null;
 };
 
+const describeInternalRequest = (req) => ({
+  method: req.method,
+  path: req.originalUrl,
+  ip: req.ip,
+  forwardedFor: trimOrNull(req.headers['x-forwarded-for']),
+  userAgent: trimOrNull(req.headers['user-agent']),
+  requestId: trimOrNull(req.headers['x-request-id']),
+  contentType: trimOrNull(req.headers['content-type'])
+});
+
 const requireInternalApiKey = (req, res, next) => {
   const expectedKeys = [
     process.env.INTERNAL_API_KEY,
@@ -21,6 +31,9 @@ const requireInternalApiKey = (req, res, next) => {
   const provided = trimOrNull(req.headers['x-internal-api-key']);
 
   if (expectedKeys.length === 0) {
+    logger.warn('Internal IVR request rejected because API key is not configured', {
+      ...describeInternalRequest(req)
+    });
     return res.status(503).json({
       success: false,
       error: 'Internal IVR endpoint is not configured'
@@ -28,6 +41,10 @@ const requireInternalApiKey = (req, res, next) => {
   }
 
   if (!provided || !expectedKeys.includes(provided)) {
+    logger.warn('Internal IVR request rejected because API key is missing or invalid', {
+      ...describeInternalRequest(req),
+      providedKey: provided ? `${provided.slice(0, 4)}***${provided.slice(-4)}` : ''
+    });
     return res.status(401).json({
       success: false,
       error: 'Unauthorized internal request'
@@ -45,6 +62,13 @@ const normalizeStatus = (status) => {
   return '';
 };
 
+router.use((req, res, next) => {
+  logger.info('Internal IVR request received', {
+    ...describeInternalRequest(req)
+  });
+  return next();
+});
+
 router.post('/notification-status', requireInternalApiKey, async (req, res) => {
   try {
     const providerMessageId = trimOrNull(req.body?.providerMessageId || req.body?.messageId);
@@ -53,6 +77,12 @@ router.post('/notification-status', requireInternalApiKey, async (req, res) => {
     const raw = req.body?.raw || req.body?.statusData || {};
 
     if (!providerMessageId || !status) {
+      logger.warn('Internal IVR notification-status rejected due to invalid payload', {
+        ...describeInternalRequest(req),
+        providerMessageId: providerMessageId || '',
+        status: status || '',
+        rawBody: req.body || null
+      });
       return res.status(400).json({
         success: false,
         error: 'providerMessageId and valid status are required'

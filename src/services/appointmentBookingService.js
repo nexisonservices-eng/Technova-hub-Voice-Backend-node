@@ -518,7 +518,15 @@ class AppointmentBookingService {
         requestedTemplateName: normalizedTemplateName,
         language,
         variables: normalizedVariables,
-        text: normalizedText
+        text: normalizedText,
+        metadata: {
+          bookingId: String(booking?._id || '').trim(),
+          bookingReference: String(booking?.bookingReference || '').trim(),
+          nodeId: String(node?.id || '').trim(),
+          workflowId: String(workflow?._id || '').trim(),
+          recipientChannel: channel,
+          requestKey: `${String(workflow?._id || '').trim()}:${String(booking?._id || '').trim()}:${channel}:${normalizedTemplateName || 'text'}`
+        }
       };
 
       const logEntry = await this.sendNotificationLog({
@@ -628,26 +636,23 @@ class AppointmentBookingService {
       });
     }
 
-    if (sendJobs.length > 0) {
-      const settledResults = await Promise.allSettled(sendJobs.map((job) => job.promise));
-      settledResults.forEach((entry, index) => {
-        const channel = sendJobs[index]?.channel || (index === 0 && customerRecipient ? 'customer' : 'admin');
-        if (entry.status === 'fulfilled') {
-          results.push({
-            ...entry.value,
-            channel: entry.value?.channel || channel
-          });
-          return;
-        }
+    for (const job of sendJobs) {
+      try {
+        const value = await job.promise;
+        results.push({
+          ...value,
+          channel: value?.channel || job.channel
+        });
+      } catch (error) {
         results.push({
           success: false,
           data: null,
-          error: normalizeErrorMessage(entry.reason),
-          channel,
+          error: normalizeErrorMessage(error),
+          channel: job.channel,
           deliveryMode: 'template',
           fallbackUsed: false
         });
-      });
+      }
     }
 
     if (results.length === 0) {

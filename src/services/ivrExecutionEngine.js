@@ -4,6 +4,7 @@ import logger from '../utils/logger.js';
 import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import emailService from './emailService.js';
 import appointmentBookingService from './appointmentBookingService.js';
+import whatsappNotificationBridge from './whatsappNotificationBridge.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -148,9 +149,44 @@ class IVRExecutionEngine {
 
   _resolveContactMethod(contactMethod = '') {
     const normalized = String(contactMethod || '').trim().toLowerCase();
-    if (normalized === 'email') return { sms: false, email: true };
-    if (normalized === 'both') return { sms: true, email: true };
-    return { sms: true, email: false }; // default sms
+    if (normalized === 'email') return { sms: false, email: true, whatsapp: false };
+    if (normalized === 'both') return { sms: true, email: true, whatsapp: false };
+    if (normalized === 'whatsapp') return { sms: false, email: false, whatsapp: true };
+    return { sms: true, email: false, whatsapp: false }; // default sms
+  }
+
+  async _sendWhatsAppEndNotification({
+    context = {},
+    config = {},
+    node = {},
+    recipient = '',
+    text = '',
+    event = 'call_end_message'
+  } = {}) {
+    const normalizedRecipient = String(recipient || '').trim();
+    const normalizedText = String(text || '').trim();
+
+    if (!normalizedRecipient || !normalizedText) {
+      return { success: false, error: 'Recipient or message missing' };
+    }
+
+    const payload = {
+      userId: String(config?.createdBy || config?.settings?.createdBy || context?.userId || '').trim(),
+      companyId: String(config?.companyId || config?.settings?.companyId || '').trim() || null,
+      recipient: normalizedRecipient,
+      messageType: 'text',
+      templateName: '',
+      requestedTemplateName: '',
+      language: String(node?.data?.language || config?.settings?.language || 'en_US').trim() || 'en_US',
+      variables: [],
+      text: normalizedText,
+      metadata: {
+        callSid: context?.callSid || '',
+        event
+      }
+    };
+
+    return whatsappNotificationBridge.sendNotification(payload);
   }
 
 
@@ -426,7 +462,7 @@ class IVRExecutionEngine {
     const sendReceipt = this._toBoolean(data.sendReceipt || data.send_receipt, false);
     const logCall = this._toBoolean(data.logCall || data.log_data, false);
     const contactMethod = data.contactMethod || data.contact_method || 'sms';
-    const { sms: sendSms, email: sendEmail } = this._resolveContactMethod(contactMethod);
+    const { sms: sendSms, email: sendEmail, whatsapp: sendWhatsapp } = this._resolveContactMethod(contactMethod);
     const callerNumber = context?.callerNumber || context?.variables?.callerNumber || '';
     const callerEmail = context?.variables?.callerEmail || context?.variables?.email || '';
     const isSmtpConfigured = Boolean(
@@ -482,11 +518,22 @@ class IVRExecutionEngine {
     }
 
     if (sendSurvey) {
-      if (sendSms && callerNumber) {
-        response.sms(
-          'Thanks for contacting us. Please rate your experience: reply with a number from 1 to 5.',
-          { to: callerNumber }
-        );
+      const surveyMessage = 'Thanks for contacting us. Please rate your experience: reply with a number from 1 to 5.';
+      if (sendWhatsapp && callerNumber) {
+        const surveyResult = await this._sendWhatsAppEndNotification({
+          context,
+          config,
+          node,
+          recipient: callerNumber,
+          text: surveyMessage,
+          event: 'survey_whatsapp'
+        });
+        actionNotes.push(surveyResult.success ? 'survey_whatsapp' : `survey_whatsapp_${surveyResult.error || 'failed'}`);
+        if (!surveyResult.success) {
+          logger.warn(`Survey WhatsApp was not sent for ${context?.callSid || 'unknown_call'}: ${surveyResult.error || 'unknown'}`);
+        }
+      } else if (sendSms && callerNumber) {
+        response.sms(surveyMessage, { to: callerNumber });
         actionNotes.push('survey_sms');
       }
       if (sendEmail) {
@@ -512,11 +559,22 @@ class IVRExecutionEngine {
     }
 
     if (sendReceipt) {
-      if (sendSms && callerNumber) {
-        response.sms(
-          'Your call has ended successfully. Thank you for choosing our service.',
-          { to: callerNumber }
-        );
+      const receiptMessage = 'Your call has ended successfully. Thank you for choosing our service.';
+      if (sendWhatsapp && callerNumber) {
+        const receiptResult = await this._sendWhatsAppEndNotification({
+          context,
+          config,
+          node,
+          recipient: callerNumber,
+          text: receiptMessage,
+          event: 'receipt_whatsapp'
+        });
+        actionNotes.push(receiptResult.success ? 'receipt_whatsapp' : `receipt_whatsapp_${receiptResult.error || 'failed'}`);
+        if (!receiptResult.success) {
+          logger.warn(`Receipt WhatsApp was not sent for ${context?.callSid || 'unknown_call'}: ${receiptResult.error || 'unknown'}`);
+        }
+      } else if (sendSms && callerNumber) {
+        response.sms(receiptMessage, { to: callerNumber });
         actionNotes.push('receipt_sms');
       }
       if (sendEmail) {
