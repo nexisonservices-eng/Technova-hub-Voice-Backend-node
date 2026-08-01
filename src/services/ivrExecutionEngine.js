@@ -182,6 +182,10 @@ class IVRExecutionEngine {
       text: normalizedText,
       metadata: {
         callSid: context?.callSid || '',
+        requestKey: [event, context?.callSid || '', normalizedRecipient, normalizedText]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+          .join('|'),
         event
       }
     };
