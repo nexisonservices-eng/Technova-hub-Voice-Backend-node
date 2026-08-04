@@ -340,6 +340,9 @@ class AppointmentBookingService {
       }
     }
 
+    // The slot inventory is synced before reservation, so we only update an
+    // existing slot record here. No upsert keeps concurrent bookings from
+    // colliding with the old unique index behavior.
     const slotDocument = await BookingSlot.findOneAndUpdate(
       {
         workflowId: workflow._id,
@@ -373,14 +376,14 @@ class AppointmentBookingService {
       },
       {
         new: true,
-        upsert: true
+        upsert: false
       }
     );
 
     if (!slotDocument) {
       return {
         success: false,
-        error: 'Selected slot is full'
+        error: 'Selected slot is full or unavailable'
       };
     }
 

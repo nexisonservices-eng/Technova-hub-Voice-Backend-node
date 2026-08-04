@@ -73,7 +73,7 @@ const bookingSlotSchema = new mongoose.Schema(
 
 bookingSlotSchema.index(
   { workflowId: 1, nodeId: 1, slotKey: 1, slotDate: 1 },
-  { unique: true }
+  { name: 'workflowId_1_nodeId_1_slotKey_1_slotDate_1' }
 );
 bookingSlotSchema.index({ workflowId: 1, nodeId: 1, slotDate: 1, status: 1 });
 
