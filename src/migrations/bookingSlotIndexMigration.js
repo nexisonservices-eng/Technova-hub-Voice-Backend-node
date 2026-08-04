@@ -12,7 +12,7 @@ const isIndexMissingError = (error = {}) => {
     code === 86 ||
     message.includes('index not found') ||
     message.includes('not found with name') ||
-    message.includes('index')
+    message.includes('cannot find index')
   );
 };
 
