@@ -94,6 +94,8 @@ class AdminCredentialsService {
     } catch (error) {
       logger.warn('Failed to resolve admin credentials/profile', {
         path,
+        status: error?.response?.status || null,
+        data: error?.response?.data || null,
         message: error.message
       });
       return null;

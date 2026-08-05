@@ -145,7 +145,14 @@ class OutboundLocalController {
 
   async resolveTwilioContext({ userId = '', from = '' }) {
     const byUser = await adminCredentialsService.getTwilioCredentialsByUserId(userId);
-    const byPhone = from ? await adminCredentialsService.getTwilioCredentialsByPhoneNumber(from) : null;
+    const hasCompleteUserCredentials = Boolean(
+      byUser?.twilioAccountSid &&
+      byUser?.twilioAuthToken &&
+      byUser?.twilioPhoneNumber
+    );
+    const byPhone = !hasCompleteUserCredentials && from
+      ? await adminCredentialsService.getTwilioCredentialsByPhoneNumber(from)
+      : null;
     const merged = { ...(byUser || {}), ...(byPhone || {}) };
 
     const accountSid = this.getTwilioCredentialField(merged, [
