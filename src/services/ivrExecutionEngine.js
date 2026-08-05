@@ -982,6 +982,12 @@ class IVRExecutionEngine {
         state?.variables?.['booking.selectedSlotContext'] ||
         state?.variables?.['booking.selectedSlotData'] ||
         null;
+      const selectedSlotSourceNodeId = String(
+        executionSelectedSlot?.sourceNodeId ||
+        state?.variables?.['booking.selectedSlotSourceNodeId'] ||
+        state?.variables?.['booking.selectedSlotNodeId'] ||
+        ''
+      ).trim();
       const companyId = String(executionSelectedSlot?.companyId || state?.context?.companyId || settings.companyId || '').trim() || null;
       const selectedSlotId = String(
         executionSelectedSlot?.slotId ||
@@ -1061,16 +1067,17 @@ class IVRExecutionEngine {
         context: bookingContext,
         preventDuplicates: this._toBoolean(data.preventDuplicates ?? data.prevent_duplicates, true),
         slot: {
-          slotId: selectedSlotId,
-          key: selectedSlot.slotKey,
-          label: selectedSlot.slotLabel || selectedSlot.slotKey,
-          startTime: selectedSlot.slotStart,
-          endTime: selectedSlot.slotEnd,
-          capacity: selectedSlot.capacity,
-          digit: selectedSlot?.metadata?.digit,
-          order: selectedSlot?.metadata?.order,
-          metadata: selectedSlot?.metadata || {}
-        }
+        slotId: selectedSlotId,
+        key: selectedSlot.slotKey,
+        label: selectedSlot.slotLabel || selectedSlot.slotKey,
+        startTime: selectedSlot.slotStart,
+        endTime: selectedSlot.slotEnd,
+        capacity: selectedSlot.capacity,
+        digit: selectedSlot?.metadata?.digit,
+        order: selectedSlot?.metadata?.order,
+        sourceNodeId: selectedSlotSourceNodeId,
+        metadata: selectedSlot?.metadata || {}
+      }
       });
 
       if (!reservation.success) {

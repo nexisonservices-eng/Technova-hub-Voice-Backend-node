@@ -347,6 +347,7 @@ class AppointmentBookingService {
       bookedCount,
       slotLabel: toTrimmedString(raw.slotLabel || raw.label || ''),
       metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+      sourceNodeId: toTrimmedString(raw.sourceNodeId || raw.nodeId || raw.sourceNode || ''),
       companyId: toTrimmedString(raw.companyId || this.resolveBookingCompanyId({ workflow, node, context }) || ''),
       userId: toTrimmedString(raw.userId || context?.userId || workflow?.createdBy || '')
     };
@@ -420,6 +421,7 @@ class AppointmentBookingService {
     const slotDate = selectedSlot.slotDate;
     const slotCapacity = toPositiveInt(selectedSlot.capacity, 1);
     const companyId = this.resolveBookingCompanyId({ workflow, node, context }) || selectedSlot.companyId || null;
+    const slotNodeId = toTrimmedString(selectedSlot.sourceNodeId || node.id || '');
     const customer = this.getCallerProfile(context);
     const session = await mongoose.startSession();
 
@@ -449,7 +451,7 @@ class AppointmentBookingService {
 
         const slotFilter = {
           workflowId: workflow._id,
-          nodeId: node.id,
+          nodeId: slotNodeId,
           _id: selectedSlot.slotId,
           status: { $ne: 'disabled' },
           bookedCount: { $lt: slotCapacity }
@@ -472,12 +474,12 @@ class AppointmentBookingService {
                 order: selectedSlot.metadata?.order ?? 0
               }
             },
-            $setOnInsert: {
-              workflowId: workflow._id,
-              nodeId: node.id,
-              slotKey: selectedSlot.slotKey,
-              slotDate
-            }
+              $setOnInsert: {
+                workflowId: workflow._id,
+                nodeId: slotNodeId,
+                slotKey: selectedSlot.slotKey,
+                slotDate
+              }
           },
           {
             new: true,

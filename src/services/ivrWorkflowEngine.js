@@ -1221,6 +1221,8 @@ class IVRWorkflowEngine extends EventEmitter {
                         active: slot.status !== 'disabled',
                         companyId,
                         userId,
+                        sourceNodeId: String(currentNode?.id || '').trim(),
+                        sourceNodeType: String(currentNode?.type || '').trim(),
                         slotIndex: Number.isInteger(index) ? index + 1 : null,
                         metadata: slot?.metadata || {}
                     };
@@ -1236,6 +1238,7 @@ class IVRWorkflowEngine extends EventEmitter {
                     setBookingVariable('booking.selectedSlotTimezone', slotData.timezone);
                     setBookingVariable('booking.selectedSlotCapacity', slotData.capacity);
                     setBookingVariable('booking.selectedSlotBookedCount', slotData.bookedCount);
+                    setBookingVariable('booking.selectedSlotSourceNodeId', slotData.sourceNodeId);
                     setBookingVariable('booking.available', true);
                     setBookingVariable('booking.selectedSlotData', slotData);
                     setBookingVariable('booking.selectedSlotContext', slotData);
