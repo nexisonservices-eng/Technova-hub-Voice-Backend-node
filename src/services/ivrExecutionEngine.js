@@ -58,7 +58,7 @@ class IVRExecutionEngine {
       );
       const endHour = this._toNumber(
         nodeData.businessEndHour ?? nodeData.business_end_hour ?? settings.businessEndHour,
-        18
+        19
       );
       const timezone = String(
         nodeData.businessTimezone ?? nodeData.business_timezone ?? settings.businessTimezone ?? settings.timezone ?? ''
