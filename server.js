@@ -12,7 +12,17 @@ logger.info('Starting Technovo Voice Backend...');
 
 // Create HTTP server first so lightweight routes like /health are reachable immediately.
 logger.info('Creating HTTP server...');
-const server = http.createServer(app);
+const server = http.createServer((req, res) => {
+  if (req.method === 'GET' && (req.url === '/health' || req.url?.startsWith('/health?'))) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Length', '2');
+    res.end('OK');
+    return;
+  }
+
+  app(req, res);
+});
 
 // Initialize Socket.IO.
 logger.info('Initializing Socket.IO...');
