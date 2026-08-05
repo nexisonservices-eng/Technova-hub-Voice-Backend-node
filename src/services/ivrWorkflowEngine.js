@@ -1136,96 +1136,179 @@ class IVRWorkflowEngine extends EventEmitter {
 
             try {
             if (nodeType === 'availability_check') {
+                const configuredSlots = appointmentBookingService.getSlotDefinitions(currentNode);
                 const slotSnapshot = await appointmentBookingService.getSlotSnapshot(currentNode, workflow, state || {});
-                const selectedSlot = appointmentBookingService.resolveSlotFromInput(currentNode, workflow, state || {}, userInput);
+                const timezone = appointmentBookingService.getWorkflowTimezone(currentNode, workflow);
+                const companyId = appointmentBookingService.resolveBookingCompanyId({
+                    workflow,
+                    node: currentNode,
+                    context: state || {}
+                });
+                const userId = String(state?.userId || workflow?.createdBy || '').trim() || null;
                 const selectionVariable = String(
                     currentNode?.data?.selectionVariable ||
                     currentNode?.data?.selection_variable ||
                     'booking.selectedSlotKey'
                 ).trim() || 'booking.selectedSlotKey';
-                const yesLike = new Set(['1', 'y', 'yes', 'true', 'confirm', 'confirmed', 'ok', 'okay']);
-                const noLike = new Set(['2', 'n', 'no', 'false', 'cancel', 'cancelled', 'canceled']);
-
                 const routeToFallback = (preferredHandles = ['full', 'fallback', 'no_match', 'default']) =>
                     redirectForHandles(preferredHandles) || endNodeId;
-                const persistSelectedSlot = (slot = null) => {
+                const resolveDateKey = (slot = null) =>
+                    String(slot?.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {})).trim();
+                const resolveTimeValue = (slot = null) =>
+                    String(slot?.slotStart || slot?.startTime || '').trim();
+                const resolveSlotId = (slot = null) =>
+                    String(slot?._id || slot?.slotId || slot?.slotKey || '').trim() || null;
+                const availableSlots = appointmentBookingService.getAvailableSlots(slotSnapshot);
+                const selection = appointmentBookingService.resolveAvailableSlotByInput(slotSnapshot, userInput);
+                const selectedSlot = selection.selectedSlot;
+                const selectedInput = selection.selectedInput;
+                const selectedIndex = selection.selectedIndex;
+                const selectedDate = resolveDateKey(selectedSlot);
+                const selectedTime = resolveTimeValue(selectedSlot);
+                const slotId = resolveSlotId(selectedSlot);
+                const logPayload = {
+                    selectedInput,
+                    selectedIndex,
+                    selectedDate,
+                    selectedTime,
+                    slotId,
+                    companyId,
+                    userId,
+                    workflowId: String(workflow?._id || '').trim() || null,
+                    timezone,
+                    availableSlotCount: availableSlots.length,
+                    availableSlots: availableSlots.map((slot, index) => ({
+                        index: index + 1,
+                        slotId: resolveSlotId(slot),
+                        slotKey: String(slot?.slotKey || '').trim(),
+                        slotLabel: String(slot?.slotLabel || '').trim(),
+                        slotDate: String(slot?.slotDate || '').trim(),
+                        slotStart: String(slot?.slotStart || '').trim(),
+                        slotEnd: String(slot?.slotEnd || '').trim(),
+                        timezone: String(slot?.timezone || timezone || '').trim(),
+                        capacity: Number(slot?.capacity ?? 1),
+                        bookedCount: Number(slot?.bookedCount ?? 0),
+                        availableSeats: Number(slot?.availableSeats ?? 0)
+                    }))
+                };
+                const logRejection = (reason, extra = {}, preferredHandles = ['full', 'fallback', 'no_match', 'default']) => {
+                    logger.info(reason, { ...logPayload, ...extra });
+                    setBookingVariable('booking.selectionError', reason);
+                    markInputReason('full');
+                    return routeToFallback(preferredHandles);
+                };
+                const logInvalid = (reason = 'Invalid keypad input', preferredHandles = ['invalid', 'no_match', 'default', 'fallback']) => {
+                    logger.info(reason, logPayload);
+                    setBookingVariable('booking.selectionError', reason);
+                    markInputReason('invalid');
+                    if (attemptCount < maxRetries) return currentNodeId;
+                    return routeToFallback(preferredHandles);
+                };
+                const persistSelectedSlot = (slot = null, index = null) => {
                     if (!slot) return;
                     const slotData = {
-                        key: slot.slotKey || slot.key || '',
-                        label: slot.slotLabel || slot.label || '',
-                        startTime: slot.slotStart || slot.startTime || '',
-                        endTime: slot.slotEnd || slot.endTime || '',
-                        capacity: slot.capacity ?? 1,
-                        bookedCount: slot.bookedCount ?? slot.booked_count ?? 0,
-                        digit: slot?.metadata?.digit || slot.digit || '',
-                        order: slot?.metadata?.order ?? slot.order ?? 0,
+                        slotId: resolveSlotId(slot),
+                        slotKey: String(slot.slotKey || slot.key || '').trim(),
+                        label: String(slot.slotLabel || slot.label || '').trim(),
+                        date: resolveDateKey(slot),
+                        startTime: resolveTimeValue(slot),
+                        endTime: String(slot?.slotEnd || slot?.endTime || '').trim(),
+                        timezone: String(slot?.timezone || timezone || '').trim(),
+                        capacity: Number(slot?.capacity ?? 1),
+                        bookedCount: Number(slot?.bookedCount ?? slot?.booked_count ?? 0),
+                        digit: String(slot?.metadata?.digit || slot?.digit || '').trim(),
+                        order: Number(slot?.metadata?.order ?? slot?.order ?? 0),
                         active: slot.status !== 'disabled',
-                        slotDate: slot.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}),
+                        companyId,
+                        userId,
+                        slotIndex: Number.isInteger(index) ? index + 1 : null,
                         metadata: slot?.metadata || {}
                     };
+                    state.context = state.context || {};
+                    state.context.companyId = companyId;
+                    state.context.selectedSlot = slotData;
+                    setBookingVariable(selectionVariable, slotData.slotKey);
+                    setBookingVariable('booking.selectedSlotKey', slotData.slotKey);
+                    setBookingVariable('booking.selectedSlotLabel', slotData.label);
+                    setBookingVariable('booking.selectedSlotDate', slotData.date);
+                    setBookingVariable('booking.selectedSlotStartTime', slotData.startTime);
+                    setBookingVariable('booking.selectedSlotEndTime', slotData.endTime);
+                    setBookingVariable('booking.selectedSlotTimezone', slotData.timezone);
+                    setBookingVariable('booking.selectedSlotCapacity', slotData.capacity);
+                    setBookingVariable('booking.selectedSlotBookedCount', slotData.bookedCount);
+                    setBookingVariable('booking.available', true);
                     setBookingVariable('booking.selectedSlotData', slotData);
+                    setBookingVariable('booking.selectedSlotContext', slotData);
                 };
+                const businessStartHour = Number(currentNode?.data?.businessStartHour ?? currentNode?.data?.business_start_hour);
+                const businessEndHour = Number(currentNode?.data?.businessEndHour ?? currentNode?.data?.business_end_hour);
+                const hasBusinessHours = Number.isFinite(businessStartHour) && Number.isFinite(businessEndHour);
+                const selectedHour = (() => {
+                    const match = String(selectedTime || '').match(/^(\d{1,2})/);
+                    const hour = Number(match?.[1]);
+                    return Number.isFinite(hour) ? hour : null;
+                })();
 
-                if (slotSnapshot.length === 0) {
-                    markInputReason('full');
-                    return routeToFallback();
+                logger.info('Checking IVR slot availability', {
+                    ...logPayload,
+                    selectionReason: selection.reason,
+                    configuredSlotCount: configuredSlots.length
+                });
+
+                if (!companyId) {
+                    return logRejection('Company ID missing', {}, ['failure', 'fallback', 'no_match', 'default']);
+                }
+
+                if (configuredSlots.length === 0) {
+                    return logRejection('No slots configured', {}, ['full', 'fallback', 'no_match', 'default']);
+                }
+
+                if (!selectedInput) {
+                    return logInvalid('Invalid keypad input');
+                }
+
+                if (selection.reason === 'invalid_keypad_input') {
+                    return logInvalid('Invalid keypad input');
+                }
+
+                if (selection.reason === 'slot_mapping_not_found') {
+                    return logInvalid('Slot mapping not found');
+                }
+
+                if (selection.reason === 'slot_already_booked') {
+                    return logRejection('Slot already booked', {}, ['full', 'fallback', 'no_match', 'default']);
                 }
 
                 if (!selectedSlot) {
-                    if (yesLike.has(normalizedUserInputLower)) {
-                        const firstAvailable = slotSnapshot.find((slot) => slot?.isAvailable) || null;
-                        if (firstAvailable) {
-                            setBookingVariable(selectionVariable, firstAvailable.slotKey);
-                            setBookingVariable('booking.selectedSlotKey', firstAvailable.slotKey);
-                            setBookingVariable('booking.selectedSlotLabel', firstAvailable.slotLabel);
-                            setBookingVariable('booking.selectedSlotDate', firstAvailable.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}));
-                            setBookingVariable('booking.selectedSlotCapacity', firstAvailable?.capacity ?? 1);
-                            setBookingVariable('booking.selectedSlotBookedCount', firstAvailable?.bookedCount ?? 0);
-                            setBookingVariable('booking.available', true);
-                            persistSelectedSlot(firstAvailable);
-                            const nextAvailableSlot = appointmentBookingService.findNextAvailableSlot(slotSnapshot);
-                            if (nextAvailableSlot) {
-                                setBookingVariable('booking.nextAvailableSlotKey', nextAvailableSlot.slotKey);
-                                setBookingVariable('booking.nextAvailableSlotLabel', nextAvailableSlot.slotLabel);
-                                setBookingVariable('booking.nextAvailableSlotData', {
-                                    key: nextAvailableSlot.slotKey,
-                                    label: nextAvailableSlot.slotLabel,
-                                    startTime: nextAvailableSlot.slotStart || '',
-                                    endTime: nextAvailableSlot.slotEnd || '',
-                                    capacity: nextAvailableSlot.capacity ?? 1,
-                                    bookedCount: nextAvailableSlot.bookedCount ?? 0,
-                                    digit: nextAvailableSlot?.metadata?.digit || '',
-                                    order: nextAvailableSlot?.metadata?.order ?? 0,
-                                    active: nextAvailableSlot.status !== 'disabled',
-                                    slotDate: nextAvailableSlot.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}),
-                                    metadata: nextAvailableSlot?.metadata || {}
-                                });
-                            }
-                            markInputReason('matched');
-                            return redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
-                        }
-                    }
-
-                    if (noLike.has(normalizedUserInputLower)) {
-                        markInputReason('full');
-                        return routeToFallback(['full', 'fallback', 'no_match', 'default']);
-                    }
-
-                    markInputReason('invalid');
-                    if (attemptCount < maxRetries) return currentNodeId;
-                    return routeToFallback(['invalid', 'full', 'fallback', 'no_match', 'default']);
+                    return logRejection('Slot mapping not found', {}, ['full', 'fallback', 'no_match', 'default']);
                 }
 
-                const matchedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === String(selectedSlot.key));
+                if (!selectedDate) {
+                    return logRejection('Date missing', {}, ['full', 'fallback', 'no_match', 'default']);
+                }
+
+                if (!selectedTime) {
+                    return logRejection('Time missing', {}, ['full', 'fallback', 'no_match', 'default']);
+                }
+
+                if (selectedSlot.timezone && timezone && selectedSlot.timezone !== timezone) {
+                    return logRejection('Timezone mismatch', { selectedSlotTimezone: selectedSlot.timezone }, ['full', 'fallback', 'no_match', 'default']);
+                }
+
+                if (hasBusinessHours && selectedHour !== null && (selectedHour < businessStartHour || selectedHour >= businessEndHour)) {
+                    return logRejection('Slot outside business hours', {
+                        businessStartHour,
+                        businessEndHour,
+                        selectedHour
+                    }, ['full', 'fallback', 'no_match', 'default']);
+                }
+
+                if (!selectedSlot.isAvailable || Number(selectedSlot.availableSeats || 0) <= 0) {
+                    return logRejection('Slot already booked', {}, ['full', 'fallback', 'no_match', 'default']);
+                }
+
+                persistSelectedSlot(selectedSlot, selectedIndex);
                 const nextAvailableSlot = appointmentBookingService.findNextAvailableSlot(slotSnapshot);
-                setBookingVariable(selectionVariable, selectedSlot.key);
-                setBookingVariable('booking.selectedSlotKey', selectedSlot.key);
-                setBookingVariable('booking.selectedSlotLabel', matchedSlot?.slotLabel || selectedSlot.label);
-                setBookingVariable('booking.selectedSlotDate', matchedSlot?.slotDate || appointmentBookingService.getDateKey(currentNode, workflow, state || {}));
-                setBookingVariable('booking.selectedSlotCapacity', matchedSlot?.capacity ?? selectedSlot.capacity ?? 1);
-                setBookingVariable('booking.selectedSlotBookedCount', matchedSlot?.bookedCount ?? 0);
-                setBookingVariable('booking.available', Boolean(matchedSlot?.isAvailable));
-                persistSelectedSlot(matchedSlot || selectedSlot);
                 if (nextAvailableSlot) {
                     setBookingVariable('booking.nextAvailableSlotKey', nextAvailableSlot.slotKey);
                     setBookingVariable('booking.nextAvailableSlotLabel', nextAvailableSlot.slotLabel);
@@ -1244,14 +1327,13 @@ class IVRWorkflowEngine extends EventEmitter {
                     });
                 }
 
-                if (matchedSlot?.isAvailable) {
-                    markInputReason('matched');
-                    const nextNode = redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
-                    return nextNode;
-                }
-
-                markInputReason('full');
-                return routeToFallback(['full', 'retry', 'no', 'false']);
+                markInputReason('matched');
+                logger.info(`Keypad input ${selectedInput} mapped to slot ${slotId || selectedSlot.slotKey || 'unknown'}`, {
+                    ...logPayload,
+                    selectedSlotId: slotId || selectedSlot.slotKey || null
+                });
+                const nextNode = redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
+                return nextNode;
             }
 
             if (nodeType === 'slot_offer') {

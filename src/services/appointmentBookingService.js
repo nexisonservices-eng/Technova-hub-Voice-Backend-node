@@ -259,6 +259,71 @@ class AppointmentBookingService {
     return orderedSlots;
   }
 
+  getAvailableSlots(slotSnapshot = []) {
+    return (slotSnapshot || []).filter((slot) => slot?.status !== 'disabled' && Number(slot.availableSeats || 0) > 0);
+  }
+
+  resolveAvailableSlotByInput(slotSnapshot = [], selectedInput = '') {
+    const availableSlots = this.getAvailableSlots(slotSnapshot);
+    const normalizedInput = toTrimmedString(selectedInput);
+    const selectedIndex = Number(normalizedInput) - 1;
+
+    if (!normalizedInput || !Number.isInteger(selectedIndex)) {
+      return {
+        availableSlots,
+        selectedInput: normalizedInput,
+        selectedIndex,
+        selectedSlot: null,
+        reason: 'invalid_keypad_input'
+      };
+    }
+
+    if (selectedIndex < 0 || selectedIndex >= availableSlots.length) {
+      return {
+        availableSlots,
+        selectedInput: normalizedInput,
+        selectedIndex,
+        selectedSlot: null,
+        reason: availableSlots.length === 0 ? 'slot_already_booked' : 'slot_mapping_not_found'
+      };
+    }
+
+    return {
+      availableSlots,
+      selectedInput: normalizedInput,
+      selectedIndex,
+      selectedSlot: availableSlots[selectedIndex],
+      reason: null
+    };
+  }
+
+  resolveBookingCompanyId({ workflow = {}, node = {}, context = {} } = {}) {
+    const candidates = [
+      context?.companyId,
+      context?.variables?.companyId,
+      context?.variables?.company_id,
+      context?.variables?.bookingCompanyId,
+      context?.variables?.booking_company_id,
+      context?.company_id,
+      node?.data?.companyId,
+      node?.data?.company_id,
+      workflow?.companyId,
+      workflow?.company_id,
+      workflow?.settings?.companyId,
+      workflow?.settings?.company_id,
+      workflow?.config?.companyId,
+      workflow?.config?.company_id,
+      context?.userId,
+      workflow?.createdBy
+    ];
+
+    const resolved = candidates
+      .map((value) => toTrimmedString(value))
+      .find(Boolean);
+
+    return resolved || null;
+  }
+
   resolveSlotFromInput(node = {}, workflow = {}, context = {}, userInput = '') {
     const slots = this.getSlotDefinitions(node);
     const normalizedInput = toTrimmedString(userInput).toLowerCase();
@@ -334,6 +399,7 @@ class AppointmentBookingService {
       if (duplicate) {
         return {
           success: false,
+          errorCode: 'duplicate_call',
           error: 'A booking already exists for this call',
           booking: duplicate
         };
@@ -383,6 +449,7 @@ class AppointmentBookingService {
     if (!slotDocument) {
       return {
         success: false,
+        errorCode: 'slot_unavailable',
         error: 'Selected slot is full or unavailable'
       };
     }
@@ -390,28 +457,40 @@ class AppointmentBookingService {
     const bookingCount = toDisplayCount(slotDocument.bookedCount);
     const bookingReference = this.buildBookingReference(workflow, node, slot);
     const tokenNumber = this.buildTokenNumber(node, slot, bookingCount);
-    const booking = await AppointmentBooking.create({
-      workflowId: workflow._id,
-      nodeId: node.id,
-      callSid,
-      slotKey: slot.key,
-      slotLabel: slot.label,
-      slotStart: slot.startTime || '',
-      slotEnd: slot.endTime || '',
-      slotDate,
-      timezone: this.getWorkflowTimezone(node, workflow),
-      tokenNumber,
-      bookingReference,
-      customerName: customer.customerName,
-      customerPhone: customer.customerPhone,
-      customerEmail: customer.customerEmail,
-      notes: customer.notes,
-      status: 'confirmed',
-      metadata: {
-        slot,
-        workflowPromptKey: workflow?.promptKey || null
+    let booking;
+    try {
+      booking = await AppointmentBooking.create({
+        workflowId: workflow._id,
+        nodeId: node.id,
+        callSid,
+        slotKey: slot.key,
+        slotLabel: slot.label,
+        slotStart: slot.startTime || '',
+        slotEnd: slot.endTime || '',
+        slotDate,
+        timezone: this.getWorkflowTimezone(node, workflow),
+        tokenNumber,
+        bookingReference,
+        customerName: customer.customerName,
+        customerPhone: customer.customerPhone,
+        customerEmail: customer.customerEmail,
+        notes: customer.notes,
+        status: 'confirmed',
+        metadata: {
+          slot,
+          workflowPromptKey: workflow?.promptKey || null
+        }
+      });
+    } catch (error) {
+      if (Number(error?.code) === 11000) {
+        return {
+          success: false,
+          errorCode: 'booking_conflict',
+          error: 'That slot was just booked. Please select another slot.'
+        };
       }
-    });
+      throw error;
+    }
 
     return {
       success: true,

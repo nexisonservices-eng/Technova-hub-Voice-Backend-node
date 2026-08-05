@@ -976,46 +976,33 @@ class IVRExecutionEngine {
     const customerPhoneVariable = String(data.customerPhoneVariable || data.customer_phone_variable || 'callerNumber').trim() || 'callerNumber';
     const customerEmailVariable = String(data.customerEmailVariable || data.customer_email_variable || 'customerEmail').trim() || 'customerEmail';
     const notesVariable = String(data.notesVariable || data.notes_variable || 'notes').trim() || 'notes';
-    const selectedSlotKey = String(state?.variables?.['booking.selectedSlotKey'] || '').trim();
-    const selectedSlotLabel = String(state?.variables?.['booking.selectedSlotLabel'] || '').trim();
-    const slotSnapshot = await appointmentBookingService.getSlotSnapshot(node, { _id: config._id, settings }, context);
-    const selectedSlotState = state?.variables?.['booking.selectedSlotData'] || null;
-    const nextAvailableSlotState = state?.variables?.['booking.nextAvailableSlotData'] || null;
     try {
-      let selectedSlot = slotSnapshot.find((slot) => String(slot.slotKey) === selectedSlotKey) || null;
-      if (!selectedSlot && selectedSlotState && selectedSlotKey) {
-        selectedSlot = {
-          slotKey: selectedSlotState.key || selectedSlotKey,
-          slotLabel: selectedSlotState.label || selectedSlotLabel || selectedSlotKey,
-          slotStart: selectedSlotState.startTime || '',
-          slotEnd: selectedSlotState.endTime || '',
-          capacity: selectedSlotState.capacity ?? 1,
-          bookedCount: selectedSlotState.bookedCount ?? 0,
-          status: selectedSlotState.active === false ? 'disabled' : 'available',
-          metadata: selectedSlotState.metadata || {
-            digit: selectedSlotState.digit || '',
-            order: selectedSlotState.order ?? 0
-          }
-        };
-      }
-      if (!selectedSlot && nextAvailableSlotState && selectedSlotKey) {
-        selectedSlot = {
-          slotKey: nextAvailableSlotState.key || selectedSlotKey,
-          slotLabel: nextAvailableSlotState.label || selectedSlotLabel || selectedSlotKey,
-          slotStart: nextAvailableSlotState.startTime || '',
-          slotEnd: nextAvailableSlotState.endTime || '',
-          capacity: nextAvailableSlotState.capacity ?? 1,
-          bookedCount: nextAvailableSlotState.bookedCount ?? 0,
-          status: nextAvailableSlotState.active === false ? 'disabled' : 'available',
-          metadata: nextAvailableSlotState.metadata || {
-            digit: nextAvailableSlotState.digit || '',
-            order: nextAvailableSlotState.order ?? 0
-          }
-        };
+      const executionSelectedSlot =
+        state?.context?.selectedSlot ||
+        state?.variables?.['booking.selectedSlotContext'] ||
+        state?.variables?.['booking.selectedSlotData'] ||
+        null;
+
+      if (!executionSelectedSlot) {
+        response.say({ voice, language }, 'Booking is temporarily unavailable.');
+        this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        return response.toString();
       }
 
-      if (!selectedSlot) {
-        response.say({ voice, language }, 'We could not confirm the selected slot.');
+      const selectedSlot = {
+        slotKey: String(executionSelectedSlot.slotKey || executionSelectedSlot.key || '').trim(),
+        slotLabel: String(executionSelectedSlot.slotLabel || executionSelectedSlot.label || '').trim(),
+        slotStart: String(executionSelectedSlot.startTime || executionSelectedSlot.slotStart || '').trim(),
+        slotEnd: String(executionSelectedSlot.endTime || executionSelectedSlot.slotEnd || '').trim(),
+        slotDate: String(executionSelectedSlot.date || executionSelectedSlot.slotDate || '').trim(),
+        timezone: String(executionSelectedSlot.timezone || settings.timezone || 'Asia/Kolkata').trim() || 'Asia/Kolkata',
+        capacity: Number(executionSelectedSlot.capacity ?? 1) || 1,
+        bookedCount: Number(executionSelectedSlot.bookedCount ?? 0) || 0,
+        metadata: executionSelectedSlot.metadata || {}
+      };
+
+      if (!selectedSlot.slotKey || !selectedSlot.slotDate || !selectedSlot.slotStart) {
+        response.say({ voice, language }, 'Booking is temporarily unavailable.');
         this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
         return response.toString();
       }
@@ -1043,7 +1030,7 @@ class IVRExecutionEngine {
         preventDuplicates: this._toBoolean(data.preventDuplicates ?? data.prevent_duplicates, true),
         slot: {
           key: selectedSlot.slotKey,
-          label: selectedSlotLabel || selectedSlot.slotLabel || selectedSlot.slotKey,
+          label: selectedSlot.slotLabel || selectedSlot.slotKey,
           startTime: selectedSlot.slotStart,
           endTime: selectedSlot.slotEnd,
           capacity: selectedSlot.capacity,
@@ -1054,7 +1041,15 @@ class IVRExecutionEngine {
       });
 
       if (!reservation.success) {
-        response.say({ voice, language }, reservation.error || 'Unable to reserve the selected slot.');
+        const bookingMessage =
+          reservation.errorCode === 'booking_conflict'
+            ? 'That slot was just booked. Please select another slot.'
+            : reservation.errorCode === 'duplicate_call'
+              ? 'A booking already exists for this call.'
+              : reservation.errorCode === 'slot_unavailable'
+                ? 'That slot was just booked. Please select another slot.'
+                : 'Booking is temporarily unavailable.';
+        response.say({ voice, language }, bookingMessage);
         this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
         return response.toString();
       }
@@ -1064,6 +1059,12 @@ class IVRExecutionEngine {
         ivrWorkflowEngine.setVariable(callSid, 'booking.token', reservation.booking.tokenNumber);
         ivrWorkflowEngine.setVariable(callSid, 'booking.bookingId', String(reservation.booking._id));
         ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
+        ivrWorkflowEngine.setVariable(callSid, 'booking.selectedSlotContext', {
+          ...selectedSlot,
+          slotId: String(executionSelectedSlot.slotId || executionSelectedSlot._id || selectedSlot.slotKey),
+          companyId: executionSelectedSlot.companyId || state?.context?.companyId || null,
+          userId: executionSelectedSlot.userId || state?.userId || null
+        });
       }
 
       const successText = this._replaceCurlyVariables(
