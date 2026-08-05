@@ -118,7 +118,7 @@ class InboundCallService {
     this.routingRules.set('business_hours', {
       priority: 5,
       conditions: [
-        { field: 'time', operator: 'in_hours', value: { start: 9, end: 17 } }
+        { field: 'time', operator: 'in_hours', value: { start: 9, end: 19 } }
       ],
       actions: ['ivr_main']
     });
@@ -126,7 +126,7 @@ class InboundCallService {
     this.routingRules.set('after_hours', {
       priority: 5,
       conditions: [
-        { field: 'time', operator: 'out_of_hours', value: { start: 9, end: 17 } }
+        { field: 'time', operator: 'out_of_hours', value: { start: 9, end: 19 } }
       ],
       actions: ['voicemail', 'callback_option']
     });
@@ -999,9 +999,9 @@ class InboundCallService {
     const hour = now.getHours();
     const day = now.getDay();
 
-    // Monday-Friday, 9 AM - 6 PM
+    // Monday-Friday, 9 AM - 7 PM
     const isWeekday = day >= 1 && day <= 5;
-    const isBusinessHour = hour >= 9 && hour < 18;
+    const isBusinessHour = hour >= 9 && hour < 19;
 
     return isWeekday && isBusinessHour;
   }
@@ -1011,7 +1011,7 @@ class InboundCallService {
       name: 'after_hours',
       priority: 5,
       conditions: [
-        { field: 'time', operator: 'out_of_hours', value: { start: 9, end: 17 } }
+        { field: 'time', operator: 'out_of_hours', value: { start: 9, end: 19 } }
       ],
       actions: ['voicemail', 'callback_option']
     };
