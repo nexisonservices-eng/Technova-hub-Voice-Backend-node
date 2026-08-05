@@ -1,7 +1,6 @@
 import Lead from '../models/Lead.js';
 import logger from '../utils/logger.js';
 import { emitLeadUpdate } from '../sockets/unifiedSocket.js';
-import whatsappNotificationBridge from './whatsappNotificationBridge.js';
 
 const normalizePaginationNumber = (value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) => {
     const parsed = Number(value);
@@ -10,102 +9,6 @@ const normalizePaginationNumber = (value, fallback, { min = 1, max = Number.MAX_
 };
 
 class LeadService {
-    getLeadNotificationUrl() {
-        const baseUrl = String(whatsappNotificationBridge.baseUrl || '').trim();
-        const notifyPath = String(whatsappNotificationBridge.notifyPath || '/internal/ivr/notify').trim() || '/internal/ivr/notify';
-        return `${baseUrl}${notifyPath}`;
-    }
-
-    buildLeadWhatsAppNotificationPayload(lead = {}) {
-        const customerName = String(lead?.caller?.name || '').trim();
-        const customerPhone = String(lead?.caller?.phoneNumber || '').trim();
-        const workflowId = String(lead?.workflowId || '').trim();
-        const userId = lead?.user ? String(lead.user).trim() : '';
-        const companyId = lead?.companyId ? String(lead.companyId).trim() : null;
-        const bookingDetails = lead?.bookingDetails && typeof lead.bookingDetails.toObject === 'function'
-            ? lead.bookingDetails.toObject()
-            : (lead?.bookingDetails || {});
-
-        return {
-            callSid: String(lead?.callSid || '').trim(),
-            customerName,
-            customerPhone,
-            workflowId,
-            companyId,
-            userId,
-            bookingDetails,
-            recipient: customerPhone,
-            messageType: 'text',
-            templateName: '',
-            requestedTemplateName: '',
-            language: 'en_US',
-            text: customerName
-                ? `Lead captured for ${customerName}`
-                : `Lead captured for ${customerPhone || String(lead?.callSid || '').trim()}`,
-            metadata: {
-                callSid: String(lead?.callSid || '').trim(),
-                event: 'lead_upserted',
-                requestKey: `lead-whatsapp|${String(lead?.callSid || '').trim()}`,
-                workflowId,
-                userId,
-                companyId
-            }
-        };
-    }
-
-    async sendLeadWhatsAppNotification(lead = {}) {
-        const callSid = String(lead?.callSid || '').trim();
-        const url = this.getLeadNotificationUrl();
-
-        if (!callSid) return;
-
-        if (!whatsappNotificationBridge.enabled) {
-            logger.warn('WhatsApp notification failed', {
-                callSid,
-                url,
-                status: null,
-                data: null,
-                message: whatsappNotificationBridge.configurationError || 'WhatsApp notification bridge is not configured'
-            });
-            return;
-        }
-
-        const payload = this.buildLeadWhatsAppNotificationPayload(lead);
-
-        try {
-            logger.info('Triggering WhatsApp notification', {
-                callSid,
-                url
-            });
-
-            const result = await whatsappNotificationBridge.sendNotification(payload);
-
-            if (result?.success) {
-                logger.info('WhatsApp notification sent successfully', {
-                    callSid,
-                    url
-                });
-                return;
-            }
-
-            logger.warn('WhatsApp notification failed', {
-                callSid,
-                url,
-                status: result?.status ?? null,
-                data: result?.data ?? null,
-                message: result?.error || 'WhatsApp notification failed'
-            });
-        } catch (error) {
-            logger.warn('WhatsApp notification failed', {
-                callSid,
-                url,
-                status: error?.response?.status ?? null,
-                data: error?.response?.data ?? null,
-                message: error?.message || 'WhatsApp notification failed'
-            });
-        }
-    }
-
     /**
      * Create a new lead from a call
      */
@@ -281,7 +184,6 @@ class LeadService {
             );
 
             logger.info(`Lead upserted for callSid: ${callSid}`);
-            await this.sendLeadWhatsAppNotification(lead);
             emitLeadUpdate(lead.user ? String(lead.user) : null, {
                 action: existingLead ? 'updated' : 'created',
                 lead

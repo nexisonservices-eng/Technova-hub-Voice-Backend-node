@@ -90,19 +90,8 @@ class IVRController {
     logger.info(`Call Status Update: ${CallSid} -> ${CallStatus}`);
 
     try {
-      const reasonMap = {
-        completed: 'normal',
-        busy: 'error',
-        failed: 'error',
-        canceled: 'error',
-        'no-answer': 'timeout'
-      };
-
-      const finalStatuses = new Set(['completed', 'busy', 'failed', 'canceled', 'no-answer']);
-      const reason = reasonMap[CallStatus];
-
-      if (finalStatuses.has(CallStatus) && reason) {
-        await ivrWorkflowEngine.endExecution(CallSid, reason);
+      if (['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
+        await ivrWorkflowEngine.endExecution(CallSid, CallStatus);
       }
       res.sendStatus(200);
     } catch (err) {

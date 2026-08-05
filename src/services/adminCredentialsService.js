@@ -7,14 +7,6 @@ const trimOrNull = (value) => {
   return normalized ? normalized : null;
 };
 
-const normalizePhoneNumber = (value) => {
-  const normalized = trimOrNull(value);
-  if (!normalized) return '';
-  const digits = normalized.replace(/[^\d+]/g, '');
-  if (!digits) return '';
-  return digits.startsWith('+') ? digits : `+${digits}`;
-};
-
 class AdminCredentialsService {
   constructor() {
     this.cache = new Map();
@@ -94,8 +86,6 @@ class AdminCredentialsService {
     } catch (error) {
       logger.warn('Failed to resolve admin credentials/profile', {
         path,
-        status: error?.response?.status || null,
-        data: error?.response?.data || null,
         message: error.message
       });
       return null;
@@ -103,12 +93,11 @@ class AdminCredentialsService {
   }
 
   async getTwilioCredentialsByPhoneNumber(phoneNumber) {
-    const normalizedPhone = normalizePhoneNumber(phoneNumber);
-    if (!normalizedPhone) return null;
-    const encoded = encodeURIComponent(normalizedPhone);
+    if (!phoneNumber) return null;
+    const encoded = encodeURIComponent(phoneNumber);
     return this.fetchCredentials(
       `/internal/twilio/credentials/by-phone-number/${encoded}`,
-      `phone:${normalizedPhone}`
+      `phone:${phoneNumber}`
     );
   }
 

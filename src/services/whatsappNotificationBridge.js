@@ -231,8 +231,6 @@ class WhatsAppNotificationBridge {
 
         return {
           success: false,
-          status,
-          data: responseData || null,
           error: status ? `${status}: ${responseError}` : responseError
         };
       } finally {
