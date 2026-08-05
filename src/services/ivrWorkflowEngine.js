@@ -1157,7 +1157,7 @@ class IVRWorkflowEngine extends EventEmitter {
                 const resolveTimeValue = (slot = null) =>
                     String(slot?.slotStart || slot?.startTime || '').trim();
                 const resolveSlotId = (slot = null) =>
-                    String(slot?._id || slot?.slotId || slot?.slotKey || '').trim() || null;
+                    String(slot?._id || slot?.slotId || '').trim() || null;
                 const availableSlots = appointmentBookingService.getAvailableSlots(slotSnapshot);
                 const selection = appointmentBookingService.resolveAvailableSlotByInput(slotSnapshot, userInput);
                 const selectedSlot = selection.selectedSlot;
@@ -1334,9 +1334,9 @@ class IVRWorkflowEngine extends EventEmitter {
                 }
 
                 markInputReason('matched');
-                logger.info(`Keypad input ${selectedInput} mapped to slot ${slotId || selectedSlot.slotKey || 'unknown'}`, {
+                logger.info(`Keypad input ${selectedInput} mapped to slot ${slotId || 'unknown'}`, {
                     ...logPayload,
-                    selectedSlotId: slotId || selectedSlot.slotKey || null
+                    selectedSlotId: slotId
                 });
                 const nextNode = redirectForHandles(['available', 'success', 'yes', 'true']) || edgeForHandle('default')?.target || endNodeId;
                 return nextNode;

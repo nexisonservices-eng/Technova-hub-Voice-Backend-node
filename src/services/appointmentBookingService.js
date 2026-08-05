@@ -328,7 +328,7 @@ class AppointmentBookingService {
   normalizeSelectedSlot(slot = {}, workflow = {}, node = {}, context = {}) {
     const raw = slot && typeof slot === 'object' ? slot : {};
     const slotKey = toTrimmedString(raw.slotKey || raw.key || raw.slotId || '');
-    const slotId = toTrimmedString(raw.slotId || raw._id || raw.id || slotKey || '');
+    const slotId = toTrimmedString(raw.slotId || raw._id || raw.id || '');
     const slotDate = toTrimmedString(raw.date || raw.slotDate || this.getDateKey(node, workflow, context));
     const slotStart = toTrimmedString(raw.startTime || raw.slotStart || '');
     const slotEnd = toTrimmedString(raw.endTime || raw.slotEnd || '');
