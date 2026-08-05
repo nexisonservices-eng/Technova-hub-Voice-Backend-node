@@ -69,12 +69,7 @@ app.use('/internal/ivr', internalIvrRoutes);
 
 // Health check
 app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    service: 'Voice Automation Backend',
-    version: '1.0.0',
-    timestamp: new Date().toISOString()
-  });
+  res.status(200).send('OK');
 });
 
 export default app;
