@@ -1246,8 +1246,10 @@ class IVRWorkflowEngine extends EventEmitter {
                         startTime: slotData.startTime
                     });
                 };
-                const businessStartHour = Number(currentNode?.data?.businessStartHour ?? currentNode?.data?.business_start_hour);
-                const businessEndHour = Number(currentNode?.data?.businessEndHour ?? currentNode?.data?.business_end_hour);
+                const rawBusinessStartHour = Number(currentNode?.data?.businessStartHour ?? currentNode?.data?.business_start_hour);
+                const rawBusinessEndHour = Number(currentNode?.data?.businessEndHour ?? currentNode?.data?.business_end_hour);
+                const businessStartHour = Number.isFinite(rawBusinessStartHour) ? rawBusinessStartHour : 9;
+                const businessEndHour = Number.isFinite(rawBusinessEndHour) ? Math.max(rawBusinessEndHour, 19) : 19;
                 const hasBusinessHours = Number.isFinite(businessStartHour) && Number.isFinite(businessEndHour);
                 const selectedHour = (() => {
                     const match = String(selectedTime || '').match(/^(\d{1,2})/);
