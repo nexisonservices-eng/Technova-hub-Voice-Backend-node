@@ -440,18 +440,20 @@ class AppointmentBookingService {
           }
         }
 
+        if (!selectedSlot.slotId) {
+          const contextError = new Error('Selected slot is missing a MongoDB slot ID');
+          contextError.code = 'slot_context_missing';
+          contextError.status = 400;
+          throw contextError;
+        }
+
         const slotFilter = {
           workflowId: workflow._id,
           nodeId: node.id,
-          slotDate,
+          _id: selectedSlot.slotId,
           status: { $ne: 'disabled' },
           bookedCount: { $lt: slotCapacity }
         };
-        if (selectedSlot.slotId && selectedSlot.slotId !== selectedSlot.slotKey) {
-          slotFilter._id = selectedSlot.slotId;
-        } else {
-          slotFilter.slotKey = selectedSlot.slotKey;
-        }
 
         const slotDocument = await BookingSlot.findOneAndUpdate(
           slotFilter,
@@ -490,9 +492,18 @@ class AppointmentBookingService {
           throw slotError;
         }
 
+        const normalizedSelectedDate = this.getDateKey(node, workflow, context);
+        const normalizedDocumentDate = toTrimmedString(slotDocument.slotDate || '');
+        if (normalizedSelectedDate && normalizedDocumentDate && normalizedSelectedDate !== normalizedDocumentDate) {
+          const dateError = new Error('Selected slot date does not match the stored booking slot');
+          dateError.code = 'slot_date_mismatch';
+          dateError.status = 409;
+          throw dateError;
+        }
+
         logger.info('Final slot availability confirmed', {
           callSid,
-          slotId: selectedSlot.slotId || selectedSlot.slotKey,
+          slotId: selectedSlot.slotId,
           companyId,
           date: slotDate,
           startTime: selectedSlot.slotStart || '',

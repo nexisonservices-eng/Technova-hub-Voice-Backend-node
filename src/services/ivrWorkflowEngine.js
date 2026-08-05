@@ -1392,7 +1392,14 @@ class IVRWorkflowEngine extends EventEmitter {
 
             if (nodeType === 'booking_create') {
                 setBookingVariable('booking.lastAction', 'create');
-                return redirectForHandles(['success', 'default', 'next']) || edgeForHandle('success')?.target || endNodeId;
+                const bookingStatus = String(state?.variables?.['booking.createStatus'] || '').trim().toLowerCase();
+                const bookingId = String(state?.variables?.['booking.bookingId'] || '').trim();
+                if (bookingStatus === 'success' || bookingId) {
+                    markInputReason('matched');
+                    return redirectForHandles(['success', 'default', 'next']) || edgeForHandle('success')?.target || endNodeId;
+                }
+                markInputReason('failure');
+                return redirectForHandles(['failure', 'error', 'fallback', 'no_match', 'default']) || endNodeId;
             }
 
             if (nodeType === 'whatsapp_notify') {

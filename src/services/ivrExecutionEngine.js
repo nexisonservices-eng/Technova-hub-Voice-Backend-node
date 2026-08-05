@@ -1074,6 +1074,8 @@ class IVRExecutionEngine {
       });
 
       if (!reservation.success) {
+        ivrWorkflowEngine.setVariable(callSid, 'booking.createStatus', 'failed');
+        ivrWorkflowEngine.setVariable(callSid, 'booking.createErrorCode', reservation.errorCode || 'booking_failed');
         logger.error('Booking creation failed', {
           callSid,
           slotId: selectedSlotId,
@@ -1101,6 +1103,7 @@ class IVRExecutionEngine {
         ivrWorkflowEngine.setVariable(callSid, 'booking.token', reservation.booking.tokenNumber);
         ivrWorkflowEngine.setVariable(callSid, 'booking.bookingId', String(reservation.booking._id));
         ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
+        ivrWorkflowEngine.setVariable(callSid, 'booking.createStatus', 'success');
         ivrWorkflowEngine.setVariable(callSid, 'booking.selectedSlotContext', {
           ...selectedSlot,
           slotId: selectedSlotId,
