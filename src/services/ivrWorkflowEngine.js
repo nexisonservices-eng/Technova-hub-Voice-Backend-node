@@ -1239,6 +1239,12 @@ class IVRWorkflowEngine extends EventEmitter {
                     setBookingVariable('booking.available', true);
                     setBookingVariable('booking.selectedSlotData', slotData);
                     setBookingVariable('booking.selectedSlotContext', slotData);
+                    logger.info('Selected slot saved in execution context', {
+                        callSid,
+                        slotId: slotData.slotId,
+                        date: slotData.date,
+                        startTime: slotData.startTime
+                    });
                 };
                 const businessStartHour = Number(currentNode?.data?.businessStartHour ?? currentNode?.data?.business_start_hour);
                 const businessEndHour = Number(currentNode?.data?.businessEndHour ?? currentNode?.data?.business_end_hour);

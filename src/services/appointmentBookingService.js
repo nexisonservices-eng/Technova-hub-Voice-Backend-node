@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import logger from '../utils/logger.js';
 import BookingSlot from '../models/BookingSlot.js';
 import AppointmentBooking from '../models/AppointmentBooking.js';
@@ -324,6 +325,33 @@ class AppointmentBookingService {
     return resolved || null;
   }
 
+  normalizeSelectedSlot(slot = {}, workflow = {}, node = {}, context = {}) {
+    const raw = slot && typeof slot === 'object' ? slot : {};
+    const slotKey = toTrimmedString(raw.slotKey || raw.key || raw.slotId || '');
+    const slotId = toTrimmedString(raw.slotId || raw._id || raw.id || slotKey || '');
+    const slotDate = toTrimmedString(raw.date || raw.slotDate || this.getDateKey(node, workflow, context));
+    const slotStart = toTrimmedString(raw.startTime || raw.slotStart || '');
+    const slotEnd = toTrimmedString(raw.endTime || raw.slotEnd || '');
+    const timezone = toTrimmedString(raw.timezone || this.getWorkflowTimezone(node, workflow) || DEFAULT_TIMEZONE) || DEFAULT_TIMEZONE;
+    const capacity = toPositiveInt(raw.capacity ?? raw.slotCapacity ?? 1, 1);
+    const bookedCount = toPositiveInt(raw.bookedCount ?? raw.booked_count ?? 0, 0);
+
+    return {
+      slotId,
+      slotKey,
+      slotDate,
+      slotStart,
+      slotEnd,
+      timezone,
+      capacity,
+      bookedCount,
+      slotLabel: toTrimmedString(raw.slotLabel || raw.label || ''),
+      metadata: raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {},
+      companyId: toTrimmedString(raw.companyId || this.resolveBookingCompanyId({ workflow, node, context }) || ''),
+      userId: toTrimmedString(raw.userId || context?.userId || workflow?.createdBy || '')
+    };
+  }
+
   resolveSlotFromInput(node = {}, workflow = {}, context = {}, userInput = '') {
     const slots = this.getSlotDefinitions(node);
     const normalizedInput = toTrimmedString(userInput).toLowerCase();
@@ -388,100 +416,171 @@ class AppointmentBookingService {
       return { success: false, error: 'Missing booking context' };
     }
 
-    const slotDate = this.getDateKey(node, workflow, context);
-    const slotCapacity = toPositiveInt(slot.capacity, 1);
+    const selectedSlot = this.normalizeSelectedSlot(slot, workflow, node, context);
+    const slotDate = selectedSlot.slotDate;
+    const slotCapacity = toPositiveInt(selectedSlot.capacity, 1);
+    const companyId = this.resolveBookingCompanyId({ workflow, node, context }) || selectedSlot.companyId || null;
     const customer = this.getCallerProfile(context);
-    if (preventDuplicates) {
-      const duplicate = await AppointmentBooking.findOne({
-        workflowId: workflow._id,
-        callSid
-      }).lean();
-      if (duplicate) {
+    const session = await mongoose.startSession();
+
+    try {
+      let reservationResult = null;
+      await session.withTransaction(async () => {
+        if (preventDuplicates) {
+          const duplicate = await AppointmentBooking.findOne({
+            workflowId: workflow._id,
+            callSid
+          }).session(session).lean();
+          if (duplicate) {
+            const duplicateError = new Error('A booking already exists for this call');
+            duplicateError.code = 'duplicate_call';
+            duplicateError.status = 409;
+            duplicateError.booking = duplicate;
+            throw duplicateError;
+          }
+        }
+
+        const slotDocument = await BookingSlot.findOneAndUpdate(
+          {
+            workflowId: workflow._id,
+            nodeId: node.id,
+            slotKey: selectedSlot.slotKey,
+            slotDate,
+            status: { $ne: 'disabled' },
+            bookedCount: { $lt: slotCapacity }
+          },
+          {
+            $inc: { bookedCount: 1 },
+            $set: {
+              slotLabel: selectedSlot.slotLabel || selectedSlot.slotKey,
+              slotStart: selectedSlot.slotStart || '',
+              slotEnd: selectedSlot.slotEnd || '',
+              timezone: selectedSlot.timezone || this.getWorkflowTimezone(node, workflow),
+              capacity: slotCapacity,
+              status: 'available',
+              metadata: {
+                ...(selectedSlot.metadata || {}),
+                digit: selectedSlot.metadata?.digit || '',
+                order: selectedSlot.metadata?.order ?? 0
+              }
+            },
+            $setOnInsert: {
+              workflowId: workflow._id,
+              nodeId: node.id,
+              slotKey: selectedSlot.slotKey,
+              slotDate
+            }
+          },
+          {
+            new: true,
+            session
+          }
+        );
+
+        if (!slotDocument) {
+          const slotError = new Error('Selected slot is full or unavailable');
+          slotError.code = 'slot_unavailable';
+          slotError.status = 409;
+          throw slotError;
+        }
+
+        logger.info('Final slot availability confirmed', {
+          callSid,
+          slotId: selectedSlot.slotId || selectedSlot.slotKey,
+          companyId,
+          date: slotDate,
+          startTime: selectedSlot.slotStart || '',
+          bookedCount: Number(slotDocument.bookedCount ?? 0),
+          capacity: slotCapacity
+        });
+
+        const bookingCount = toDisplayCount(slotDocument.bookedCount);
+        const bookingReference = this.buildBookingReference(workflow, node, {
+          slotKey: selectedSlot.slotKey
+        });
+        const tokenNumber = this.buildTokenNumber(node, selectedSlot, bookingCount);
+
+        const bookingDocs = await AppointmentBooking.create([
+          {
+            workflowId: workflow._id,
+            nodeId: node.id,
+            callSid,
+            slotKey: selectedSlot.slotKey,
+            slotLabel: selectedSlot.slotLabel || selectedSlot.slotKey,
+            slotStart: selectedSlot.slotStart || '',
+            slotEnd: selectedSlot.slotEnd || '',
+            slotDate,
+            timezone: selectedSlot.timezone || this.getWorkflowTimezone(node, workflow),
+            tokenNumber,
+            bookingReference,
+            customerName: customer.customerName,
+            customerPhone: customer.customerPhone,
+            customerEmail: customer.customerEmail,
+            notes: customer.notes,
+            status: 'confirmed',
+            metadata: {
+              slot: {
+                ...selectedSlot,
+                companyId,
+                userId: selectedSlot.userId || null
+              },
+              workflowPromptKey: workflow?.promptKey || null
+            }
+          }
+        ], { session });
+
+        const bookingDoc = Array.isArray(bookingDocs) ? bookingDocs[0] : bookingDocs;
+        if (!bookingDoc?._id) {
+          const bookingError = new Error('Booking document was not saved');
+          bookingError.code = 'booking_not_saved';
+          bookingError.status = 500;
+          throw bookingError;
+        }
+
+        const verifiedBooking = await AppointmentBooking.findById(bookingDoc._id).session(session).lean();
+        if (!verifiedBooking?._id) {
+          const verificationError = new Error('Booking document could not be verified after save');
+          verificationError.code = 'booking_not_verified';
+          verificationError.status = 500;
+          throw verificationError;
+        }
+
+        reservationResult = {
+          success: true,
+          booking: verifiedBooking,
+          slot: slotDocument.toObject ? slotDocument.toObject() : slotDocument,
+          companyId
+        };
+      });
+
+      return reservationResult || {
+        success: false,
+        errorCode: 'booking_not_saved',
+        error: 'Booking document could not be saved'
+      };
+    } catch (error) {
+      if (error?.code === 'duplicate_call') {
         return {
           success: false,
           errorCode: 'duplicate_call',
-          error: 'A booking already exists for this call',
-          booking: duplicate
+          error: error.message || 'A booking already exists for this call',
+          booking: error.booking || null
         };
       }
-    }
-
-    // The slot inventory is synced before reservation, so we only update an
-    // existing slot record here. No upsert keeps concurrent bookings from
-    // colliding with the old unique index behavior.
-    const slotDocument = await BookingSlot.findOneAndUpdate(
-      {
-        workflowId: workflow._id,
-        nodeId: node.id,
-        slotKey: slot.key,
-        slotDate,
-        status: { $ne: 'disabled' },
-        bookedCount: { $lt: slotCapacity }
-      },
-      {
-        $inc: { bookedCount: 1 },
-        $set: {
-          slotLabel: slot.label,
-          slotStart: slot.startTime || '',
-          slotEnd: slot.endTime || '',
-          timezone: this.getWorkflowTimezone(node, workflow),
-          capacity: slotCapacity,
-          status: 'available',
-          metadata: {
-            ...(slot.metadata || {}),
-            digit: slot.digit,
-            order: slot.order
-          }
-        },
-        $setOnInsert: {
-          workflowId: workflow._id,
-          nodeId: node.id,
-          slotKey: slot.key,
-          slotDate
-        }
-      },
-      {
-        new: true,
-        upsert: false
+      if (error?.code === 'slot_unavailable') {
+        return {
+          success: false,
+          errorCode: 'slot_unavailable',
+          error: error.message || 'Selected slot is full or unavailable'
+        };
       }
-    );
-
-    if (!slotDocument) {
-      return {
-        success: false,
-        errorCode: 'slot_unavailable',
-        error: 'Selected slot is full or unavailable'
-      };
-    }
-
-    const bookingCount = toDisplayCount(slotDocument.bookedCount);
-    const bookingReference = this.buildBookingReference(workflow, node, slot);
-    const tokenNumber = this.buildTokenNumber(node, slot, bookingCount);
-    let booking;
-    try {
-      booking = await AppointmentBooking.create({
-        workflowId: workflow._id,
-        nodeId: node.id,
-        callSid,
-        slotKey: slot.key,
-        slotLabel: slot.label,
-        slotStart: slot.startTime || '',
-        slotEnd: slot.endTime || '',
-        slotDate,
-        timezone: this.getWorkflowTimezone(node, workflow),
-        tokenNumber,
-        bookingReference,
-        customerName: customer.customerName,
-        customerPhone: customer.customerPhone,
-        customerEmail: customer.customerEmail,
-        notes: customer.notes,
-        status: 'confirmed',
-        metadata: {
-          slot,
-          workflowPromptKey: workflow?.promptKey || null
-        }
-      });
-    } catch (error) {
+      if (error?.code === 'booking_not_saved' || error?.code === 'booking_not_verified') {
+        return {
+          success: false,
+          errorCode: error.code,
+          error: error.message || 'Booking document could not be saved'
+        };
+      }
       if (Number(error?.code) === 11000) {
         return {
           success: false,
@@ -489,14 +588,19 @@ class AppointmentBookingService {
           error: 'That slot was just booked. Please select another slot.'
         };
       }
+      logger.error('Booking reservation failed', {
+        callSid,
+        slotId: selectedSlot.slotId || selectedSlot.slotKey,
+        companyId,
+        status: error?.status,
+        code: error?.code,
+        message: error?.message,
+        stack: error?.stack
+      });
       throw error;
+    } finally {
+      await session.endSession();
     }
-
-    return {
-      success: true,
-      booking,
-      slot: slotDocument.toObject ? slotDocument.toObject() : slotDocument
-    };
   }
 
   async sendNotificationLog({

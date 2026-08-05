@@ -982,8 +982,19 @@ class IVRExecutionEngine {
         state?.variables?.['booking.selectedSlotContext'] ||
         state?.variables?.['booking.selectedSlotData'] ||
         null;
+      const companyId = String(executionSelectedSlot?.companyId || state?.context?.companyId || settings.companyId || '').trim() || null;
+      const customerPhone = String(
+        context?.variables?.[customerPhoneVariable] ||
+        context?.variables?.callerNumber ||
+        context?.callerNumber ||
+        ''
+      ).trim();
 
       if (!executionSelectedSlot) {
+        logger.error('Selected slot missing from execution context', {
+          callSid,
+          workflowId: config._id
+        });
         response.say({ voice, language }, 'Booking is temporarily unavailable.');
         this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
         return response.toString();
@@ -1002,6 +1013,10 @@ class IVRExecutionEngine {
       };
 
       if (!selectedSlot.slotKey || !selectedSlot.slotDate || !selectedSlot.slotStart) {
+        logger.error('Selected slot missing from execution context', {
+          callSid,
+          workflowId: config._id
+        });
         response.say({ voice, language }, 'Booking is temporarily unavailable.');
         this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
         return response.toString();
@@ -1041,6 +1056,15 @@ class IVRExecutionEngine {
       });
 
       if (!reservation.success) {
+        logger.error('Booking creation failed', {
+          callSid,
+          slotId: selectedSlot?.slotKey || executionSelectedSlot?.slotId || null,
+          companyId,
+          status: reservation.status || null,
+          code: reservation.errorCode || null,
+          message: reservation.error || null,
+          stack: reservation.stack || null
+        });
         const bookingMessage =
           reservation.errorCode === 'booking_conflict'
             ? 'That slot was just booked. Please select another slot.'
@@ -1066,6 +1090,16 @@ class IVRExecutionEngine {
           userId: executionSelectedSlot.userId || state?.userId || null
         });
       }
+
+      logger.info('Booking created successfully', {
+        bookingId: reservation.booking._id,
+        callSid,
+        slotId: selectedSlot.slotKey,
+        date: selectedSlot.slotDate,
+        startTime: selectedSlot.slotStart,
+        customerPhone,
+        companyId
+      });
 
       const successText = this._replaceCurlyVariables(
         callSid,
