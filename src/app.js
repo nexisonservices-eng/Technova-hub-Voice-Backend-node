@@ -37,6 +37,11 @@ app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }
 // Serve static files from the uploads directory
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
+// Cron-friendly health check: tiny, always-200 plain text response
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // Routes
 app.use('/voice', voiceRoutes);
 app.use('/broadcast', BroadcastRoutes);
