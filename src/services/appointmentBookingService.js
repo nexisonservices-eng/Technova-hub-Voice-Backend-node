@@ -535,15 +535,15 @@ class AppointmentBookingService {
             customerEmail: customer.customerEmail,
             notes: customer.notes,
             status: 'confirmed',
-            metadata: {
-              slot: {
-                ...selectedSlot,
-                slotId: selectedSlot.slotId || selectedSlot.slotKey,
-                companyId,
-                userId: selectedSlot.userId || null
-              },
-              workflowPromptKey: workflow?.promptKey || null
-            }
+              metadata: {
+                slot: {
+                  ...selectedSlot,
+                  slotId: selectedSlot.slotId,
+                  companyId,
+                  userId: selectedSlot.userId || null
+                },
+                workflowPromptKey: workflow?.promptKey || null
+              }
           }
         ], { session });
 
@@ -608,7 +608,7 @@ class AppointmentBookingService {
       }
       logger.error('Booking reservation failed', {
         callSid,
-        slotId: selectedSlot.slotId || selectedSlot.slotKey,
+        slotId: selectedSlot.slotId,
         companyId,
         status: error?.status,
         code: error?.code,
