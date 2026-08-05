@@ -1001,6 +1001,7 @@ class IVRExecutionEngine {
       }
 
       const selectedSlot = {
+        slotId: String(executionSelectedSlot.slotId || executionSelectedSlot._id || executionSelectedSlot.id || '').trim(),
         slotKey: String(executionSelectedSlot.slotKey || executionSelectedSlot.key || '').trim(),
         slotLabel: String(executionSelectedSlot.slotLabel || executionSelectedSlot.label || '').trim(),
         slotStart: String(executionSelectedSlot.startTime || executionSelectedSlot.slotStart || '').trim(),
@@ -1044,6 +1045,7 @@ class IVRExecutionEngine {
         context: bookingContext,
         preventDuplicates: this._toBoolean(data.preventDuplicates ?? data.prevent_duplicates, true),
         slot: {
+          slotId: selectedSlot.slotId || selectedSlot.slotKey,
           key: selectedSlot.slotKey,
           label: selectedSlot.slotLabel || selectedSlot.slotKey,
           startTime: selectedSlot.slotStart,
@@ -1085,7 +1087,7 @@ class IVRExecutionEngine {
         ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
         ivrWorkflowEngine.setVariable(callSid, 'booking.selectedSlotContext', {
           ...selectedSlot,
-          slotId: String(executionSelectedSlot.slotId || executionSelectedSlot._id || selectedSlot.slotKey),
+          slotId: String(executionSelectedSlot.slotId || executionSelectedSlot._id || selectedSlot.slotId || selectedSlot.slotKey),
           companyId: executionSelectedSlot.companyId || state?.context?.companyId || null,
           userId: executionSelectedSlot.userId || state?.userId || null
         });
@@ -1094,7 +1096,7 @@ class IVRExecutionEngine {
       logger.info('Booking created successfully', {
         bookingId: reservation.booking._id,
         callSid,
-        slotId: selectedSlot.slotKey,
+        slotId: selectedSlot.slotId || selectedSlot.slotKey,
         date: selectedSlot.slotDate,
         startTime: selectedSlot.slotStart,
         customerPhone,

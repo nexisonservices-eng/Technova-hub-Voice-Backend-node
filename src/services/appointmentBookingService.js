@@ -440,15 +440,21 @@ class AppointmentBookingService {
           }
         }
 
+        const slotFilter = {
+          workflowId: workflow._id,
+          nodeId: node.id,
+          slotDate,
+          status: { $ne: 'disabled' },
+          bookedCount: { $lt: slotCapacity }
+        };
+        if (selectedSlot.slotId && selectedSlot.slotId !== selectedSlot.slotKey) {
+          slotFilter._id = selectedSlot.slotId;
+        } else {
+          slotFilter.slotKey = selectedSlot.slotKey;
+        }
+
         const slotDocument = await BookingSlot.findOneAndUpdate(
-          {
-            workflowId: workflow._id,
-            nodeId: node.id,
-            slotKey: selectedSlot.slotKey,
-            slotDate,
-            status: { $ne: 'disabled' },
-            bookedCount: { $lt: slotCapacity }
-          },
+          slotFilter,
           {
             $inc: { bookedCount: 1 },
             $set: {
@@ -496,7 +502,7 @@ class AppointmentBookingService {
 
         const bookingCount = toDisplayCount(slotDocument.bookedCount);
         const bookingReference = this.buildBookingReference(workflow, node, {
-          slotKey: selectedSlot.slotKey
+          slotKey: selectedSlot.slotKey || selectedSlot.slotId
         });
         const tokenNumber = this.buildTokenNumber(node, selectedSlot, bookingCount);
 
@@ -505,7 +511,7 @@ class AppointmentBookingService {
             workflowId: workflow._id,
             nodeId: node.id,
             callSid,
-            slotKey: selectedSlot.slotKey,
+            slotKey: selectedSlot.slotKey || selectedSlot.slotId,
             slotLabel: selectedSlot.slotLabel || selectedSlot.slotKey,
             slotStart: selectedSlot.slotStart || '',
             slotEnd: selectedSlot.slotEnd || '',
@@ -521,6 +527,7 @@ class AppointmentBookingService {
             metadata: {
               slot: {
                 ...selectedSlot,
+                slotId: selectedSlot.slotId || selectedSlot.slotKey,
                 companyId,
                 userId: selectedSlot.userId || null
               },
