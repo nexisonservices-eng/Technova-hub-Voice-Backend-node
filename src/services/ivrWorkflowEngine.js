@@ -23,6 +23,7 @@ class IVRWorkflowEngine extends EventEmitter {
 
         // Execution state tracking
         this.activeExecutions = new Map(); // callSid -> ExecutionState
+        this.endingExecutions = new Set(); // callSid -> true while endExecution is in progress
 
         // Safety limits
         this.MAX_LOOP_ITERATIONS = 50;
@@ -620,6 +621,8 @@ class IVRWorkflowEngine extends EventEmitter {
     async endExecution(callSid, reason = 'normal', errorMessage = null) {
         const state = this.activeExecutions.get(callSid);
         if (!state) return;
+        if (this.endingExecutions.has(callSid)) return;
+        this.endingExecutions.add(callSid);
 
         try {
             // Update database log
@@ -665,9 +668,11 @@ class IVRWorkflowEngine extends EventEmitter {
             // Update overall stats
             this.emitWorkflowStats();
 
-            logger.info(`🏁 Execution ended: ${callSid} (reason: ${reason})`);
+            logger.info(`Execution ended: ${callSid} (reason: ${reason})`);
         } catch (error) {
             logger.error('Failed to end execution:', error);
+        } finally {
+            this.endingExecutions.delete(callSid);
         }
     }
 
