@@ -983,6 +983,12 @@ class IVRExecutionEngine {
         state?.variables?.['booking.selectedSlotData'] ||
         null;
       const companyId = String(executionSelectedSlot?.companyId || state?.context?.companyId || settings.companyId || '').trim() || null;
+      const selectedSlotId = String(
+        executionSelectedSlot?.slotId ||
+        executionSelectedSlot?._id ||
+        executionSelectedSlot?.id ||
+        ''
+      ).trim();
       const customerPhone = String(
         context?.variables?.[customerPhoneVariable] ||
         context?.variables?.callerNumber ||
@@ -1001,7 +1007,7 @@ class IVRExecutionEngine {
       }
 
       const selectedSlot = {
-        slotId: String(executionSelectedSlot.slotId || executionSelectedSlot._id || executionSelectedSlot.id || '').trim(),
+        slotId: selectedSlotId,
         slotKey: String(executionSelectedSlot.slotKey || executionSelectedSlot.key || '').trim(),
         slotLabel: String(executionSelectedSlot.slotLabel || executionSelectedSlot.label || '').trim(),
         slotStart: String(executionSelectedSlot.startTime || executionSelectedSlot.slotStart || '').trim(),
@@ -1014,6 +1020,16 @@ class IVRExecutionEngine {
       };
 
       if (!selectedSlot.slotKey || !selectedSlot.slotDate || !selectedSlot.slotStart) {
+        logger.error('Selected slot missing from execution context', {
+          callSid,
+          workflowId: config._id
+        });
+        response.say({ voice, language }, 'Booking is temporarily unavailable.');
+        this._appendNextStep(response, node.id, config.edges, config._id, 'failure');
+        return response.toString();
+      }
+
+      if (!selectedSlotId) {
         logger.error('Selected slot missing from execution context', {
           callSid,
           workflowId: config._id
@@ -1045,7 +1061,7 @@ class IVRExecutionEngine {
         context: bookingContext,
         preventDuplicates: this._toBoolean(data.preventDuplicates ?? data.prevent_duplicates, true),
         slot: {
-          slotId: selectedSlot.slotId || selectedSlot.slotKey,
+          slotId: selectedSlotId,
           key: selectedSlot.slotKey,
           label: selectedSlot.slotLabel || selectedSlot.slotKey,
           startTime: selectedSlot.slotStart,
@@ -1060,7 +1076,7 @@ class IVRExecutionEngine {
       if (!reservation.success) {
         logger.error('Booking creation failed', {
           callSid,
-          slotId: selectedSlot?.slotKey || executionSelectedSlot?.slotId || null,
+          slotId: selectedSlotId,
           companyId,
           status: reservation.status || null,
           code: reservation.errorCode || null,
@@ -1087,7 +1103,7 @@ class IVRExecutionEngine {
         ivrWorkflowEngine.setVariable(callSid, 'booking.slotDate', reservation.booking.slotDate);
         ivrWorkflowEngine.setVariable(callSid, 'booking.selectedSlotContext', {
           ...selectedSlot,
-          slotId: String(executionSelectedSlot.slotId || executionSelectedSlot._id || selectedSlot.slotId || selectedSlot.slotKey),
+          slotId: selectedSlotId,
           companyId: executionSelectedSlot.companyId || state?.context?.companyId || null,
           userId: executionSelectedSlot.userId || state?.userId || null
         });
@@ -1096,7 +1112,7 @@ class IVRExecutionEngine {
       logger.info('Booking created successfully', {
         bookingId: reservation.booking._id,
         callSid,
-        slotId: selectedSlot.slotId || selectedSlot.slotKey,
+        slotId: selectedSlotId,
         date: selectedSlot.slotDate,
         startTime: selectedSlot.slotStart,
         customerPhone,
