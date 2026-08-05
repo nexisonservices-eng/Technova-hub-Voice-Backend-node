@@ -1301,7 +1301,7 @@ class IVRWorkflowEngine extends EventEmitter {
                     return logRejection('Timezone mismatch', { selectedSlotTimezone: selectedSlot.timezone }, ['full', 'fallback', 'no_match', 'default']);
                 }
 
-                if (hasBusinessHours && selectedHour !== null && (selectedHour < businessStartHour || selectedHour >= businessEndHour)) {
+                if (hasBusinessHours && selectedHour !== null && (selectedHour < businessStartHour || selectedHour > businessEndHour)) {
                     return logRejection('Slot outside business hours', {
                         businessStartHour,
                         businessEndHour,
