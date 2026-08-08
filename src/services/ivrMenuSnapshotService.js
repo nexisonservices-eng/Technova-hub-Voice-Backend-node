@@ -58,7 +58,19 @@ export const formatIVRMenu = (menu, usageByWorkflow = new Map()) => {
 };
 
 export const getIVRMenuSnapshot = async (userId) => {
-  const menus = await Workflow.find({ isActive: true, createdBy: userId })
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    logger.warn('IVR snapshot requested without an authenticated user id; returning empty list');
+    return [];
+  }
+
+  const query = { isActive: true, createdBy: normalizedUserId };
+  logger.info('Building IVR snapshot', {
+    userId: normalizedUserId,
+    filter: query
+  });
+
+  const menus = await Workflow.find(query)
     .select('promptKey displayName text nodes edges config status tags createdAt updatedAt')
     .sort({ promptKey: 1 });
 
@@ -90,6 +102,11 @@ export const getIVRMenuSnapshot = async (userId) => {
       });
     });
   }
+
+  logger.info('Built IVR snapshot', {
+    userId: normalizedUserId,
+    count: menus.length
+  });
 
   return menus.map((menu) => formatIVRMenu(menu, usageByWorkflow));
 };

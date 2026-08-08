@@ -286,6 +286,8 @@ export function initializeSocketIO(socketIo) {
       const token = authToken || headerToken || queryToken;
       const user = await verifyOrResolveToken(token);
       socket.user = user;
+      socket.data = socket.data || {};
+      socket.data.userId = resolveUserId(user);
       return next();
     } catch (error) {
       logger.warn(`Socket auth failed for ${socket.id || 'unknown'}: ${error.message}`);
@@ -593,7 +595,12 @@ export function initializeSocketIO(socketIo) {
 
         const payload = await emitIVRMenuSnapshot(socket, userId);
         if (typeof ack === 'function') ack(payload);
-        logger.info(`Sent IVR menus list to client ${socket.id}: ${payload.count} menus`);
+        logger.info('Sent IVR menus list', {
+          socketId: socket.id,
+          userId,
+          count: payload.count,
+          filter: { isActive: true, createdBy: userId }
+        });
       } catch (error) {
         logger.error(`Error sending IVR menus to client ${socket.id}:`, error);
         const errorPayload = emitIVRMenuError(socket, error);
@@ -602,6 +609,8 @@ export function initializeSocketIO(socketIo) {
     };
 
     socket.on('ivr_menu:list', handleIVRMenuListRequest);
+
+    socket.on('request_ivr_menus', handleIVRMenuListRequest);
 
     socket.on('ivr_menu:create', async (data = {}, ack) => {
       try {
@@ -691,7 +700,7 @@ export function initializeSocketIO(socketIo) {
     });
 
     // IVR Menus Request listener - send current IVR list
-    socket.on('request_ivr_menus', async (data) => {
+    socket.on('request_ivr_menus_legacy', async (data) => {
       try {
         const { default: Workflow } = await import('../models/Workflow.js');
         const userId = resolveUserId(socket.user);
