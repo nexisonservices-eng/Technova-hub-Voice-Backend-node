@@ -483,10 +483,13 @@ class InboundCallService {
     callSid,
     { userId = null, promptKey = '', menuId = null, callerNumber = '', destinationNumber = '' } = {}
   ) {
-    const query = { isActive: true };
-    if (userId) {
-      query.createdBy = userId;
+    if (!userId) {
+      logger.warn(`No user context available for IVR routing (promptKey: ${promptKey}, menuId: ${menuId || ''})`);
+      return this.generateIVRTwiML('main', callSid);
     }
+
+    const query = { isActive: true };
+    query.createdBy = userId;
 
     let workflow = null;
     if (menuId) {

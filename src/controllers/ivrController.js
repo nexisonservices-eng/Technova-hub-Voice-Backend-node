@@ -31,8 +31,12 @@ class IVRController {
    * Fetch the active IVR workflow
    */
   async getActiveWorkflow(userId = null) {
+    if (!userId) {
+      return null;
+    }
+
     const filter = { status: 'active', isActive: true };
-    if (userId && Workflow.schema.path('createdBy')) {
+    if (Workflow.schema.path('createdBy')) {
       filter.createdBy = userId;
     }
     return await Workflow.findOne(filter);

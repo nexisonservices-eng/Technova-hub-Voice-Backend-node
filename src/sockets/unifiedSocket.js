@@ -702,7 +702,21 @@ export function initializeSocketIO(socketIo) {
           });
           return;
         }
+
+        const payload = await buildIVRMenuListPayload(userId);
+        const formattedWorkflows = payload.ivrMenus || [];
+
+        socket.emit('ivr_menus_list', {
+          menus: formattedWorkflows,
+          ...payload,
+          timestamp: payload.timestamp || new Date().toISOString(),
+          count: payload.count ?? formattedWorkflows.length
+        });
+
+        logger.info(`Sent IVR menus list to client ${socket.id}: ${formattedWorkflows.length} menus`);
+        return;
         
+        if (false) {
         // Production-level query - only valid IVR workflows
         const ivrWorkflows = await Workflow.findActive({
           createdBy: userId,
@@ -762,6 +776,8 @@ export function initializeSocketIO(socketIo) {
         });
 
         logger.info(`📡 Sent IVR menus list to client ${socket.id}: ${formattedWorkflows.length} menus`);
+
+        }
 
       } catch (error) {
         logger.error(`Error sending IVR menus to client ${socket.id}:`, error);

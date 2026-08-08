@@ -10,7 +10,9 @@ const resolveRequestedCount = (req, featureKey) => {
 
 export const requirePlanFeature = (featureKey) => (req, res, next) => {
   const flags = req.user?.featureFlags || {};
-  if (!flags[featureKey]) {
+  const isAlwaysAvailable = featureKey === 'outboundVoice';
+
+  if (!isAlwaysAvailable && !flags[featureKey]) {
     return res.status(403).json({ message: 'Feature not enabled for plan' });
   }
 
