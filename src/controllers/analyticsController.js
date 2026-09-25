@@ -6,7 +6,7 @@ import User from '../models/user.js';
 import mongoose from 'mongoose';
 import logger from '../utils/logger.js';
 import { getIO } from '../sockets/unifiedSocket.js';
-import { getRawUserId, getUserObjectId } from '../utils/authContext.js';
+import { getRawUserId, getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import { getDateRangeInTimezone } from '../utils/timezoneDate.js';
 
 const VOICE_TIME_ZONE = 'Asia/Kolkata';
@@ -34,12 +34,12 @@ class AnalyticsController {
    */
   async getInboundAnalytics(req, res) {
     try {
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
       const { period = 'today', callType = 'all', status = 'all' } = req.query;
-      const analyticsData = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId: String(userId) });
+      const analyticsData = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
 
       res.json({
         success: true,
@@ -63,7 +63,7 @@ class AnalyticsController {
    */
   async getVoiceTodayStats(req, res) {
     try {
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
@@ -175,7 +175,8 @@ class AnalyticsController {
   }
 
   buildCacheKey(period = 'today', callType = 'all', status = 'all', userId = 'anonymous') {
-    return `analytics_${userId}_${period}_${callType}_${status}`;
+    const scopeKey = userId?.$in ? userId.$in.map(String).sort().join(',') : String(userId);
+    return `analytics_${scopeKey}_${period}_${callType}_${status}`;
   }
 
   getRecentCallLimit() {
@@ -198,8 +199,9 @@ class AnalyticsController {
 
   registerAnalyticsSubscription(socket, payload = {}) {
     if (!socket?.id) return null;
-    const socketUserId = payload.userId || getRawUserId(socket.user);
-    const subscription = this.normalizeAnalyticsPayload(payload, socketUserId);
+    const socketUserId = getRawUserId(socket.user);
+    const subscription = this.normalizeAnalyticsPayload({ ...payload, userId: socketUserId }, socketUserId);
+    subscription.readScope = getReadUserObjectId({ user: socket.user });
     this.activeAnalyticsSubscriptions.set(socket.id, subscription);
     return subscription;
   }
@@ -220,7 +222,8 @@ class AnalyticsController {
     const targets = new Map();
     for (const subscription of this.activeAnalyticsSubscriptions.values()) {
       const subscriptionUserId = subscription.userId ? String(subscription.userId) : null;
-      if (requestedUserId && subscriptionUserId !== requestedUserId) continue;
+      const memberIds = subscription.readScope?.$in?.map(String) || [];
+      if (requestedUserId && subscriptionUserId !== requestedUserId && !memberIds.includes(requestedUserId)) continue;
       targets.set(this.buildSubscriptionKey(subscription), subscription);
     }
 
@@ -243,7 +246,7 @@ class AnalyticsController {
     const normalizedStatus = status || 'all';
     const cacheKey = this.buildCacheKey(normalizedPeriod, normalizedCallType, normalizedStatus, userId || 'anonymous');
 
-    if (userId) {
+    if (userId && !userId.$in) {
       const deletedCount = await this.enforceInboundRecentCallsRetention(userId, 100);
       if (deletedCount > 0) {
         this.clearUserCache(userId);
@@ -1659,7 +1662,7 @@ class AnalyticsController {
    */
   async exportAnalytics(req, res) {
     try {
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
@@ -1749,10 +1752,8 @@ class AnalyticsController {
 
   async emitAnalyticsSnapshotToSocket(socket, payload = {}) {
     if (!socket) return;
-    const socketUserId = payload.userId || getRawUserId(socket.user);
-    const { period, callType, status, userId } = this.normalizeAnalyticsPayload(payload, socketUserId);
-    this.registerAnalyticsSubscription(socket, { period, callType, status, userId });
-    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
+    const { period, callType, status, userId, readScope } = this.registerAnalyticsSubscription(socket, payload);
+    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId: readScope || userId });
 
     socket.emit('call_analytics_update', {
       type: 'snapshot',
@@ -1770,7 +1771,7 @@ class AnalyticsController {
     if (!io) return;
 
     const { period, callType, status, userId } = this.normalizeAnalyticsPayload(payload);
-    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId });
+    const analytics = await this.getOrGenerateInboundAnalytics({ period, callType, status, userId: payload.readScope || userId });
     const analyticsRoom = this.getAnalyticsRoom(userId);
 
     io.to(analyticsRoom).emit('call_analytics_update', {
@@ -1920,13 +1921,13 @@ class AnalyticsController {
     const userToken = `analytics_${String(userId)}_`;
 
     for (const key of this.cache.keys()) {
-      if (key.startsWith(userToken)) {
+      if (key.startsWith(userToken) || key.split('_')[1]?.split(',').includes(String(userId))) {
         this.cache.delete(key);
       }
     }
 
     for (const key of this.inFlightAnalytics.keys()) {
-      if (key.startsWith(userToken)) {
+      if (key.startsWith(userToken) || key.split('_')[1]?.split(',').includes(String(userId))) {
         this.inFlightAnalytics.delete(key);
       }
     }

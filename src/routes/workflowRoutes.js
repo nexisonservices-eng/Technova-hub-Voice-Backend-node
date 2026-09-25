@@ -1,3 +1,4 @@
+import { getReadUserObjectId } from '../utils/authContext.js';
 import express from 'express';
 import IVRController from '../controllers/ivrController.js';
 import pythonTTSService from '../services/pythonTTSService.js';
@@ -329,7 +330,7 @@ router.post('/generate-audio', authenticate, [
     }
 
     // Find the workflow using the Workflow model
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -377,7 +378,7 @@ router.get('/:workflowId', authenticate, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -425,7 +426,7 @@ router.get('/:workflowId/refresh', authenticate, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -516,7 +517,7 @@ router.put('/:workflowId', authenticate, [
       edgesSample: edges.slice(0, 2)
     });
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       console.error('❌ Workflow not found:', workflowId);
       return res.status(404).json({
@@ -624,7 +625,7 @@ router.get('/:workflowId/tts-status/:jobId', authenticate, async (req, res) => {
     }
 
     // Get fresh workflow data to show current audio URLs
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     const nodesWithAudio = [];
     const nodesWithoutAudio = [];
     
@@ -695,7 +696,7 @@ router.post('/:workflowId/tts-retry/:jobId', authenticate, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId }).select('_id');
     if (!workflow) {
       return res.status(404).json({ success: false, error: 'Workflow not found' });
     }
@@ -782,7 +783,7 @@ router.put('/:workflowId/status', authenticate, [
     }
     const { status } = req.body;
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -837,7 +838,7 @@ router.get('/:workflowId/status', authenticate, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('status updatedAt');
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId }).select('status updatedAt');
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -874,7 +875,7 @@ router.delete('/:workflowId', authenticate, async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).select('_id');
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId }).select('_id');
     if (!workflow) {
       return res.status(404).json({
         success: false,
@@ -933,7 +934,7 @@ router.post('/workflow/:workflowId', async (req, res) => {
     logger.info(`Executing workflow ${workflowId} for call ${CallSid}`);
 
     // Check if workflow is active before executing
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       logger.error(`Workflow ${workflowId} not found`);
       const response = new VoiceResponse();
@@ -988,7 +989,7 @@ router.post('/workflow/:workflowId/node/:nodeId', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
 
-    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId });
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: req.method === 'GET' ? getReadUserObjectId(req) : userId });
     if (!workflow) {
       return res.status(404).json({ error: 'Workflow not found' });
     }

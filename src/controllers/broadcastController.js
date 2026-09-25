@@ -4,7 +4,7 @@ import BroadcastCall from '../models/BroadcastCall.js';
 import mongoose from 'mongoose';
 import { validateTemplate } from '../utils/messagePersonalizer.js';
 import logger from '../utils/logger.js';
-import { getUserObjectId } from '../utils/authContext.js';
+import { getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import { reportUsage } from '../services/usageService.js';
 
 /**
@@ -248,7 +248,7 @@ class BroadcastController {
   async getBroadcastStatus(req, res) {
     try {
       const { id } = req.params;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
       }
@@ -314,7 +314,7 @@ class BroadcastController {
     try {
       const { id } = req.params;
       const { status, page = 1, limit = 50, sort = 'createdAt:desc', cursor } = req.query;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
       }
@@ -386,7 +386,7 @@ class BroadcastController {
   async listBroadcasts(req, res) {
     try {
       const { status, page = 1, limit = 25, search = '', sort = 'newest' } = req.query;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
       }
@@ -498,7 +498,7 @@ class BroadcastController {
   async getBroadcastSummaryDetails(req, res) {
     try {
       const { id } = req.params;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: invalid user identity' });
       }

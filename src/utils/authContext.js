@@ -16,3 +16,15 @@ export const getUserObjectId = (req) => {
   }
   return new mongoose.Types.ObjectId(userId);
 };
+
+// Use only in read queries. Creation and mutations keep the actual actor ID.
+export const getReadUserObjectId = (req) => {
+  const ownId = getUserObjectId(req);
+  if (!ownId) return null;
+  const role = String(req.user?.companyRole || req.user?.role || '').toLowerCase();
+  if (!['admin', 'manager'].includes(role)) return ownId;
+  const ids = [...new Set([String(ownId), ...(req.user?.workspaceReadUserIds || [])])]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  return ids.length > 1 ? { $in: ids } : ownId;
+};

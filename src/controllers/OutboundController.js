@@ -11,7 +11,7 @@ import pythonTTSService from '../services/pythonTTSService.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { emitOutboundCallUpdate, emitOutboundMetrics, emitOutboundTemplateUpdate } from '../sockets/unifiedSocket.js';
-import { getUserIdString, getUserObjectId } from '../utils/authContext.js';
+import { getUserIdString, getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import mongoose from 'mongoose';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { reportUsage } from '../services/usageService.js';
@@ -735,7 +735,7 @@ class OutboundLocalController {
   async overview(req, res) {
     try {
       const userId = getUserIdString(req);
-      const userObjectId = getUserObjectId(req);
+      const userObjectId = getReadUserObjectId(req);
       if (!userId || !userObjectId) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
@@ -865,7 +865,7 @@ class OutboundLocalController {
 
   async listCampaigns(req, res) {
     try {
-      const userObjectId = getUserObjectId(req);
+      const userObjectId = getReadUserObjectId(req);
       if (!userObjectId) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
@@ -888,7 +888,7 @@ class OutboundLocalController {
 
   async listTemplates(req, res) {
     try {
-      const userObjectId = getUserObjectId(req);
+      const userObjectId = getReadUserObjectId(req);
       if (!userObjectId) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }

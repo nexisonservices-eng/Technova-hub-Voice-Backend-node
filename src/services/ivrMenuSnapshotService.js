@@ -64,7 +64,7 @@ export const getIVRMenuSnapshot = async (userId) => {
     return [];
   }
 
-  const query = { isActive: true, createdBy: normalizedUserId };
+  const query = { isActive: true, createdBy: userId?.$in ? userId : normalizedUserId };
   logger.info('Building IVR snapshot', {
     userId: normalizedUserId,
     filter: query

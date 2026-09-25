@@ -13,7 +13,7 @@ import {
   emitOutboundCallDetailsUpdate,
   emitCallListUpdate
 } from '../sockets/unifiedSocket.js';
-import { getUserObjectId } from '../utils/authContext.js';
+import { getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import { parseDateOnlyInTimezone } from '../utils/timezoneDate.js';
 
 const VOICE_TIME_ZONE = 'Asia/Kolkata';
@@ -38,7 +38,7 @@ class CallDetailsController {
     try {
       const { callId } = req.params;
       const { type } = req.query; // 'inbound', 'ivr', 'outbound'
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
@@ -104,7 +104,7 @@ class CallDetailsController {
         sortBy = 'createdAt',
         sortOrder = 'desc'
       } = req.query;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
@@ -197,7 +197,7 @@ class CallDetailsController {
   async getIVRDetails(req, res) {
     try {
       const { callId } = req.params;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Unauthorized' });
       }
@@ -286,7 +286,7 @@ class CallDetailsController {
   async getOutboundDetails(req, res) {
     try {
       const { callId } = req.params;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
 
       const call = await BroadcastCall.findOne({ callSid: callId, userId })
         .populate('broadcastId')
@@ -343,7 +343,7 @@ class CallDetailsController {
   async getInboundDetails(req, res) {
     try {
       const { callId } = req.params;
-      const userId = getUserObjectId(req);
+      const userId = getReadUserObjectId(req);
 
       const call = await Call.findOne({ 
         callSid: callId,

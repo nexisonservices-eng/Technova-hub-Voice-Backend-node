@@ -5,7 +5,7 @@
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
 import mongoose from 'mongoose';
-import { getUserObjectId } from '../utils/authContext.js';
+import { getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 
 // Campaign Template Schema
 const campaignTemplateSchema = new mongoose.Schema({
@@ -114,7 +114,7 @@ class OutboundConfigController {
      */
     async getTemplates(req, res) {
         try {
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
             }
@@ -271,7 +271,7 @@ class OutboundConfigController {
      */
     async getContactLists(req, res) {
         try {
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
             }

@@ -3,6 +3,7 @@ import callStateService from '../services/callStateService.js';
 import AIBridgeService from '../services/aiBridgeService.js';
 import ttsJobQueue from '../services/ttsJobQueue.js';
 import analyticsController from '../controllers/analyticsController.js';
+import { getReadUserObjectId } from '../utils/authContext.js';
 import { verifyOrResolveToken } from '../middleware/auth.js';
 import { setupIVRWorkflowHandlers } from './ivrWorkflowSocket.js';
 import IVRWorkflowEngine from '../services/ivrWorkflowEngine.js';
@@ -593,7 +594,7 @@ export function initializeSocketIO(socketIo) {
           return;
         }
 
-        const payload = await emitIVRMenuSnapshot(socket, userId);
+        const payload = await emitIVRMenuSnapshot(socket, getReadUserObjectId({ user: socket.user }));
         if (typeof ack === 'function') ack(payload);
         logger.info('Sent IVR menus list', {
           socketId: socket.id,
@@ -712,7 +713,7 @@ export function initializeSocketIO(socketIo) {
           return;
         }
 
-        const payload = await buildIVRMenuListPayload(userId);
+        const payload = await buildIVRMenuListPayload(getReadUserObjectId({ user: socket.user }));
         const formattedWorkflows = payload.ivrMenus || [];
 
         socket.emit('ivr_menus_list', {

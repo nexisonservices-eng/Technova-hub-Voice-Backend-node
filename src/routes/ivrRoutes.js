@@ -1,3 +1,4 @@
+import { getReadUserObjectId } from '../utils/authContext.js';
 import express from 'express';
 import IVRController from '../controllers/ivrController.js';
 import pythonTTSService from '../services/pythonTTSService.js';
@@ -84,7 +85,7 @@ router.use(authenticate);
  */
 router.get('/prompts', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -114,7 +115,7 @@ router.get('/prompts', async (req, res) => {
 router.get('/prompts/:promptKey', async (req, res) => {
   try {
     const { promptKey } = req.params;
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -465,7 +466,7 @@ router.put('/prompts/:promptKey', [
  */
 router.get('/stats', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -655,7 +656,7 @@ router.get('/voices/:language', async (req, res) => {
  */
 router.get('/menus', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -736,7 +737,7 @@ router.get('/menus', async (req, res) => {
 router.get('/menus/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -1165,7 +1166,7 @@ router.post('/menus/:id/test', async (req, res) => {
  */
 router.get('/active-calls', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -1183,7 +1184,7 @@ router.get('/active-calls', async (req, res) => {
  */
 router.get('/analytics/workflow/:workflowId', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -1207,7 +1208,7 @@ router.get('/analytics/workflow/:workflowId', async (req, res) => {
  */
 router.get('/analytics/workflow/:workflowId/events', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -1240,7 +1241,7 @@ router.get('/analytics/workflow/:workflowId/events', async (req, res) => {
  */
 router.get('/analytics/nodes/:workflowId', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -1259,7 +1260,7 @@ router.get('/analytics/nodes/:workflowId', async (req, res) => {
  */
 router.get('/executions/:workflowId', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }
@@ -1283,7 +1284,7 @@ router.get('/executions/:workflowId', async (req, res) => {
  */
 router.get('/executions/details/:callSid', async (req, res) => {
   try {
-    const userId = getAuthenticatedUserId(req);
+    const userId = getReadUserObjectId(req);
     if (!userId) {
       return res.status(401).json({ success: false, error: 'Unauthorized' });
     }

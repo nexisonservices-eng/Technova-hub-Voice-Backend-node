@@ -5,7 +5,7 @@
 import Call from '../models/call.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
-import { getUserObjectId } from '../utils/authContext.js';
+import { getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import analyticsController from './analyticsController.js';
 import { parseDateOnlyInTimezone } from '../utils/timezoneDate.js';
 
@@ -70,7 +70,7 @@ class CallLogController {
      */
     async getCallLogs(req, res) {
         try {
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
             }
@@ -147,7 +147,7 @@ class CallLogController {
     async getCallDetails(req, res) {
         try {
             const { callSid } = req.params;
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
             }
@@ -180,7 +180,7 @@ class CallLogController {
      */
     async exportCallLogs(req, res) {
         try {
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
             }
@@ -382,7 +382,7 @@ class CallLogController {
     async getCallStats(req, res) {
         try {
             const { startDate, endDate } = req.query;
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized', 'UNAUTHORIZED'));
             }

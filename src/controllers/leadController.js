@@ -1,7 +1,7 @@
 import leadService from '../services/leadService.js';
 import ResponseFormatter from '../utils/responseFormatter.js';
 import logger from '../utils/logger.js';
-import { getUserObjectId } from '../utils/authContext.js';
+import { getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import mongoose from 'mongoose';
 
 class LeadController {
@@ -10,7 +10,7 @@ class LeadController {
      */
     async getLeads(req, res) {
         try {
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized'));
             }
@@ -50,14 +50,14 @@ class LeadController {
      */
     async getLeadById(req, res) {
         try {
-            const userId = getUserObjectId(req);
+            const userId = getReadUserObjectId(req);
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized'));
             }
             const lead = await leadService.getLeadById(req.params.id, userId);
 
             // Permission check
-            if (lead.user && String(lead.user._id) !== String(userId)) {
+            if (lead.user && !(userId.$in || [userId]).some((id) => String(lead.user._id) === String(id))) {
                 return res.status(403).json(ResponseFormatter.error('Unauthorized access to lead'));
             }
 

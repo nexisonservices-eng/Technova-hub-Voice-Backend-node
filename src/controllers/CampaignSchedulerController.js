@@ -1,6 +1,6 @@
 import campaignAutomationService from '../services/campaignAutomationService.js';
 import CampaignSchedule from '../models/CampaignSchedule.js';
-import { getUserIdString, getUserObjectId } from '../utils/authContext.js';
+import { getUserIdString, getUserObjectId, getReadUserObjectId } from '../utils/authContext.js';
 import { emitCampaignUpdate } from '../sockets/unifiedSocket.js';
 import logger from '../utils/logger.js';
 
@@ -66,7 +66,7 @@ const normalizeSchedule = (schedule = {}) => {
 class CampaignSchedulerController {
   async listSchedules(req, res) {
     try {
-      const userObjectId = getUserObjectId(req);
+      const userObjectId = getReadUserObjectId(req);
       if (!userObjectId) {
         return res.status(401).json({ success: false, message: 'Unauthorized' });
       }
