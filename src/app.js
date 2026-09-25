@@ -4,6 +4,7 @@ import morgan from 'morgan';
 import logger from "./utils/logger.js";
 import voiceRoutes from "./routes/voiceRoutes.js";
 import BroadcastRoutes from "./routes/broadcastRoutes.js";
+import agentActivityRoutes from './routes/agentActivity.js';
 import AIRoutes from "./routes/aiRoutes.js";
 import OptimizedHealthRoutes from "./routes/optimizedHealthRoutes.js";
 import InboundRoutes from "./routes/inboundRoutes.js";
@@ -45,6 +46,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/voice', voiceRoutes);
 app.use('/broadcast', BroadcastRoutes);
+app.use('/api/agent-activity', agentActivityRoutes);
 app.use('/webhook/twilio', twilioWebhookRoutes); // Twilio webhooks (legacy singular path)
 app.use('/webhooks/twilio', twilioWebhookRoutes); // Twilio webhooks (exact path expected by Twilio console)
 app.use('/webhook', exotelWebhookRoutes); // Exotel/Twilio outbound local call flow webhooks
