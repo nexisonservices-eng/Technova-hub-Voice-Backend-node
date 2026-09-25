@@ -16,7 +16,7 @@ const registry = {
   campaigns: { model: OutboundCampaign, owner: 'userId', title: ['name'], label: 'Outbound campaign' },
   schedules: { model: CampaignSchedule, owner: 'userId', title: ['campaignName', 'campaignId'], label: 'Call schedule' },
   calls: { model: Call, owner: 'user', title: ['phoneNumber', 'callSid'], label: 'Call', where: { deletedAt: null } },
-  leads: { model: Lead, owner: 'user', title: ['name'], label: 'Lead' },
+  leads: { model: Lead, owner: 'user', title: ['caller.name', 'caller.phoneNumber'], label: 'Lead' },
   templates: { model: OutboundTemplate, owner: 'createdBy', title: ['name'], label: 'Voice template' }
 };
 router.get('/:kind', authenticate, createAgentActivityHandler(registry));
