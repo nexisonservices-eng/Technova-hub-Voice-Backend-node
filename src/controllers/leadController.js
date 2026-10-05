@@ -14,7 +14,7 @@ class LeadController {
             if (!userId) {
                 return res.status(401).json(ResponseFormatter.error('Unauthorized'));
             }
-            const { page, limit, status, intent, search, workflowId } = req.query;
+            const { page, limit, status, intent, search, workflowId, startDate, endDate } = req.query;
             const filters = {};
 
             filters.user = userId;
@@ -22,11 +22,25 @@ class LeadController {
             if (status) filters.status = status;
             if (intent) filters.intent = intent;
 
+            if (startDate || endDate) {
+                const start = startDate ? new Date(startDate) : null;
+                const end = endDate ? new Date(endDate) : null;
+                if ((start && Number.isNaN(start.getTime())) ||
+                    (end && Number.isNaN(end.getTime())) || (start && end && start > end)) {
+                    return res.status(400).json(ResponseFormatter.error('Invalid date range'));
+                }
+                filters.createdAt = {
+                    ...(start ? { $gte: start } : {}),
+                    ...(end ? { $lte: end } : {})
+                };
+            }
+
             if (search) {
+                const searchText = String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 filters.$or = [
-                    { 'caller.phoneNumber': { $regex: search, $options: 'i' } },
-                    { 'caller.name': { $regex: search, $options: 'i' } },
-                    { 'bookingDetails.notes': { $regex: search, $options: 'i' } }
+                    { 'caller.phoneNumber': { $regex: searchText, $options: 'i' } },
+                    { 'caller.name': { $regex: searchText, $options: 'i' } },
+                    { 'bookingDetails.notes': { $regex: searchText, $options: 'i' } }
                 ];
             }
 
