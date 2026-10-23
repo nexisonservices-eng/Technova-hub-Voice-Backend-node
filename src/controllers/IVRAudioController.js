@@ -107,6 +107,15 @@ class IVRAudioController {
      * Handle TTS preview generation
      */
     async ttsPreview(req, res) {
+        const suppliedRequestId = String(req.get?.('x-request-id') || req.headers?.['x-request-id'] || '').trim();
+        const requestId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(suppliedRequestId)
+            ? suppliedRequestId
+            : crypto.randomUUID();
+        res.set?.('X-Request-ID', requestId);
+        const requestStartedAt = Date.now();
+        logger.info('ivr_tts_preview_started', {
+            requestId, method: 'POST', route: '/ivr/tts/preview'
+        });
         try {
             const {
                 text,
@@ -120,8 +129,6 @@ class IVRAudioController {
                 return res.status(400).json({ success: false, error: 'Text is required' });
             }
 
-            logger.info(`🔊 TTS Preview requested: "${text.substring(0, 30)}...", voice: ${voice}`);
-
             const result = await IVRAudioService.generateAndUploadTTS(
                 text,
                 voice,
@@ -130,10 +137,15 @@ class IVRAudioController {
                     userId: String(req.user?.userId || req.user?._id || req.user?.id || ''),
                     username: req.user?.username || '',
                     workflowId: String(workflowId || ''),
-                    nodeId: String(nodeId || '')
+                    nodeId: String(nodeId || ''),
+                    requestId
                 }
             );
 
+            logger.info('ivr_tts_preview_succeeded', {
+                requestId, method: 'POST', route: '/ivr/tts/preview',
+                durationMs: Date.now() - requestStartedAt, status: 200
+            });
             res.json({
                 success: true,
                 audioUrl: result.audioUrl,
@@ -141,24 +153,41 @@ class IVRAudioController {
                 storage: result.storage
             });
         } catch (error) {
-            logger.error('TTS preview generation failed:', error);
             const message = error?.message || 'TTS preview generation failed';
             const upstreamStatus = error?.response?.status || 0;
             const isConnectionFailure = [
                 'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNABORTED'
             ].includes(error?.code) || error?.code === 'PYTHON_TTS_UNAVAILABLE';
-            const statusCode = isConnectionFailure || upstreamStatus ? 502 : 500;
+            const statusCode = upstreamStatus || (isConnectionFailure ? 502 : 500);
+            const responseContentType = String(error?.response?.headers?.['content-type'] || '').toLowerCase();
+            const upstreamClassification = error?.upstreamClassification || (
+                upstreamStatus
+                    ? (responseContentType.includes('text/html') ? 'html_error_page' : 'upstream_http_error')
+                    : isConnectionFailure ? 'connection_error' : 'internal_error'
+            );
+            let likelyUpstreamSource = 'unknown';
+            try {
+                if (new URL(error?.serviceUrl || '').hostname.endsWith('.onrender.com') && upstreamClassification === 'html_error_page') {
+                    likelyUpstreamSource = 'render_proxy';
+                }
+            } catch { /* service URL is unavailable */ }
+            logger.error('ivr_tts_preview_failed', {
+                requestId, method: 'POST', route: '/ivr/tts/preview',
+                durationMs: Date.now() - requestStartedAt, status: statusCode,
+                upstreamStatus: upstreamStatus || null, upstreamUrl: error?.serviceUrl || null,
+                errorCode: error?.code || null, failureCategory: upstreamClassification
+            });
             res.status(statusCode).json({
                 success: false,
                 error: message,
                 details: {
+                    requestId,
                     statusCode,
                     upstreamStatus: upstreamStatus || null,
                     code: error?.code || '',
                     serviceUrl: error?.serviceUrl || '',
-                    upstream: error?.response?.data
-                        ? String(Buffer.isBuffer(error.response.data) ? error.response.data.toString() : JSON.stringify(error.response.data)).slice(0, 500)
-                        : ''
+                    upstreamClassification,
+                    likelyUpstreamSource
                 }
             });
         }

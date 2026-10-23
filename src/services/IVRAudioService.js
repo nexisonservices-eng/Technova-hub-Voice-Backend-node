@@ -87,10 +87,11 @@ class IVRAudioService {
      * Generate TTS and upload
      */
     async generateAndUploadTTS(text, voice, language, userContext = {}) {
-        logger.info(`Generating TTS for upload: text="${text.substring(0, 30)}...", voice=${voice}`);
 
         // Generate buffer from TTS service
-        const buffer = await pythonTTSService.generateSpeech(text, language, voice);
+        const buffer = await pythonTTSService.generateSpeech(text, language, voice, {
+            requestId: userContext.requestId
+        });
         const uniqueSuffix = `tts_${Date.now()}_${Math.round(Math.random() * 1000)}`;
         const sanitizeSegment = (value) => String(value || '')
             .trim()

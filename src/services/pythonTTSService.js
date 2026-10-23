@@ -6,7 +6,19 @@ import cloudinary from 'cloudinary';
 import logger from '../utils/logger.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 import Workflow from '../models/Workflow.js';
-import { buildPythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
+import { buildPythonTtsEndpoint, describePythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
+
+const classifyUpstreamError = (error) => {
+  const status = error?.response?.status;
+  const contentType = String(error?.response?.headers?.['content-type'] || '').toLowerCase();
+  const data = error?.response?.data;
+  const prefix = Buffer.isBuffer(data) ? data.subarray(0, 256).toString('utf8').trimStart().toLowerCase() : String(data || '').slice(0, 256).trimStart().toLowerCase();
+  if (contentType.includes('text/html') || prefix.startsWith('<!doctype html') || prefix.startsWith('<html')) return 'html_error_page';
+  if (status) return 'upstream_http_error';
+  if (['ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH'].includes(error?.code)) return 'connection_error';
+  if (['ETIMEDOUT', 'ECONNABORTED'].includes(error?.code)) return 'timeout';
+  return 'upstream_request_error';
+};
 
 class PythonTTSService {
   constructor() {
@@ -59,9 +71,23 @@ class PythonTTSService {
     return crypto.createHash('sha256').update(text).digest('hex');
   }
 
-  async getAvailableVoices(language = null) {
+  async getAvailableVoices(language = null, requestId = null) {
+    const endpoint = buildPythonTtsEndpoint('/tts/voices', this.pythonServiceUrl);
+    const safeEndpoint = describePythonTtsEndpoint(endpoint);
+    const startedAt = Date.now();
+    let requestStartedAt = Date.now();
+    let retryStartedAt = null;
     try {
-      const response = await axios.get(buildPythonTtsEndpoint('/tts/voices', this.pythonServiceUrl));
+      logger.info('python_tts_upstream_request', {
+        requestId, method: 'GET', upstreamUrl: safeEndpoint, route: '/tts/voices'
+      });
+      const response = await axios.get(endpoint, {
+        headers: requestId ? { 'X-Request-ID': requestId } : undefined
+      });
+      logger.info('python_tts_upstream_response', {
+        requestId, method: 'GET', upstreamUrl: safeEndpoint, route: '/tts/voices',
+        durationMs: Date.now() - startedAt, status: response.status, failureCategory: null
+      });
       logger.info('🔍 Available voices from Python service:', response.data);
       
       // Extract voices array from response (Python returns {voices: [...], count: N})
@@ -90,15 +116,21 @@ class PythonTTSService {
       });
     } catch (error) {
       logger.error('❌ Failed to get available voices:', error.message);
+      logger.warn('python_tts_upstream_failed', {
+        requestId, method: 'GET', upstreamUrl: safeEndpoint, route: '/tts/voices',
+        durationMs: Date.now() - startedAt, status: error?.response?.status || null,
+        errorCode: error?.code || null, failureCategory: classifyUpstreamError(error)
+      });
       return this.allowedVoices;
     }
   }
 
-  async generateSpeech(text, language = 'en-GB', voiceOverride) {
+  async generateSpeech(text, language = 'en-GB', voiceOverride, requestContext = {}) {
     const startTime = Date.now();
+    const requestId = requestContext.requestId || crypto.randomUUID();
 
     // Get available voices from Python service
-    const availableVoices = await this.getAvailableVoices();
+    const availableVoices = await this.getAvailableVoices(null, requestId);
     
     // Extract the actual voices array from Python response
     const extractedVoices = availableVoices.voices || availableVoices;
@@ -115,6 +147,8 @@ class PythonTTSService {
     // hi-IN). The backend also exposes en-US as a compatibility alias.
     const normalizedLanguage = this.VOICE_LANGUAGE[voice] || (language === 'en-US' ? 'en-GB' : language);
     const payload = { text, voice, language: normalizedLanguage };
+    const endpoint = buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl);
+    const safeEndpoint = describePythonTtsEndpoint(endpoint);
     
     logger.info(`🎙 TTS Request Details:`, {
       voice: voice,
@@ -122,12 +156,22 @@ class PythonTTSService {
       payloadSize: JSON.stringify(payload).length
     });
 
+    let requestStartedAt = Date.now();
+    let retryStartedAt = null;
     try {
+      logger.info('python_tts_upstream_request', {
+        requestId, method: 'POST', upstreamUrl: safeEndpoint, route: '/tts/broadcast', attempt: 1
+      });
+      requestStartedAt = Date.now();
       const response = await axios.post(
-        buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl),
+        endpoint,
         payload,
-        { responseType: 'arraybuffer', timeout: 60000 } // Back to arraybuffer for binary audio
+        { responseType: 'arraybuffer', timeout: 60000, headers: { 'X-Request-ID': requestId } }
       );
+      logger.info('python_tts_upstream_response', {
+        requestId, method: 'POST', upstreamUrl: safeEndpoint, route: '/tts/broadcast',
+        durationMs: Date.now() - requestStartedAt, status: response.status, failureCategory: null
+      });
 
       const audioBuffer = Buffer.from(response.data || []);
       logger.info(`✅ TTS completed in ${Date.now() - startTime}ms (${audioBuffer.length} bytes)`);
@@ -136,15 +180,32 @@ class PythonTTSService {
       }
       return audioBuffer; // Direct buffer access for binary response
     } catch (error) {
+      error.serviceUrl = safeEndpoint;
+      error.requestId = requestId;
+      error.upstreamStatus = error?.response?.status || null;
+      error.upstreamClassification = classifyUpstreamError(error);
+      logger.error('python_tts_upstream_failed', {
+        requestId, method: 'POST', upstreamUrl: safeEndpoint, route: '/tts/broadcast',
+        attempt: 1, durationMs: Date.now() - requestStartedAt, status: error.upstreamStatus,
+        errorCode: error?.code || null, failureCategory: error.upstreamClassification
+      });
       // Retry once for timeout errors
       if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
         logger.warn(`⚠️ TTS timeout, retrying once for voice=${voice}, language=${language}`);
         try {
-          const retryResponse = await axios.post(
-            buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl),
-            payload,
-            { responseType: 'arraybuffer', timeout: 90000 }
-          );
+          logger.info('python_tts_upstream_request', {
+            requestId, method: 'POST', upstreamUrl: safeEndpoint, route: '/tts/broadcast', attempt: 2
+          });
+          retryStartedAt = Date.now();
+          const retryResponse = await axios.post(endpoint, payload, {
+            responseType: 'arraybuffer', timeout: 90000,
+            headers: { 'X-Request-ID': requestId }
+          });
+          logger.info('python_tts_upstream_response', {
+            requestId, method: 'POST', upstreamUrl: safeEndpoint, route: '/tts/broadcast',
+            attempt: 2, durationMs: Date.now() - retryStartedAt, status: retryResponse.status,
+            failureCategory: null
+          });
           
           const retryBuffer = Buffer.from(retryResponse.data || []);
           logger.info(`✅ TTS retry completed in ${Date.now() - startTime}ms (${retryBuffer.length} bytes)`);
@@ -153,7 +214,16 @@ class PythonTTSService {
           }
           return retryBuffer;
         } catch (retryError) {
-          logger.error(`❌ TTS retry failed for voice=${voice}, language=${language}:`, retryError.message);
+          retryError.serviceUrl ||= safeEndpoint;
+          retryError.requestId ||= requestId;
+          retryError.upstreamStatus ||= retryError?.response?.status || null;
+          retryError.upstreamClassification ||= classifyUpstreamError(retryError);
+          logger.error('python_tts_upstream_failed', {
+            requestId, method: 'POST', upstreamUrl: safeEndpoint, route: '/tts/broadcast',
+            attempt: 2, durationMs: retryStartedAt ? Date.now() - retryStartedAt : null,
+            status: retryError.upstreamStatus, errorCode: retryError?.code || null,
+            failureCategory: retryError.upstreamClassification
+          });
           throw retryError;
         }
       } else {

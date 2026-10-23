@@ -14,6 +14,9 @@ const normalizeBaseUrl = (value) => {
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.search || parsed.hash) {
     throw new Error('PYTHON_TTS_BASE_URL must use HTTP(S) and cannot include query or fragment values');
   }
+  if (parsed.username || parsed.password) {
+    throw new Error('PYTHON_TTS_BASE_URL cannot include embedded credentials');
+  }
   if (parsed.hostname.endsWith('.onrender.comv')) {
     throw new Error('PYTHON_TTS_BASE_URL has a malformed Render hostname; remove the trailing character after .onrender.com');
   }
@@ -46,5 +49,16 @@ export const buildPythonTtsEndpoint = (path, baseUrl = resolvePythonTtsBaseUrl()
   const endpointPath = String(path || '').replace(/^\/+/, '');
   if (!base || !endpointPath) throw new Error('A Python TTS base URL and endpoint path are required');
   return new URL(endpointPath, `${base}/`).toString();
+};
+
+// Return only the origin and path for logs/diagnostics. Never include userinfo,
+// query parameters, or fragments, even if a URL is supplied by another caller.
+export const describePythonTtsEndpoint = (endpoint) => {
+  try {
+    const parsed = new URL(endpoint);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return 'configured-python-tts-endpoint';
+  }
 };
 
