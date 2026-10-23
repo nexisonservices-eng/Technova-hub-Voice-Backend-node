@@ -11,6 +11,7 @@ services:
         value: production
       - key: PYTHON_TTS_BASE_URL
         sync: false
+        description: Base URL of the deployed Python TTS service; set this in the Render dashboard.
       - key: MONGODB_URI
         description: MongoDB connection string for the voice backend.
       - key: JWT_SECRET

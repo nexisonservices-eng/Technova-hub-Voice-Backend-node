@@ -101,7 +101,12 @@ class PythonTTSService {
     try {
       await axios.get(buildPythonTtsEndpoint('/health', this.pythonServiceUrl), { timeout: Number(process.env.PYTHON_TTS_HEALTH_TIMEOUT_MS || 15000) });
     } catch (healthError) {
-      throw new Error(`Python TTS service not accessible at ${this.pythonServiceUrl}: ${healthError.message}`);
+      const error = new Error(`Python TTS service not accessible at ${this.pythonServiceUrl}: ${healthError.message}`, {
+        cause: healthError
+      });
+      error.code = healthError.code || 'PYTHON_TTS_UNAVAILABLE';
+      error.serviceUrl = this.pythonServiceUrl;
+      throw error;
     }
     
     // Get available voices from Python service

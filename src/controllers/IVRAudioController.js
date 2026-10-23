@@ -108,7 +108,13 @@ class IVRAudioController {
      */
     async ttsPreview(req, res) {
         try {
-            const { text, voice, language = 'en-GB' } = req.body;
+            const {
+                text,
+                voice,
+                language = 'en-GB',
+                workflowId = '',
+                nodeId = ''
+            } = req.body;
 
             if (!text) {
                 return res.status(400).json({ success: false, error: 'Text is required' });
@@ -122,7 +128,9 @@ class IVRAudioController {
                 language,
                 {
                     userId: String(req.user?.userId || req.user?._id || req.user?.id || ''),
-                    username: req.user?.username || ''
+                    username: req.user?.username || '',
+                    workflowId: String(workflowId || ''),
+                    nodeId: String(nodeId || '')
                 }
             );
 
@@ -135,13 +143,19 @@ class IVRAudioController {
         } catch (error) {
             logger.error('TTS preview generation failed:', error);
             const message = error?.message || 'TTS preview generation failed';
-            const statusCode = error?.response?.status || 500;
-            res.status(500).json({
+            const upstreamStatus = error?.response?.status || 0;
+            const isConnectionFailure = [
+                'ENOTFOUND', 'ECONNREFUSED', 'EHOSTUNREACH', 'ETIMEDOUT', 'ECONNABORTED'
+            ].includes(error?.code) || error?.code === 'PYTHON_TTS_UNAVAILABLE';
+            const statusCode = isConnectionFailure || upstreamStatus ? 502 : 500;
+            res.status(statusCode).json({
                 success: false,
                 error: message,
                 details: {
                     statusCode,
+                    upstreamStatus: upstreamStatus || null,
                     code: error?.code || '',
+                    serviceUrl: error?.serviceUrl || '',
                     upstream: error?.response?.data
                         ? String(Buffer.isBuffer(error.response.data) ? error.response.data.toString() : JSON.stringify(error.response.data)).slice(0, 500)
                         : ''

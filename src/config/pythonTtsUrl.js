@@ -14,6 +14,9 @@ const normalizeBaseUrl = (value) => {
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.search || parsed.hash) {
     throw new Error('PYTHON_TTS_BASE_URL must use HTTP(S) and cannot include query or fragment values');
   }
+  if (parsed.hostname.endsWith('.onrender.comv')) {
+    throw new Error('PYTHON_TTS_BASE_URL has a malformed Render hostname; remove the trailing character after .onrender.com');
+  }
 
   // Trim path separators without concatenating or otherwise editing the host.
   parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
@@ -21,28 +24,18 @@ const normalizeBaseUrl = (value) => {
 };
 
 export const resolvePythonTtsBaseUrl = (env = process.env) => {
-  // PYTHON_TTS_BASE_URL is canonical. Legacy keys remain fallbacks for
-  // deployments that have not yet moved their environment configuration.
-  const configured = [
-    env.PYTHON_TTS_BASE_URL,
-    env.AI_SERVICE_HTTP,
-    env.PYTHON_TTS_SERVICE_URL,
-    env.PYTHON_TTS_URL
-  ].find((value) => String(value || '').trim());
-
-  return normalizeBaseUrl(configured) || DEFAULT_LOCAL_BASE_URL;
+  // Keep the Python TTS address on one explicit setting. AI_SERVICE_HTTP is
+  // also used by other integrations and may contain an unrelated URL.
+  const configured = normalizeBaseUrl(env.PYTHON_TTS_BASE_URL);
+  if (configured) return configured;
+  if (String(env.NODE_ENV || '').toLowerCase() === 'production') {
+    throw new Error('PYTHON_TTS_BASE_URL must be configured in production');
+  }
+  return DEFAULT_LOCAL_BASE_URL;
 };
 
 export const getPythonTtsBaseUrls = (env = process.env) => {
-  const canonical = String(env.PYTHON_TTS_BASE_URL || '').trim();
-  if (canonical) return [normalizeBaseUrl(canonical)];
-
-  const legacyUrls = [...new Set([
-    env.AI_SERVICE_HTTP,
-    env.PYTHON_TTS_SERVICE_URL,
-    env.PYTHON_TTS_URL
-  ].map(normalizeBaseUrl).filter(Boolean))];
-  return legacyUrls.length ? legacyUrls : [DEFAULT_LOCAL_BASE_URL];
+  return [resolvePythonTtsBaseUrl(env)];
 };
 
 export const buildPythonTtsEndpoint = (path, baseUrl = resolvePythonTtsBaseUrl()) => {

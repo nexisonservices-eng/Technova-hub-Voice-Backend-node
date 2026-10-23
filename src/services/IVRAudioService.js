@@ -91,7 +91,17 @@ class IVRAudioService {
 
         // Generate buffer from TTS service
         const buffer = await pythonTTSService.generateSpeech(text, language, voice);
-        const publicId = `tts_${Date.now()}_${Math.round(Math.random() * 1000)}`;
+        const uniqueSuffix = `tts_${Date.now()}_${Math.round(Math.random() * 1000)}`;
+        const sanitizeSegment = (value) => String(value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        const workflowId = sanitizeSegment(userContext.workflowId);
+        const nodeId = sanitizeSegment(userContext.nodeId);
+        const publicId = workflowId && nodeId
+            ? `workflows/${workflowId}/nodes/${nodeId}/${uniqueSuffix}`
+            : uniqueSuffix;
 
         return this.uploadAudio(buffer, publicId, language, null, userContext);
     }
