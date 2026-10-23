@@ -91,7 +91,7 @@ router.get('/prompts', async (req, res) => {
     }
 
     const prompts = await Workflow.find({ isActive: true, createdBy: userId })
-      .select('promptKey displayName nodes edges config status tags createdAt updatedAt')
+      .select('promptKey displayName nodes edges config status tags createdAt updatedAt text menuConfig')
       .sort({ promptKey: 1 });
 
     res.json({
@@ -667,32 +667,41 @@ router.get('/menus', async (req, res) => {
     const skip = (page - 1) * limit;
 
     // Get total count
-    const total = await Workflow.countDocuments({ isActive: true, createdBy: userId });
+    // Older workflow documents predate isActive; treat a missing flag as active
+    // while keeping the owner/workspace read scope intact.
+    const menuFilter = { isActive: { $ne: false }, createdBy: userId };
+    const total = await Workflow.countDocuments(menuFilter);
 
-    const menus = await Workflow.find({ isActive: true, createdBy: userId })
+    const menus = await Workflow.find(menuFilter)
       .select('promptKey displayName nodes edges config status tags createdAt updatedAt')
       .sort({ promptKey: 1 })
       .skip(skip)
       .limit(limit);
 
     const formattedMenus = menus.map(menu => {
-      const greetingNode = menu.nodes.find(node => node.type === 'greeting');
+      const greetingNode = menu.nodes.find(node => node.type === 'greeting' || node.type === 'audio');
       const inputNodes = menu.nodes.filter(node => node.type === 'input');
+      const legacyOptions = Array.isArray(menu.menuConfig?.options) ? menu.menuConfig.options : [];
 
       return {
         _id: menu._id,
         promptKey: menu.promptKey,
         displayName: menu.displayName,
         greeting: {
-          text: greetingNode?.data?.text || 'Welcome',
+          text: greetingNode?.data?.text || menu.text || 'Welcome',
           voice: menu.config?.voiceId || 'en-GB-SoniaNeural',
           language: menu.config?.language || 'en-GB'
         },
-        menuOptions: inputNodes.map(node => ({
+        menuOptions: inputNodes.length ? inputNodes.map(node => ({
           digit: node.data?.digit || '1',
           label: node.data?.label || 'Option',
           action: node.data?.action || 'transfer',
           destination: node.data?.destination || ''
+        })) : legacyOptions.map(option => ({
+          digit: option.digit || '1',
+          label: option.label || option.action || 'Option',
+          action: option.action || 'transfer',
+          destination: option.target || option.destination || ''
         })),
         settings: {
           timeout: menu.config?.timeout || 10,
@@ -808,6 +817,8 @@ router.post('/menus', [
   body('name').notEmpty().withMessage('Menu name is required'),
   body('greeting').notEmpty().withMessage('Greeting text is required'),
   body('menu').isArray().withMessage('Menu options must be an array')
+    .bail().custom(options => options.every(option => option && typeof option === 'object' && !Array.isArray(option)))
+    .withMessage('Each menu option must be an object')
 ], async (req, res) => {
   try {
     console.log('POST /menus request body:', req.body);
@@ -838,25 +849,42 @@ router.post('/menus', [
     }
 
     // Create new workflow menu
+    const greetingNode = {
+      id: 'greeting',
+      type: 'greeting',
+      position: { x: 250, y: 80 },
+      data: { text: greeting, voice: 'en-GB-SoniaNeural', language: 'en-GB' }
+    };
+    const optionNodes = menu.map((option, index) => ({
+      id: `option-${index + 1}`,
+      type: 'input',
+      position: { x: 250, y: 200 + index * 100 },
+      data: {
+        digit: String(option.digit || index + 1),
+        label: String(option.label || option.action || `Option ${index + 1}`),
+        action: option.action || 'transfer',
+        destination: option.destination || option.target || ''
+      }
+    }));
     const newMenu = new Workflow({
       promptKey: name,
       displayName: name,
-      nodes: [],
+      nodes: [greetingNode, ...optionNodes],
       edges: [],
       config: {
-        type: 'menu',
-        options: menu
+        voiceId: 'en-GB-SoniaNeural',
+        language: 'en-GB'
       },
+      status: 'draft',
       tags,
       isActive: true,
       createdBy: userId,
       lastModifiedBy: userId
     });
 
-    // Generate audio for all nodes
+    // Keep the existing greeting audio generation behavior now that the
+    // submitted greeting is represented as a workflow node.
     const updatedWorkflow = await pythonTTSService.populateWorkflowAudio(newMenu, true);
-
-    // Save updated workflow
     await updatedWorkflow.save();
 
     logger.info(`Created new IVR menu: ${name}`);
@@ -877,12 +905,12 @@ router.post('/menus', [
           audioAssetId: audioFile?.cloudinaryPublicId || null,
           voice: audioFile?.language || 'Unknown'
         },
-        menuOptions: (updatedWorkflow.menuConfig?.options || []).map(opt => ({
-          _id: opt._id,
-          digit: opt.digit,
-          label: opt.label || opt.action,
-          action: opt.action,
-          destination: opt.target || opt.destination || ''
+        menuOptions: updatedWorkflow.nodes.filter(node => node.type === 'input').map(node => ({
+          _id: node._id,
+          digit: node.data?.digit,
+          label: node.data?.label || node.data?.action,
+          action: node.data?.action,
+          destination: node.data?.destination || ''
         })),
         settings: {
           timeout: updatedWorkflow.menuConfig?.inputValidation?.timeout || 10,
