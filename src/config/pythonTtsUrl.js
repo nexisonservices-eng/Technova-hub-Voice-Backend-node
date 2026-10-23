@@ -15,7 +15,7 @@ const normalizeBaseUrl = (value) => {
     throw new Error('PYTHON_TTS_BASE_URL must use HTTP(S) and cannot include query or fragment values');
   }
 
-  // Trim path separators only. The hostname is never rewritten or concatenated.
+  // Trim path separators without concatenating or otherwise editing the host.
   parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
   return parsed.toString().replace(/\/$/, '');
 };
