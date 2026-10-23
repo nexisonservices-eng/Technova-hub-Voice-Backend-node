@@ -96,19 +96,7 @@ class PythonTTSService {
 
   async generateSpeech(text, language = 'en-GB', voiceOverride) {
     const startTime = Date.now();
-    
-    // Check if Python service is accessible first
-    try {
-      await axios.get(buildPythonTtsEndpoint('/health', this.pythonServiceUrl), { timeout: Number(process.env.PYTHON_TTS_HEALTH_TIMEOUT_MS || 15000) });
-    } catch (healthError) {
-      const error = new Error(`Python TTS service not accessible at ${this.pythonServiceUrl}: ${healthError.message}`, {
-        cause: healthError
-      });
-      error.code = healthError.code || 'PYTHON_TTS_UNAVAILABLE';
-      error.serviceUrl = this.pythonServiceUrl;
-      throw error;
-    }
-    
+
     // Get available voices from Python service
     const availableVoices = await this.getAvailableVoices();
     
@@ -123,12 +111,14 @@ class PythonTTSService {
       this.languageMappings[language]?.voice ||
       'en-GB-SoniaNeural';
 
-    const payload = { text, voice, language };
+    // The Python service only accepts canonical voice locales (en-GB, ta-IN,
+    // hi-IN). The backend also exposes en-US as a compatibility alias.
+    const normalizedLanguage = this.VOICE_LANGUAGE[voice] || (language === 'en-US' ? 'en-GB' : language);
+    const payload = { text, voice, language: normalizedLanguage };
     
     logger.info(`🎙 TTS Request Details:`, {
-      text: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
       voice: voice,
-      language: language,
+      language: normalizedLanguage,
       payloadSize: JSON.stringify(payload).length
     });
 
@@ -170,21 +160,8 @@ class PythonTTSService {
         logger.error(`❌ TTS failed for voice=${voice}, language=${language}:`, {
           message: error.message,
           status: error.response?.status,
-          data: error.response?.data,
-          stack: error.stack,
           code: error.code
         });
-        
-        // Try to parse error response if it's JSON
-        if (error.response?.data) {
-          try {
-            const errorData = JSON.parse(error.response.data.toString());
-            logger.error('❌ Parsed TTS error:', errorData);
-          } catch (e) {
-            logger.error('❌ Raw TTS error response:', error.response.data.toString());
-          }
-        }
-        
         throw error;
       }
     }
