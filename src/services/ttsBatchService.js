@@ -2,13 +2,11 @@ import axios from 'axios';
 import { uploadToCloudinary, isCloudinaryConfigured } from "../../src/utils/cloudinaryUtils.js";
 import logger from '../utils/logger.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import { buildPythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
 
 class TTSBatchService {
   constructor() {
-    this.pythonServiceUrl =
-      process.env.AI_SERVICE_HTTP ||
-      process.env.PYTHON_TTS_SERVICE_URL ||
-      'http://localhost:4000';
+    this.pythonServiceUrl = resolvePythonTtsBaseUrl();
   }
 
 
@@ -60,7 +58,7 @@ class TTSBatchService {
   async _generateSingle(message, voiceConfig, userContext = {}) {
     try {
       const response = await axios.post(
-        `${this.pythonServiceUrl}/tts/broadcast`,
+        buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl),
         {
 
           text: message.text,

@@ -9,6 +9,8 @@ services:
         value: 5000
       - key: NODE_ENV
         value: production
+      - key: PYTHON_TTS_BASE_URL
+        value: https://technova-hub-voice-backend-python-82sv.onrender.com
       - key: MONGODB_URI
         description: MongoDB connection string for the voice backend.
       - key: JWT_SECRET

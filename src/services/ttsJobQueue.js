@@ -4,6 +4,7 @@ import logger from '../utils/logger.js';
 import Workflow from '../models/Workflow.js';
 import cloudinary from 'cloudinary';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import { buildPythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
 
 
 class TTSJobQueue {
@@ -438,7 +439,8 @@ class TTSJobQueue {
 
 
     // Generate audio using VoiceBroadcast pattern (direct axios call)
-    const aiServiceUrl = process.env.AI_SERVICE_HTTP || process.env.PYTHON_TTS_URL || 'http://localhost:4000';
+    const aiServiceUrl = resolvePythonTtsBaseUrl();
+    const ttsEndpoint = buildPythonTtsEndpoint('/tts/broadcast', aiServiceUrl);
     let audioBuffer;
     let ttsSuccess = false;
     let lastError = null;
@@ -447,9 +449,9 @@ class TTSJobQueue {
     const maxTtsRetries = 2;
     for (let attempt = 1; attempt <= maxTtsRetries; attempt++) {
       try {
-        logger.info(`🔊 Calling TTS service (attempt ${attempt}/${maxTtsRetries}): ${aiServiceUrl}/tts/broadcast`);
+        logger.info(`🔊 Calling TTS service (attempt ${attempt}/${maxTtsRetries}): ${ttsEndpoint}`);
         const ttsResponse = await axios.post(
-          `${aiServiceUrl}/tts/broadcast`,
+          ttsEndpoint,
           {
             text: text,
             voice: voice,

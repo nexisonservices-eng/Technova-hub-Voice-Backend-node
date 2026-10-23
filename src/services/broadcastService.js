@@ -13,6 +13,7 @@ import broadcastQueueService from './broadcastQueueService.js';
 import aiAssistantService from './aiAssistantService.js';
 import { emitStatsUpdate, emitBroadcastListUpdate, emitCallsCreated } from '../sockets/unifiedSocket.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import { buildPythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
 import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 class BroadcastService {
@@ -144,10 +145,10 @@ class BroadcastService {
   async generateSingleAudio(message, voice, userContext = {}) {
     try {
       // Call Python TTS service
-      const aiServiceUrl = process.env.AI_SERVICE_HTTP || 'http://localhost:4000';
+      const aiServiceUrl = resolvePythonTtsBaseUrl();
 
       const ttsResponse = await axios.post(
-        `${aiServiceUrl}/tts/broadcast`,
+        buildPythonTtsEndpoint('/tts/broadcast', aiServiceUrl),
         {
           text: message.text,
           voice: voice.voiceId,

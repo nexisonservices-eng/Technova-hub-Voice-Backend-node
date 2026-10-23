@@ -3,8 +3,8 @@ import crypto from 'crypto';
 import logger from '../utils/logger.js';
 import cloudinary from "../utils/cloudinaryUtils.js";
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import { buildPythonTtsEndpoint, getPythonTtsBaseUrls } from '../config/pythonTtsUrl.js';
 
-const PYTHON_TTS_URL = process.env.PYTHON_TTS_URL || 'http://localhost:4000';
 const AUDIO_CACHE_TTL = 86400000; // 24 hours in milliseconds
 
 /**
@@ -18,21 +18,8 @@ class WorkflowAudioService {
     this.processingQueue = new Map(); // Prevent duplicate requests
   }
 
-  normalizeServiceUrl(url = '') {
-    return String(url).trim().replace(/\/+$/, '');
-  }
-
   getTtsServiceUrls() {
-    const candidates = [
-      process.env.AI_SERVICE_HTTP,
-      process.env.PYTHON_TTS_URL,
-      process.env.PYTHON_TTS_SERVICE_URL,
-      PYTHON_TTS_URL
-    ]
-      .map((url) => this.normalizeServiceUrl(url))
-      .filter(Boolean);
-
-    return [...new Set(candidates)];
+    return getPythonTtsBaseUrls();
   }
 
   async postTtsWithFailover(payload) {
@@ -41,9 +28,10 @@ class WorkflowAudioService {
 
     for (const serviceUrl of urls) {
       try {
-        logger.info(`Trying TTS endpoint: ${serviceUrl}/tts/broadcast`);
+        const endpoint = buildPythonTtsEndpoint('/tts/broadcast', serviceUrl);
+        logger.info(`Trying TTS endpoint: ${endpoint}`);
         const response = await axios.post(
-          `${serviceUrl}/tts/broadcast`,
+          endpoint,
           payload,
           {
             responseType: 'arraybuffer',

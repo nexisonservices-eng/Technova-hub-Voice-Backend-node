@@ -6,10 +6,11 @@ import cloudinary from 'cloudinary';
 import logger from '../utils/logger.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
 import Workflow from '../models/Workflow.js';
+import { buildPythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
 
 class PythonTTSService {
   constructor() {
-    this.pythonServiceUrl = this.resolvePythonServiceUrl();
+    this.pythonServiceUrl = resolvePythonTtsBaseUrl();
 
     // Edge TTS free tier only supports these voices (now synced with Python service)
     this.allowedVoices = [
@@ -54,36 +55,13 @@ class PythonTTSService {
     if (!fs.existsSync(this.tempDir)) fs.mkdirSync(this.tempDir, { recursive: true });
   }
 
-  resolvePythonServiceUrl() {
-    const cleanUrl = (value) => String(value || '').trim().replace(/\/+$/, '');
-    const configuredUrl =
-      cleanUrl(process.env.AI_SERVICE_HTTP) ||
-      cleanUrl(process.env.PYTHON_TTS_SERVICE_URL) ||
-      cleanUrl(process.env.PYTHON_TTS_URL);
-
-    if (configuredUrl) return configuredUrl;
-
-    const baseUrl = cleanUrl(process.env.BASE_URL);
-    const hostedRuntime = Boolean(
-      process.env.NODE_ENV === 'production' ||
-      process.env.RENDER ||
-      process.env.RENDER_SERVICE_ID ||
-      process.env.RENDER_SERVICE_NAME ||
-      (baseUrl && !baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1'))
-    );
-
-    return hostedRuntime
-      ? 'https://technova-hub-voice-backend-python-jzxq.onrender.com'
-      : 'http://localhost:4000';
-  }
-
   generateTextHash(text) {
     return crypto.createHash('sha256').update(text).digest('hex');
   }
 
   async getAvailableVoices(language = null) {
     try {
-      const response = await axios.get(`${this.pythonServiceUrl}/tts/voices`);
+      const response = await axios.get(buildPythonTtsEndpoint('/tts/voices', this.pythonServiceUrl));
       logger.info('🔍 Available voices from Python service:', response.data);
       
       // Extract voices array from response (Python returns {voices: [...], count: N})
@@ -121,7 +99,7 @@ class PythonTTSService {
     
     // Check if Python service is accessible first
     try {
-      await axios.get(`${this.pythonServiceUrl}/health`, { timeout: Number(process.env.PYTHON_TTS_HEALTH_TIMEOUT_MS || 15000) });
+      await axios.get(buildPythonTtsEndpoint('/health', this.pythonServiceUrl), { timeout: Number(process.env.PYTHON_TTS_HEALTH_TIMEOUT_MS || 15000) });
     } catch (healthError) {
       throw new Error(`Python TTS service not accessible at ${this.pythonServiceUrl}: ${healthError.message}`);
     }
@@ -151,7 +129,7 @@ class PythonTTSService {
 
     try {
       const response = await axios.post(
-        `${this.pythonServiceUrl}/tts/broadcast`,
+        buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl),
         payload,
         { responseType: 'arraybuffer', timeout: 60000 } // Back to arraybuffer for binary audio
       );
@@ -168,7 +146,7 @@ class PythonTTSService {
         logger.warn(`⚠️ TTS timeout, retrying once for voice=${voice}, language=${language}`);
         try {
           const retryResponse = await axios.post(
-            `${this.pythonServiceUrl}/tts/broadcast`,
+            buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl),
             payload,
             { responseType: 'arraybuffer', timeout: 90000 }
           );
@@ -209,7 +187,7 @@ class PythonTTSService {
 
   async checkPythonServiceHealth() {
     try {
-      const response = await axios.get(`${this.pythonServiceUrl}/health`, { timeout: 10000 });
+      const response = await axios.get(buildPythonTtsEndpoint('/health', this.pythonServiceUrl), { timeout: 10000 });
       return {
         healthy: true,
         serviceUrl: this.pythonServiceUrl,
