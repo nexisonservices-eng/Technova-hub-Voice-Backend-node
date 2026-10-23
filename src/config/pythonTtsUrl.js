@@ -28,10 +28,13 @@ export const resolvePythonTtsBaseUrl = (env = process.env) => {
   // also used by other integrations and may contain an unrelated URL.
   const configured = normalizeBaseUrl(env.PYTHON_TTS_BASE_URL);
   if (configured) return configured;
-  if (String(env.NODE_ENV || '').toLowerCase() === 'production') {
-    throw new Error('PYTHON_TTS_BASE_URL must be configured in production');
+  const runtimeEnvironment = String(env.NODE_ENV || '').trim().toLowerCase();
+  if (runtimeEnvironment === 'development' || runtimeEnvironment === 'test') {
+    return DEFAULT_LOCAL_BASE_URL;
   }
-  return DEFAULT_LOCAL_BASE_URL;
+  throw new Error(
+    'PYTHON_TTS_BASE_URL must be configured. For local development, set it to the running Python TTS service URL (default port 4000).'
+  );
 };
 
 export const getPythonTtsBaseUrls = (env = process.env) => {
