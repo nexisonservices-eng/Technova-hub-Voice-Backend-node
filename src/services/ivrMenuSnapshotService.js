@@ -6,8 +6,9 @@ export const formatIVRMenu = (menu, usageByWorkflow = new Map()) => {
   const nodes = Array.isArray(menu?.nodes) ? menu.nodes : [];
   const edges = Array.isArray(menu?.edges) ? menu.edges : [];
   const config = menu?.config || {};
-  const greetingNode = nodes.find((node) => node?.type === 'greeting');
+  const greetingNode = nodes.find((node) => node?.type === 'greeting' || node?.type === 'audio');
   const inputNodes = nodes.filter((node) => node?.type === 'input');
+  const legacyOptions = Array.isArray(menu?.menuConfig?.options) ? menu.menuConfig.options : [];
   const usage = usageByWorkflow.get(String(menu?._id)) || {};
 
   const validInputNodes = inputNodes.filter((node) => {
@@ -29,11 +30,16 @@ export const formatIVRMenu = (menu, usageByWorkflow = new Map()) => {
       voice: config.voiceId || 'en-GB-SoniaNeural',
       language: config.language || 'en-GB'
     },
-    menuOptions: validInputNodes.map((node) => ({
+    menuOptions: validInputNodes.length ? validInputNodes.map((node) => ({
       digit: node.data.digit,
       label: node.data?.label || 'Option',
       action: node.data?.action || 'transfer',
       destination: node.data?.destination || ''
+    })) : legacyOptions.map((option) => ({
+      digit: option.digit || '1',
+      label: option.label || option.action || 'Option',
+      action: option.action || 'transfer',
+      destination: option.target || option.destination || ''
     })),
     settings: {
       timeout: config.timeout || 10,
@@ -64,15 +70,16 @@ export const getIVRMenuSnapshot = async (userId) => {
     return [];
   }
 
-  const query = { isActive: true, createdBy: userId?.$in ? userId : normalizedUserId };
+  const query = { isActive: { $ne: false }, createdBy: userId?.$in ? userId : normalizedUserId };
   logger.info('Building IVR snapshot', {
     userId: normalizedUserId,
     filter: query
   });
 
   const menus = await Workflow.find(query)
-    .select('promptKey displayName text nodes edges config status tags createdAt updatedAt')
-    .sort({ promptKey: 1 });
+    .select('promptKey displayName text menuConfig nodes edges config status tags createdAt updatedAt')
+    .sort({ promptKey: 1 })
+    .lean();
 
   const workflowIds = menus.map((menu) => menu._id);
   const usageByWorkflow = new Map();

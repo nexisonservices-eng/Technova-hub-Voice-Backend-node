@@ -676,11 +676,13 @@ router.get('/menus', async (req, res) => {
       .select('promptKey displayName nodes edges config status tags createdAt updatedAt')
       .sort({ promptKey: 1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean();
 
     const formattedMenus = menus.map(menu => {
-      const greetingNode = menu.nodes.find(node => node.type === 'greeting' || node.type === 'audio');
-      const inputNodes = menu.nodes.filter(node => node.type === 'input');
+      const nodes = Array.isArray(menu.nodes) ? menu.nodes : [];
+      const greetingNode = nodes.find(node => node.type === 'greeting' || node.type === 'audio');
+      const inputNodes = nodes.filter(node => node.type === 'input');
       const legacyOptions = Array.isArray(menu.menuConfig?.options) ? menu.menuConfig.options : [];
 
       return {
@@ -810,6 +812,76 @@ router.get('/menus/:id', async (req, res) => {
 });
 
 /**
+ * POST /ivr/menus/workflow
+ * Create a draft workflow menu. This is the REST fallback for the workflow
+ * editor and intentionally does not require legacy greeting/menu fields or
+ * wait for optional TTS audio generation before saving.
+ */
+router.post('/menus/workflow', [
+  body('menuName').isString().trim().notEmpty().withMessage('Menu name is required'),
+  body('nodes').isArray().withMessage('Workflow nodes must be an array'),
+  body('edges').isArray().withMessage('Workflow edges must be an array'),
+  body('status').optional().isIn(['draft', 'active', 'inactive', 'archived'])
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const userId = getAuthenticatedUserId(req);
+    if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+    const { menuName, nodes, edges, workflowConfig = {}, metadata = {} } = req.body;
+    const promptKey = String(req.body.promptKey || menuName).trim();
+    const displayName = String(req.body.displayName || req.body.name || menuName).trim();
+    const existing = await Workflow.findOne({ promptKey, createdBy: userId });
+    if (existing) {
+      return res.status(409).json({ success: false, error: 'IVR menu already exists' });
+    }
+
+    const submittedSettings = workflowConfig?.settings || metadata || {};
+    const config = {
+      voiceId: submittedSettings.voiceId || submittedSettings.voice || 'en-GB-SoniaNeural',
+      language: submittedSettings.language || 'en-GB',
+      timeout: submittedSettings.timeout,
+      maxAttempts: submittedSettings.maxAttempts || submittedSettings.maxRetries,
+      invalidInputMessage: submittedSettings.invalidInputMessage
+    };
+    Object.keys(config).forEach((key) => config[key] === undefined && delete config[key]);
+
+    const workflow = await Workflow.create({
+      promptKey,
+      displayName,
+      nodes,
+      edges,
+      config,
+      status: req.body.status || 'draft',
+      isActive: true,
+      createdBy: userId,
+      lastModifiedBy: userId
+    });
+
+    return res.status(201).json({
+      success: true,
+      ivrMenu: {
+        _id: workflow._id,
+        id: String(workflow._id),
+        promptKey: workflow.promptKey,
+        displayName: workflow.displayName,
+        workflowConfig: { nodes: workflow.nodes, edges: workflow.edges, settings: workflow.config },
+        status: workflow.status,
+        createdAt: workflow.createdAt,
+        updatedAt: workflow.updatedAt
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to create IVR workflow menu:', error);
+    return res.status(500).json({ success: false, error: 'Failed to create IVR workflow menu' });
+  }
+});
+
+/**
  * POST /ivr/menus
  * Create new IVR menu
  */
@@ -882,10 +954,18 @@ router.post('/menus', [
       lastModifiedBy: userId
     });
 
-    // Keep the existing greeting audio generation behavior now that the
-    // submitted greeting is represented as a workflow node.
-    const updatedWorkflow = await pythonTTSService.populateWorkflowAudio(newMenu, true);
-    await updatedWorkflow.save();
+    // Save the valid configuration first. Audio generation is a follow-up so a
+    // temporary Python TTS outage cannot discard a menu the caller created.
+    await newMenu.save();
+    let updatedWorkflow = newMenu;
+    let ttsError = null;
+    try {
+      updatedWorkflow = await pythonTTSService.populateWorkflowAudio(newMenu, true);
+      await updatedWorkflow.save();
+    } catch (error) {
+      ttsError = error;
+      logger.error(`IVR menu ${name} was saved, but greeting audio generation failed:`, error);
+    }
 
     logger.info(`Created new IVR menu: ${name}`);
 
@@ -896,11 +976,15 @@ router.post('/menus', [
 
     res.status(201).json({
       success: true,
+      tts: {
+        status: ttsError ? 'failed' : 'completed',
+        error: ttsError ? 'Greeting audio generation failed; the IVR menu was saved.' : null
+      },
       ivrMenu: {
         _id: updatedWorkflow._id,
         ivrName: updatedWorkflow.promptKey,
         greeting: {
-          text: updatedWorkflow.text,
+          text: updatedWorkflow.nodes.find(node => node.type === 'greeting' || node.type === 'audio')?.data?.text || updatedWorkflow.text || '',
           audioUrl: audioFile?.audioUrl || null,
           audioAssetId: audioFile?.cloudinaryPublicId || null,
           voice: audioFile?.language || 'Unknown'
