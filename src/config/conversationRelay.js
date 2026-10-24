@@ -6,6 +6,36 @@ export const RELAY_VOICES = Object.freeze({
   'IvLWq57RKibBrqZGpQrC': 'hi-IN'
 });
 
+export const escapeXmlAttribute = (value = '') => String(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&apos;');
+
+export const resolveCallProvider = (call = {}) =>
+  String(call.provider || call.providerData?.provider || '').trim().toLowerCase();
+
+export const buildUnsupportedProviderTwiML = () =>
+  '<?xml version="1.0" encoding="UTF-8"?><Response><Say>The voice assistant is unavailable for this call provider. Please try again later.</Say><Hangup/></Response>';
+
+export const buildConversationRelayTwiML = ({
+  url, action, welcomeGreeting = '', language, voice,
+  ttsProvider = 'ElevenLabs', transcriptionProvider = 'Google', speechTimeout = 2000
+}) => {
+  if (!/^wss:\/\//i.test(String(url || ''))) throw new Error('ConversationRelay requires a secure wss URL');
+  if (!/^https:\/\//i.test(String(action || ''))) throw new Error('ConversationRelay requires a public HTTPS action URL');
+  const attributes = {
+    url, welcomeGreeting, language, voice, ttsProvider, transcriptionProvider,
+    speechTimeout: String(speechTimeout), interruptible: 'any',
+    reportInputDuringAgentSpeech: 'speech'
+  };
+  const relayAttributes = Object.entries(attributes)
+    .filter(([, value]) => value !== undefined && value !== null && String(value) !== '')
+    .map(([key, value]) => `${key}="${escapeXmlAttribute(value)}"`).join(' ');
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Connect action="${escapeXmlAttribute(action)}" method="POST"><ConversationRelay ${relayAttributes}/></Connect></Response>`;
+};
+
 export const validateAgentConfig = (data = {}) => {
   if (!RELAY_VOICES[data.voiceSelection] || RELAY_VOICES[data.voiceSelection] !== data.language) {
     throw new Error('AI Voice Agent voice does not match a supported ConversationRelay language');
