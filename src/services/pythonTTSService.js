@@ -264,9 +264,34 @@ class PythonTTSService {
   }
 
   async uploadToCloudinary(buffer, publicId, language, userContext = {}) {
-    const folder = await resolveCloudinaryAudioFolder(userContext, 'ivr');
+    const folder = await resolveCloudinaryAudioFolder(userContext, 'ivr', {
+      ensureFolders: userContext?.skipFolderEnsure !== true
+    });
     return new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream(
+      const timeoutMs = Number(process.env.CLOUDINARY_AUDIO_UPLOAD_TIMEOUT_MS || 20000);
+      let settled = false;
+      let uploadStream;
+      const finish = (error, result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({
+          audioUrl: result.secure_url,
+          publicId: result.public_id,
+          size: result.bytes || 0
+        });
+      };
+      const timeoutId = setTimeout(() => {
+        const error = new Error(`Cloudinary audio upload timed out after ${timeoutMs}ms`);
+        uploadStream?.destroy?.();
+        finish(error);
+      }, timeoutMs);
+
+      uploadStream = cloudinary.uploader.upload_stream(
         {
           resource_type: 'video',
           public_id: publicId,
@@ -274,15 +299,10 @@ class PythonTTSService {
           format: 'mp3',
           tags: ['ivr', language]
         },
-        (err, result) => {
-          if (err) return reject(err);
-          resolve({
-            audioUrl: result.secure_url,
-            publicId: result.public_id,
-            size: result.bytes || 0
-          });
-        }
-      ).end(buffer);
+        (err, result) => finish(err, result)
+      );
+      uploadStream.on('error', (error) => finish(error));
+      uploadStream.end(buffer);
     });
   }
 
@@ -308,7 +328,8 @@ class PythonTTSService {
         userContext?.sub ||
         ''
       ).trim(),
-      username: String(userContext?.username || '').trim()
+      username: String(userContext?.username || '').trim(),
+      skipFolderEnsure: userContext?.skipFolderEnsure === true
     };
 
     if (!resolvedUserContext.userId && workflowId) {

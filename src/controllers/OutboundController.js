@@ -226,7 +226,7 @@ class OutboundLocalController {
     return xmlBody;
   }
 
-  async resolveScriptAudioAsset({ script = '', userObjectId = null, voice = 'en-GB-SoniaNeural', language = 'en-GB' }) {
+  async resolveScriptAudioAsset({ script = '', userObjectId = null, voice = 'en-GB-SoniaNeural', language = 'en-GB', skipFolderEnsure = false }) {
     const text = String(script || '').trim();
     if (!text) {
       return { audioUrl: '', audioAssetId: '', storage: 'none' };
@@ -253,7 +253,7 @@ class OutboundLocalController {
         voice,
         null,
         { id: `outbound_${hash}`, type: 'outbound' },
-        { userId: String(userObjectId || ''), username: '' }
+        { userId: String(userObjectId || ''), username: '', skipFolderEnsure }
       );
 
       const result = {
@@ -467,6 +467,8 @@ class OutboundLocalController {
       const to = normalizeLocalNumber(toRaw);
       const templateId = String(req.body?.templateId || '').trim();
       const customMessage = String(req.body?.customMessage || '').trim();
+      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
+      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
       let resolvedTemplateName = '';
       let resolvedScript = customMessage;
 
@@ -539,8 +541,8 @@ class OutboundLocalController {
           from,
           templateId: templateId || '',
           customMessage: resolvedScript || customMessage,
-          voiceId: String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim(),
-          voice: String(req.body?.voice || req.body?.voiceId || 'en-GB-SoniaNeural').trim(),
+          voiceId,
+          voice: voiceId,
           workflowId,
           scheduleType,
           scheduledAt,
@@ -575,21 +577,23 @@ class OutboundLocalController {
         });
       }
 
-      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
-      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
       if (!voiceLanguage) {
         return res.status(400).json({ success: false, message: `Unsupported outbound voice: ${voiceId}` });
       }
       logger.info('Outbound TTS requested', { language: voiceLanguage, voice: voiceId });
       let resolvedAudio = { audioUrl: '', audioAssetId: '', storage: 'none' };
-      const quickCallTtsTimeoutMs = Number(process.env.OUTBOUND_QUICKCALL_TTS_TIMEOUT_MS || 12000);
+      // TTS may take longer on a cold Python service; its upstream request
+      // allows up to 60s (and retries can take longer). Avoid failing Tamil
+      // calls after the previous 12s default.
+      const quickCallTtsTimeoutMs = Number(process.env.OUTBOUND_QUICKCALL_TTS_TIMEOUT_MS || 95000);
       try {
         resolvedAudio = await this.runWithTimeout(
           this.resolveScriptAudioAsset({
             script: resolvedScript,
             userObjectId,
             voice: voiceId,
-            language: voiceLanguage
+            language: voiceLanguage,
+            skipFolderEnsure: true
           }),
           quickCallTtsTimeoutMs,
           `Quick call TTS timed out after ${quickCallTtsTimeoutMs}ms`

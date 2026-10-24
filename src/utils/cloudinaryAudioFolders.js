@@ -133,7 +133,13 @@ export const ensureUserAudioFolders = async (context = {}) => {
   };
 };
 
-export const resolveCloudinaryAudioFolder = async (context = {}, audioType = 'ivr') => {
+export const resolveCloudinaryAudioFolder = async (context = {}, audioType = 'ivr', options = {}) => {
+  if (options.ensureFolders === false) {
+    const identity = await resolveCompanyIdentity(context);
+    const audioFolder = audioType === 'broadcast' ? 'broadcast-audio' : 'ivr-audio';
+    return `${identity.root}/audio/${audioFolder}`;
+  }
+
   const folders = await ensureUserAudioFolders(context);
   if (audioType === 'broadcast') return folders.broadcastAudioFolder;
   return folders.ivrAudioFolder;

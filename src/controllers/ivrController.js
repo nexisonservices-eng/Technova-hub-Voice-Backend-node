@@ -136,6 +136,13 @@ class IVRController {
     let { workflowId, currentNodeId } = { ...req.body, ...req.query };
 
     try {
+      logger.info('IVR keypad input received', {
+        CallSid: CallSid || null,
+        workflowId: workflowId ? String(workflowId) : null,
+        currentNodeId: currentNodeId || null,
+        digit: String(Digits ?? '').trim() || null
+      });
+
       // Twilio normally returns the workflow/node IDs on the Gather action URL.
       // Recover them by CallSid if a provider/proxy strips that query string.
       if (!this.isValidWorkflowId(workflowId)) workflowId = null;
