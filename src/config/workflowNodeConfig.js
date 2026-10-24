@@ -16,6 +16,7 @@ export const NODE_TYPES = {
   REPEAT: 'repeat',
   END: 'end',
   AI_ASSISTANT: 'ai_assistant',
+  AI_VOICE_AGENT: 'ai_voice_agent',
   QUEUE: 'queue',
   SMS: 'sms',
   SET_VARIABLE: 'set_variable',
@@ -298,6 +299,43 @@ export const NODE_CONFIGS = {
       required: ['streamUrl'],
       rules: {
         maxDuration: { min: 60, max: 1800 }
+      }
+    }
+  },
+
+  [NODE_TYPES.AI_VOICE_AGENT]: {
+    name: 'AI Voice Agent',
+    category: NODE_CATEGORIES.SERVICE,
+    icon: '🤖',
+    description: 'Have a natural, two-way conversation with callers using Twilio ConversationRelay',
+    color: '#7C3AED',
+    inputs: 1,
+    outputs: ['completed', 'transferred', 'error'],
+    dataSchema: {
+      companyName: { type: 'string', required: true, label: 'Company Name', maxLength: 120 },
+      welcomeMessage: { type: 'string', required: true, label: 'Welcome Message', maxLength: 500 },
+      systemPrompt: { type: 'string', required: true, label: 'AI System Prompt', maxLength: 8000 },
+      knowledgeBase: { type: 'string', required: true, label: 'Business Knowledge Base', maxLength: 50000 },
+      language: { type: 'select', options: ['en-US', 'en-GB', 'en-IN', 'ta-IN', 'hi-IN'], default: 'en-IN', label: 'Language' },
+      voiceSelection: { type: 'select', options: ['mCQMfsqGDT6IDkEKR20a', 'UgBBYS2sOqTuMpoF3BR0', 'Fahco4VZzobUeiPqni1S', 'ZhJ5LanYnCmLKQUXvsV7', 'IvLWq57RKibBrqZGpQrC'], default: 'mCQMfsqGDT6IDkEKR20a', label: 'Voice Selection' },
+      humanAgentPhoneNumber: { type: 'string', label: 'Human Agent Phone Number', placeholder: '+14155550123' },
+      discountQuestion: { type: 'string', required: true, label: 'Discount Question', maxLength: 500 },
+      maxDuration: { type: 'number', default: 300, min: 60, max: 1800, label: 'Maximum Conversation Duration (seconds)' },
+      silenceTimeout: { type: 'number', default: 2, min: 1, max: 5, label: 'Silence Timeout (seconds)' },
+      transferOnCustomerRequest: { type: 'boolean', default: true, label: 'Transfer on Customer Request' },
+      transferOnDiscountInterest: { type: 'boolean', default: true, label: 'Transfer on Discount Interest' }
+    },
+    validation: {
+      required: ['companyName', 'welcomeMessage', 'systemPrompt', 'knowledgeBase', 'language', 'voiceSelection', 'discountQuestion', 'maxDuration', 'silenceTimeout'],
+      rules: {
+        companyName: { minLength: 1, maxLength: 120 },
+        welcomeMessage: { minLength: 1, maxLength: 500 },
+        systemPrompt: { minLength: 1, maxLength: 8000 },
+        knowledgeBase: { minLength: 1, maxLength: 50000 },
+        discountQuestion: { minLength: 1, maxLength: 500 },
+        maxDuration: { min: 60, max: 1800 },
+        silenceTimeout: { min: 1, max: 5 },
+        humanAgentPhoneNumber: { pattern: /^\+[1-9]\d{7,14}$/, condition: { transferOnCustomerRequest: true } }
       }
     }
   },

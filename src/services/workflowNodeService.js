@@ -10,6 +10,7 @@ import Workflow from '../models/Workflow.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import WorkflowExecutionEngine from './ivrExecutionEngine.js';
 import ivrWorkflowEngine from './ivrWorkflowEngine.js';
+import { RELAY_VOICES } from '../config/conversationRelay.js';
 
 class WorkflowNodeService {
   constructor() {
@@ -169,6 +170,27 @@ class WorkflowNodeService {
           errors.push('Stream URL must be a valid HTTP/HTTPS URL');
         }
         break;
+
+      case 'ai_voice_agent': {
+        const transferEnabled = nodeData.transferOnCustomerRequest !== false || nodeData.transferOnDiscountInterest !== false;
+        if (transferEnabled && !/^\+[1-9]\d{7,14}$/.test(String(nodeData.humanAgentPhoneNumber || '').trim())) {
+          errors.push('A valid human agent phone number in E.164 format is required when transfer is enabled');
+        }
+        if (!['en-US', 'en-GB', 'en-IN', 'ta-IN', 'hi-IN'].includes(nodeData.language)) {
+          errors.push('Choose a supported ConversationRelay language');
+        }
+        const voiceLanguage = RELAY_VOICES[nodeData.voiceSelection];
+        if (!voiceLanguage || voiceLanguage !== nodeData.language) {
+          errors.push('Select a ConversationRelay voice that matches the configured language');
+        }
+        if (!Number.isInteger(Number(nodeData.maxDuration)) || Number(nodeData.maxDuration) < 60 || Number(nodeData.maxDuration) > 1800) {
+          errors.push('Maximum conversation duration must be between 60 and 1800 seconds');
+        }
+        if (!Number.isInteger(Number(nodeData.silenceTimeout)) || Number(nodeData.silenceTimeout) < 1 || Number(nodeData.silenceTimeout) > 5) {
+          errors.push('Silence timeout must be between 1 and 5 seconds');
+        }
+        break;
+      }
 
       case 'api_call':
         if (nodeData.url && !VALIDATION_RULES.url.pattern.test(nodeData.url)) {
