@@ -461,16 +461,20 @@ class IVRExecutionEngine {
     logger.info('Starting Twilio ConversationRelay', {
       callSid: String(callSid), workflowId: String(config._id), nodeId: node.id,
       language: data.language, voice: data.voiceSelection,
-      relayWelcomeConfigured: Boolean(String(data.welcomeMessage || '').trim()), stage: 'relay_twiml_generated'
+      relayWelcomeConfigured: false, stage: 'relay_twiml_generated'
     });
     return buildConversationRelayTwiML({
       url: wsUrl,
       action: actionUrl,
-      welcomeGreeting: String(data.welcomeMessage || '').trim(),
+      // The authenticated relay setup event starts the deterministic script.
+      // Avoid Twilio's separate welcome greeting so the script is spoken once.
+      welcomeGreeting: '',
       language: data.language,
       voice: data.voiceSelection,
       ttsProvider: 'ElevenLabs',
-      transcriptionProvider: 'Google',
+      transcriptionProvider: 'Deepgram',
+      transcriptionLanguage: 'multi',
+      reportInputDuringAgentSpeech: 'none',
       speechTimeout,
       interruptible: 'any',
       reportInputDuringAgentSpeech: 'speech'

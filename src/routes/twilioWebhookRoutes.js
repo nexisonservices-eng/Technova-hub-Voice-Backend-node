@@ -18,6 +18,7 @@ import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
 import { resolveCallOwnerFromRecords } from '../services/conversationRelaySession.js';
+import { buildScriptHandoffActions } from '../services/conversationRelayScript.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { emitOutboundCallUpdate, emitQueueUpdate } from '../sockets/unifiedSocket.js';
 
@@ -630,7 +631,23 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       try { handoff = JSON.parse(rawHandoff); } catch { handoff = {}; }
     } else if (rawHandoff && typeof rawHandoff === 'object') handoff = rawHandoff;
 
-    if (handoff.status === 'transfer') {
+    const scriptActions = buildScriptHandoffActions(handoff, node.data || {});
+    if (scriptActions) {
+      for (const action of scriptActions) {
+        if (action.type === 'say') response.say(action.text);
+        if (action.type === 'hangup') response.hangup();
+        if (action.type === 'dial') {
+          logger.info('ConversationRelay dialing configured human agent', { workflowId, nodeId, callSid });
+          const base = String(process.env.PUBLIC_WEBHOOK_BASE_URL || process.env.BASE_URL || '').replace(/\/$/, '');
+          const callback = new URLSearchParams({ callSid: String(callSid), workflowId, nodeId, userId });
+          response.dial({
+            timeout: 30,
+            action: `${base}/webhook/twilio/transfer/complete?${callback}`,
+            method: 'POST'
+          }, action.destination);
+        }
+      }
+    } else if (handoff.status === 'transfer') {
       const config = node.data || {};
       const permitted = handoff.intent === 'human_transfer'
         ? config.transferOnCustomerRequest !== false

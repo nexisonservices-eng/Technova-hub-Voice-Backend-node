@@ -1,4 +1,3 @@
-import axios from 'axios';
 import twilio from 'twilio';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
@@ -8,8 +7,8 @@ import ExecutionLog from '../models/ExecutionLog.js';
 import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
-import { describeConversationAIEndpoint, resolveConversationAIBaseUrl } from '../config/conversationAIUrl.js';
-import { buildAiFailureMessage, createOrderedRelayFrameQueue, processRelayPrompt } from './conversationRelayProtocol.js';
+import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
+import { createScriptState, handleScriptReply, SCRIPT_MESSAGES, SCRIPT_RESPONSES, startScript } from './conversationRelayScript.js';
 import {
   bindRelaySetupCallSid,
   createRelaySessionContext,
@@ -71,30 +70,6 @@ const safeSend = (socket, payload) => {
   }
 };
 
-const intentTransfer = (result, state, data) => {
-  const intent = String(result.intent || '').toLowerCase();
-  if (intent === 'human_transfer') return data.transferOnCustomerRequest !== false;
-  if (intent === 'discount_yes') return data.transferOnDiscountInterest !== false && state.discountAsked;
-  return false;
-};
-
-const buildPrompt = (data) => [
-  `You are the conversational voice agent for ${data.companyName}.`,
-  `Reply in the configured call language ${data.language}. Never translate customer content unless asked.`,
-  String(data.systemPrompt || ''),
-  `Business information:\n${String(data.knowledgeBase || '')}`,
-  `If the caller asks about a discount, rebate, coupon, or price reduction, ask exactly this question once and classify that turn as offer_discounts: ${String(data.discountQuestion || '')}`,
-  data.transferOnDiscountInterest === false
-    ? 'If they express interest in a discount, classify as discount_yes and continue assisting; do not claim a transfer will happen.'
-    : 'If they express interest in a discount, classify as discount_yes so the system can connect them with the configured agent.',
-  data.transferOnCustomerRequest === false
-    ? 'If they ask for a human, politely explain a live transfer is unavailable and continue helping; do not classify as human_transfer.'
-    : 'If they ask for a human, classify as human_transfer so the system can connect them with the configured agent.',
-  'If they decline the discount, classify as discount_no.',
-  'Classify every turn as one of: continue, offer_discounts, discount_yes, discount_no, human_transfer, end_call, clarify.',
-  'Never invent company facts.'
-].join('\n\n');
-
 class ConversationRelayService {
   async handleConnection(socket, req) {
     const parsed = new URL(req.url, 'https://localhost');
@@ -106,12 +81,11 @@ class ConversationRelayService {
     const connectionStartedAt = Date.now();
     let data = null;
     let relaySession = null;
-    let callGeneration = 0;
     let turnNumber = 0;
     let finished = false;
     let timer = null;
-    let setupStage = 'python_ai_configuration';
-    const state = { discountAsked: false, waitingForMoreHelp: false, discountQuestion: '' };
+    let setupStage = 'tenant_authorization';
+    const scriptState = createScriptState();
 
     socket.on('close', (code, reason) => {
       clearTimeout(timer);
@@ -120,22 +94,6 @@ class ConversationRelayService {
         closeKind: code === 1006 ? 'abnormal_network_or_peer_close' : 'normal_or_protocol_close',
         reason: String(reason || '').slice(0, 120), durationMs: Date.now() - connectionStartedAt
       });
-      const callSid = getRelaySessionCallSid(relaySession);
-      if (callSid) {
-        void (async () => {
-          try {
-            const aiBaseUrl = resolveConversationAIBaseUrl();
-            const headers = { 'X-Correlation-ID': correlationId };
-            if (process.env.PYTHON_API_KEY) headers['X-API-Key'] = process.env.PYTHON_API_KEY;
-            await axios.post(`${aiBaseUrl}/reset-conversation/${encodeURIComponent(callSid)}`, {}, { timeout: 3000, headers });
-          } catch (error) {
-            logger.warn('Unable to clear AI conversation memory after relay close', {
-              connectionId, correlationId, stage: 'conversation_reset', errorType: error?.name || 'Error',
-              status: error?.response?.status || null
-            });
-          }
-        })();
-      }
     });
     socket.on('error', (error) => logger.warn('ConversationRelay websocket error', {
       connectionId, correlationId, stage: 'websocket_error', errorType: error?.name || 'Error', code: error?.code || null
@@ -190,12 +148,23 @@ class ConversationRelayService {
             connectionId, correlationId, provider, language: data.language,
             sessionIdPresent: Boolean(message.sessionId), stage: 'setup'
           });
+          const script = startScript(scriptState);
+          const sent = script.messages.length === SCRIPT_MESSAGES.length
+            && script.messages.every((payload) => safeSend(socket, payload));
+          logger.info('ConversationRelay scripted introduction sent', {
+            event: 'script_started', connectionId, correlationId,
+            sectionCount: script.messages.length, sent,
+            finalTokenLast: script.messages.at(-1)?.last === true
+          });
+          if (!sent) {
+            finished = true;
+            safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'script-send-failed' }) });
+          }
           return;
         }
 
         if (message.type === 'interrupt') {
-          callGeneration += 1;
-          logger.info('ConversationRelay caller interrupted agent speech', { connectionId, correlationId, stage: 'interrupt' });
+          logger.info('ConversationRelay interruption received during scripted playback', { connectionId, correlationId, stage: 'interrupt' });
           return;
         }
         if (message.type === 'error') {
@@ -213,103 +182,57 @@ class ConversationRelayService {
           last: message.last === true, chars: promptText.length,
           language: String(message.lang || '').slice(0, 20) || null
         });
+        if (message.last !== true) {
+          logger.info('ConversationRelay partial prompt ignored by script state machine', {
+            connectionId, correlationId, turn: currentTurn, stage: 'prompt_partial'
+          });
+          return;
+        }
         if (finished) {
           logger.warn('ConversationRelay prompt ignored after session completion', { connectionId, correlationId, stage: 'prompt_after_end' });
           return;
         }
 
-        const sessionCallSid = getRelaySessionCallSid(relaySession);
-        const promptCallSid = String(message.callSid || message.CallSid || '').trim();
-        if (promptCallSid) {
-          logger.warn('ConversationRelay prompt CallSid field ignored; using authenticated setup identity', {
-            connectionId, correlationId, stage: 'prompt_identity_ignored', matchesSession: promptCallSid === sessionCallSid
-          });
-        }
-        if (!sessionCallSid) {
+        if (!getRelaySessionCallSid(relaySession)) {
           logger.warn('ConversationRelay prompt received before a valid setup event', {
             connectionId, correlationId, stage: 'prompt_without_setup'
           });
+          return;
         }
-
-        const generation = ++callGeneration;
-        const startedAt = Date.now();
         if (message.lang && message.lang !== data.language) {
           logger.warn('ConversationRelay prompt language differs from configured language', {
             connectionId, correlationId, stage: 'language_mismatch', promptLanguage: String(message.lang).slice(0, 20),
             configuredLanguage: data.language
           });
         }
-        const turn = await processRelayPrompt({
-          message,
-          callSid: sessionCallSid,
-          isCurrent: () => !finished && generation === callGeneration,
-          requestAI: async (text, promptMessage) => {
-            const aiBaseUrl = resolveConversationAIBaseUrl();
-            const headers = { 'X-Correlation-ID': correlationId };
-            if (process.env.PYTHON_API_KEY) headers['X-API-Key'] = process.env.PYTHON_API_KEY;
-            logger.info('ConversationRelay forwarding transcript to Python AI', {
-              event: 'node_forwarded', turn: currentTurn, connectionId, correlationId, stage: 'python_request', language: promptMessage.lang || data.language,
-              chars: text.length, endpoint: describeConversationAIEndpoint(`${aiBaseUrl}/conversation-turn`)
-            });
-            let result;
-            try {
-              const response = await axios.post(`${aiBaseUrl}/conversation-turn`, {
-                text,
-                call_id: sessionCallSid,
-                system_prompt: buildPrompt(data),
-                conversation_state: state
-              }, { timeout: 35000, headers });
-              result = response.data;
-            } catch (error) {
-              logger.error('ConversationRelay Python request failed', {
-                event: 'python_response', turn: currentTurn, outcome: 'error',
-                connectionId, correlationId, stage: 'python_http_error',
-                errorType: error?.name || 'Error', status: error?.response?.status || null,
-                code: error?.code || null,
-                detail: String(error?.response?.data?.detail || '').slice(0, 160),
-                timedOut: error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT'
-              });
-              throw error;
-            }
-            if (result?.success !== true || typeof result?.response !== 'string' || !result.response.trim()) {
-              logger.error('ConversationRelay Python response contract invalid', {
-                event: 'python_response', turn: currentTurn, outcome: 'invalid',
-                connectionId, correlationId, stage: 'python_response_validation',
-                success: result?.success === true,
-                responseType: typeof result?.response,
-                responseChars: typeof result?.response === 'string' ? result.response.length : 0,
-                intent: String(result?.intent || '').slice(0, 40)
-              });
-              const error = new Error('Python conversation response did not match the expected schema');
-              error.code = 'INVALID_PYTHON_RESPONSE';
-              throw error;
-            }
-            logger.info('ConversationRelay Python response received', {
-              event: 'python_response', turn: currentTurn, connectionId, correlationId, stage: 'python_response_received',
-              responseChars: result.response.length,
-              intent: String(result.intent || 'continue').slice(0, 40)
-            });
-            return result;
-          },
-          shouldTransfer: (result) => intentTransfer(result, state, data),
-          onAIResult: (result) => {
-            const intent = String(result.intent || 'continue').toLowerCase();
-            if (intent === 'offer_discounts' && !state.discountAsked) state.discountAsked = true;
-            if (intent === 'discount_no') state.waitingForMoreHelp = true;
-          },
-          send: (payload) => safeSend(socket, payload),
-          onStage: (stage, fields = {}) => logger.info(`ConversationRelay ${stage}`, {
-            event: stage === 'response_sent' ? 'relay_text_sent' : undefined,
-            turn: currentTurn, connectionId, correlationId, stage,
-            durationMs: Date.now() - startedAt, ...fields
-          })
+        const text = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim().slice(0, 3000) : '';
+        const transferAvailable = data.transferOnCustomerRequest !== false
+          && /^\+[1-9]\d{7,14}$/.test(String(data.humanAgentPhoneNumber || '').trim());
+        const result = handleScriptReply(scriptState, text, { transferAvailable });
+        logger.info('ConversationRelay scripted reply classified', {
+          event: 'script_reply', connectionId, correlationId, turn: currentTurn,
+          classification: result.classification || 'ignored', action: result.status,
+          chars: text.length
         });
-        if (turn.status === 'transfer' || turn.status === 'end') finished = true;
+        if (result.status === 'clarify') {
+          const sent = safeSend(socket, {
+            type: 'text', token: SCRIPT_RESPONSES.unclear, last: true,
+            interruptible: true, preemptible: false
+          });
+          logger.info('ConversationRelay script clarification sent', {
+            event: 'script_clarification', connectionId, correlationId, turn: currentTurn, sent
+          });
+        } else if (result.status === 'transfer' || result.status === 'end') {
+          finished = true;
+          safeSend(socket, { type: 'end', handoffData: JSON.stringify(result.handoff) });
+        }
       } catch (error) {
         logger.error('ConversationRelay message handler failed', {
           connectionId, correlationId, stage: 'message_handler', errorType: error?.name || 'Error'
         });
-        if (getRelaySessionCallSid(relaySession) && !finished) safeSend(socket, buildAiFailureMessage());
+        if (getRelaySessionCallSid(relaySession) && !finished) {
+          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'script_unavailable' }) });
+        }
       }
     };
 
@@ -335,10 +258,8 @@ class ConversationRelayService {
     });
 
     try {
-      const aiBaseUrl = resolveConversationAIBaseUrl();
       logger.info('ConversationRelay websocket accepted', {
-        connectionId, correlationId, aiEndpoint: describeConversationAIEndpoint(`${aiBaseUrl}/conversation-turn`),
-        pythonApiKeyConfigured: Boolean(process.env.PYTHON_API_KEY)
+        connectionId, correlationId
       });
       setupStage = 'tenant_authorization';
       const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
@@ -348,7 +269,6 @@ class ConversationRelayService {
       setupStage = 'agent_configuration';
       validateAgentConfig(data);
       relaySession = createRelaySessionContext({ userId, workflowId, nodeId });
-      state.discountQuestion = String(data.discountQuestion || '').slice(0, 500);
       logger.info('ConversationRelay tenant workflow authorized', {
         connectionId, correlationId, language: data.language, voice: data.voiceSelection
       });

@@ -61,6 +61,10 @@ test('workflow node emits ConversationRelay TwiML with language, voice and callb
   assert.match(xml, /ZhJ5LanYnCmLKQUXvsV7/);
   assert.match(xml, /language="ta-IN"/);
   assert.match(xml, /speechTimeout="2000"/);
+  assert.match(xml, /transcriptionLanguage="multi"/);
+  assert.match(xml, /transcriptionProvider="Deepgram"/);
+  assert.match(xml, /reportInputDuringAgentSpeech="none"/);
+  assert.doesNotMatch(xml, /welcomeGreeting=/);
   assert.match(xml, /\/webhook\/twilio\/ai-voice-agent\/complete/);
 });
 
@@ -74,6 +78,21 @@ test('ConversationRelay XML escapes dynamic attributes and requires secure WebSo
   assert.match(xml, /url="wss:\/\/nexion\.example\.test\/relay\?a=1&amp;b=2"/);
   assert.match(xml, /welcomeGreeting="Hello &quot;A&amp;B&quot; &lt;caller&gt;"/);
   assert.throws(() => buildConversationRelayTwiML({ url: 'ws://insecure.test', action: '/callback' }), /secure wss/);
+});
+
+test('ConversationRelay supports multilingual STT while preserving the configured TTS voice', async () => {
+  const { buildConversationRelayTwiML } = await import('../src/config/conversationRelay.js');
+  const xml = buildConversationRelayTwiML({
+    url: 'wss://nexion.example.test/relay', action: 'https://nexion.example.test/complete',
+    language: 'ta-IN', voice: 'ZhJ5LanYnCmLKQUXvsV7',
+    ttsProvider: 'ElevenLabs', transcriptionProvider: 'Deepgram',
+    transcriptionLanguage: 'multi', reportInputDuringAgentSpeech: 'none'
+  });
+  assert.match(xml, /voice="ZhJ5LanYnCmLKQUXvsV7"/);
+  assert.match(xml, /ttsProvider="ElevenLabs"/);
+  assert.match(xml, /transcriptionProvider="Deepgram"/);
+  assert.match(xml, /transcriptionLanguage="multi"/);
+  assert.match(xml, /reportInputDuringAgentSpeech="none"/);
 });
 
 test('call provider selection uses persisted provider fields and defaults safely to unsupported', async () => {
