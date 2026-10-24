@@ -211,7 +211,7 @@ class IVRExecutionEngine {
       switch (node.type) {
         // Phone & Interaction Nodes
         case 'greeting': 
-          return await this._handleGreeting(response, node, edges, settings);
+          return await this._handleGreeting(response, node, workflowConfig);
         case 'input':
           return await this._handleInput(response, node, workflowConfig, context);
         case 'transfer':
@@ -272,7 +272,9 @@ class IVRExecutionEngine {
   // HANDLER METHODS
   // ==========================================
 
-  async _handleGreeting(response, node, edges, settings) {
+  async _handleGreeting(response, node, config = {}) {
+    const settings = config.settings || {};
+    const edges = Array.isArray(config.edges) ? config.edges : [];
     const { text, voice, language, audioUrl } = this._getMergedSettings(node, settings);
 
     if (audioUrl) {
@@ -282,7 +284,7 @@ class IVRExecutionEngine {
     }
 
     // Auto-transition to next node
-    this._appendNextStep(response, node.id, edges, settings.workflowId);
+    this._appendNextStep(response, node.id, edges, config._id || settings.workflowId);
     return response.toString();
   }
 
