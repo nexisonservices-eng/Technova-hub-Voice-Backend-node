@@ -10,12 +10,14 @@ import twilioIntegrationService from '../services/twilioIntegrationService.js';
 import inboundCallService from '../services/inboundCallService.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import Call from '../models/call.js';
+import ExecutionLog from '../models/ExecutionLog.js';
 import IVRController from '../controllers/ivrController.js';
 import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import Workflow from '../models/Workflow.js';
 import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
+import { resolveCallOwnerFromRecords } from '../services/conversationRelaySession.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { emitOutboundCallUpdate, emitQueueUpdate } from '../sockets/unifiedSocket.js';
 
@@ -60,19 +62,28 @@ const resolveWebhookUserId = async (req) => {
 };
 
 const resolveWebhookUserIdForCall = async (req, callSid) => {
+  if (callSid) {
+    const [call, executionLog, legacyExecution] = await Promise.all([
+      Call.findOne({ callSid }).select('callSid user provider providerData').lean(),
+      ExecutionLog.findOne({ callSid }).select('callSid userId workflowId').lean(),
+      WorkflowExecution.findOne({ callSid }).select('callSid userId workflowId').lean()
+    ]);
+    const execution = executionLog || legacyExecution;
+    if (call || execution) {
+      const association = resolveCallOwnerFromRecords({
+        callSid,
+        tenantUserId: req.tenantContext?.adminId || '',
+        queryUserId: req.query?.userId || req.body?.userId || '',
+        workflowId: req.query?.workflowId || req.body?.workflowId || '',
+        call,
+        execution
+      });
+      return association.valid ? association.userId : null;
+    }
+  }
+
   const fromNumber = await resolveWebhookUserId(req);
-  if (fromNumber) return fromNumber;
-  if (!callSid) return null;
-
-  const execution = await WorkflowExecution.findOne({ callSid }).select('userId').lean();
-  if (!execution?.userId) return null;
-
-  req.tenantContext = {
-    ...(req.tenantContext || {}),
-    adminId: String(execution.userId),
-  };
-
-  return String(execution.userId);
+  return fromNumber || null;
 };
 
 const TERMINAL_OUTBOUND_STATUSES = new Set(['completed', 'failed', 'busy', 'no-answer', 'cancelled', 'canceled']);
@@ -540,7 +551,7 @@ router.post('/transfer/complete', async (req, res) => {
     const transferData = req.body;
     const DialCallStatus = transferData.DialCallStatus || req.query.DialCallStatus;
     const DialCallDuration = transferData.DialCallDuration || req.query.DialCallDuration;
-    const callSid = transferData.CallSid || transferData.callSid || req.query.callSid;
+    const callSid = transferData.CallSid || transferData.callSid || req.query.CallSid || req.query.callSid;
     const workflowId = transferData.workflowId || req.query.workflowId;
     const nodeId = transferData.nodeId || req.query.nodeId;
     const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
@@ -599,11 +610,17 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const response = new VoiceResponse();
   try {
-    const callSid = req.body.CallSid || req.body.callSid || req.query.callSid;
+    const callSid = req.body.CallSid || req.body.callSid || req.query.CallSid || req.query.callSid;
     const workflowId = String(req.body.workflowId || req.query.workflowId || '').trim();
     const nodeId = String(req.body.nodeId || req.query.nodeId || '').trim();
     const userId = await resolveWebhookUserIdForCall(req, callSid);
-    if (!userId || !workflowId || !nodeId) return res.sendStatus(403);
+    if (!userId || !workflowId || !nodeId) {
+      logger.warn('ConversationRelay completion callback rejected', {
+        callSid: String(callSid || '').slice(0, 40), workflowPresent: Boolean(workflowId),
+        nodePresent: Boolean(nodeId), identityResolved: Boolean(userId), stage: 'callback_identity'
+      });
+      return res.sendStatus(403);
+    }
     const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
     const node = workflow?.nodes?.find((entry) => entry.id === nodeId && entry.type === 'ai_voice_agent');
     if (!node) return res.sendStatus(404);

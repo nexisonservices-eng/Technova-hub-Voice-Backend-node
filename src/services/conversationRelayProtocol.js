@@ -6,19 +6,48 @@ export const buildAiFailureMessage = () => buildTextTokenMessage(
   "I'm sorry, I'm having trouble right now. Please try asking again."
 );
 
+export const createOrderedRelayFrameQueue = (handler, maxBufferedFrames = 32, onError = () => {}) => {
+  let active = false;
+  const buffered = [];
+  let chain = Promise.resolve();
+  const enqueue = (frame) => {
+    if (!active) {
+      if (buffered.length >= maxBufferedFrames) return { accepted: false, overflow: true, buffered: buffered.length };
+      buffered.push(frame);
+      return { accepted: true, buffered: buffered.length };
+    }
+    chain = chain.then(() => handler(frame)).catch((error) => onError(error));
+    return { accepted: true, buffered: 0 };
+  };
+  const activate = () => {
+    active = true;
+    const earlyFrames = buffered.splice(0);
+    for (const frame of earlyFrames) enqueue(frame);
+    return chain;
+  };
+  return { enqueue, activate, get bufferedCount() { return buffered.length; } };
+};
+
 export const processRelayPrompt = async ({
   message, callSid, isCurrent = () => true, requestAI, send,
   shouldTransfer = () => false, onAIResult = () => {}, onStage = () => {}
 }) => {
   if (message?.type !== 'prompt') return { status: 'ignored', reason: 'event-type' };
+  if (typeof message.last !== 'boolean') {
+    onStage('prompt_invalid', { reason: 'missing_last_flag' });
+    return { status: 'invalid', reason: 'missing_last_flag' };
+  }
   if (message.last === false) {
     onStage('prompt_partial', { language: message.lang || null });
     return { status: 'partial' };
   }
 
-  const text = String(message.voicePrompt || '').trim();
-  if (!text || !callSid) {
-    onStage('prompt_invalid', { hasText: Boolean(text), hasCallSid: Boolean(callSid) });
+  const text = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim() : '';
+  if (!text || text.length > 3000 || !callSid) {
+    onStage('prompt_invalid', {
+      reason: !callSid ? 'missing_setup' : (!text ? 'missing_text' : 'text_too_long'),
+      hasText: Boolean(text), hasCallSid: Boolean(callSid), chars: text.length
+    });
     return { status: 'invalid' };
   }
 

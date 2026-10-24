@@ -84,9 +84,15 @@ class AdminCredentialsService {
       }
       return data;
     } catch (error) {
+      const lookupType = path.includes('/by-user-id/')
+        ? 'user_id'
+        : path.includes('/by-phone-number/')
+          ? 'phone_number'
+          : 'user_profile';
       logger.warn('Failed to resolve admin credentials/profile', {
-        path,
-        message: error.message
+        lookupType,
+        status: error.response?.status || null,
+        errorType: error?.name || 'Error'
       });
       return null;
     }
