@@ -97,11 +97,13 @@ test('exact TechnovaHub answer and second Tamil question are sent as spoken Rela
   const outgoing = [];
   const answers = [
     'TechnovaHub நிறுவனம் IT Services, AI Automation, மற்றும் Digital Transformation Solutions வழங்குகிறது. உங்களுக்கு எந்த service பற்றி தெரிந்துகொள்ள வேண்டும்?',
-    'AI Automation மூலம் மீண்டும் மீண்டும் செய்யும் வேலைகளை தானியக்கமாக்கலாம்.'
+    'AI Automation மூலம் மீண்டும் மீண்டும் செய்யும் வேலைகளை தானியக்கமாக்கலாம்.',
+    'TechnovaHub provides IT Services, AI Automation, and Digital Transformation Solutions.'
   ];
   const questions = [
     'Hello, TechnovaHub என்னென்ன services provide பண்றீங்க?',
-    'AI Automation பற்றி சொல்லுங்க'
+    'AI Automation பற்றி சொல்லுங்க',
+    'What services does TechnovaHub provide?'
   ];
   for (let index = 0; index < questions.length; index += 1) {
     const result = await processRelayPrompt({
@@ -114,7 +116,8 @@ test('exact TechnovaHub answer and second Tamil question are sent as spoken Rela
   }
   assert.deepEqual(outgoing.map(({ type, token, last }) => ({ type, token, last })), [
     { type: 'text', token: answers[0], last: true },
-    { type: 'text', token: answers[1], last: true }
+    { type: 'text', token: answers[1], last: true },
+    { type: 'text', token: answers[2], last: true }
   ]);
 });
 
