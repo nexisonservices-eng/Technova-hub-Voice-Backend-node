@@ -1,12 +1,15 @@
 import axios from 'axios';
 import twilio from 'twilio';
 import WebSocket from 'ws';
+import { randomUUID } from 'node:crypto';
 import Workflow from '../models/Workflow.js';
+import Call from '../models/call.js';
 import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
-import { validateAgentConfig } from '../config/conversationRelay.js';
+import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
+import { describeConversationAIEndpoint, resolveConversationAIBaseUrl } from '../config/conversationAIUrl.js';
+import { buildAiFailureMessage, processRelayPrompt } from './conversationRelayProtocol.js';
 
-const AI_URL = (process.env.AI_SERVICE_HTTP || 'http://localhost:4000').replace(/\/$/, '');
 export { validateAgentConfig };
 
 export const verifyRelayUpgrade = async (req) => {
@@ -16,24 +19,50 @@ export const verifyRelayUpgrade = async (req) => {
     const userId = String(parsed.searchParams.get('userId') || '').trim();
     const workflowId = String(parsed.searchParams.get('workflowId') || '').trim();
     const nodeId = String(parsed.searchParams.get('nodeId') || '').trim();
-    if (!userId || !workflowId || !nodeId) return false;
+    const connectionId = req.relayConnectionId || '';
+    if (!userId || !workflowId || !nodeId) {
+      logger.warn('ConversationRelay upgrade rejected: required tenant routing fields are missing', {
+        connectionId, stage: 'tenant_routing_validation'
+      });
+      return false;
+    }
     const credential = await adminCredentialsService.getTwilioCredentialsByUserId(userId);
     const signature = req.headers['x-twilio-signature'];
-    if (!credential?.twilioAuthToken || !signature) return false;
+    if (!credential?.twilioAuthToken || !signature) {
+      logger.warn('ConversationRelay upgrade rejected: tenant credentials or Twilio signature are unavailable', {
+        connectionId, stage: 'signature_prerequisite'
+      });
+      return false;
+    }
     const base = String(process.env.PUBLIC_WEBHOOK_BASE_URL || process.env.BASE_URL || '').replace(/\/$/, '');
-    if (!/^https:\/\//i.test(base)) return false;
+    if (!/^https:\/\//i.test(base)) {
+      logger.warn('ConversationRelay upgrade rejected: public HTTPS base URL is unavailable', {
+        connectionId, stage: 'signature_url_configuration'
+      });
+      return false;
+    }
     const signedUrl = `${base.replace(/^https:/i, 'wss:')}${req.url}`;
     const valid = twilio.validateRequest(credential.twilioAuthToken, signature, signedUrl, {});
-    if (!valid) logger.warn('ConversationRelay upgrade rejected: invalid Twilio signature', { userId, workflowId, nodeId });
+    if (!valid) logger.warn('ConversationRelay upgrade rejected: invalid Twilio signature', { connectionId, stage: 'signature_validation' });
+    else logger.info('ConversationRelay Twilio signature validated', { connectionId, stage: 'signature_validation' });
     return valid;
   } catch (error) {
-    logger.warn('ConversationRelay signature validation failed', { message: error.message });
+    logger.warn('ConversationRelay signature validation failed', { stage: 'signature_validation', errorType: error?.name || 'Error' });
     return false;
   }
 };
 
 const safeSend = (socket, payload) => {
-  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+  if (socket.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(payload), (error) => {
+      if (error) logger.warn('ConversationRelay websocket send failed', { errorType: error.name || 'Error' });
+    });
+    return true;
+  } catch (error) {
+    logger.warn('ConversationRelay websocket send failed', { errorType: error?.name || 'Error' });
+    return false;
+  }
 };
 
 const intentTransfer = (result, state, data) => {
@@ -66,23 +95,38 @@ class ConversationRelayService {
     const userId = parsed.searchParams.get('userId');
     const workflowId = parsed.searchParams.get('workflowId');
     const nodeId = parsed.searchParams.get('nodeId');
+    const connectionId = req.relayConnectionId || randomUUID();
+    let correlationId = connectionId;
+    const connectionStartedAt = Date.now();
     let data = null;
     let callSid = '';
     let callGeneration = 0;
     let finished = false;
     let timer = null;
+    let setupStage = 'python_ai_configuration';
     const state = { discountAsked: false, waitingForMoreHelp: false, discountQuestion: '' };
 
     try {
+      const aiBaseUrl = resolveConversationAIBaseUrl();
+      logger.info('ConversationRelay websocket accepted', {
+        connectionId, correlationId, aiEndpoint: describeConversationAIEndpoint(`${aiBaseUrl}/conversation-turn`),
+        pythonApiKeyConfigured: Boolean(process.env.PYTHON_API_KEY)
+      });
+      setupStage = 'tenant_authorization';
       const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
       const node = workflow?.nodes?.find((entry) => entry.id === nodeId && entry.type === 'ai_voice_agent');
       if (!node) throw new Error('AI Voice Agent workflow node was not found for this tenant');
       data = node.data || {};
+      setupStage = 'agent_configuration';
       validateAgentConfig(data);
       state.discountQuestion = String(data.discountQuestion || '').slice(0, 500);
-      logger.info('ConversationRelay connected', { userId, workflowId, nodeId, language: data.language, voice: data.voiceSelection });
+      logger.info('ConversationRelay tenant workflow authorized', {
+        connectionId, correlationId, language: data.language, voice: data.voiceSelection
+      });
     } catch (error) {
-      logger.error('ConversationRelay setup failed', { userId, workflowId, nodeId, message: error.message });
+      logger.error('ConversationRelay setup failed', {
+        connectionId, correlationId, stage: setupStage, errorType: error?.name || 'Error'
+      });
       safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'configuration' }) });
       socket.close(1011, 'Configuration error');
       return;
@@ -91,83 +135,129 @@ class ConversationRelayService {
     timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      logger.info('ConversationRelay maximum duration reached', { workflowId, nodeId, callSid });
+      logger.info('ConversationRelay maximum duration reached', { connectionId, correlationId, stage: 'duration_limit' });
       safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'duration-limit' }) });
     }, Number(data.maxDuration || 300) * 1000);
     timer.unref?.();
 
     socket.on('message', async (raw) => {
+      try {
       let message;
-      try { message = JSON.parse(raw.toString()); } catch { logger.warn('ConversationRelay received malformed message'); return; }
+      try { message = JSON.parse(raw.toString()); } catch {
+        logger.warn('ConversationRelay received malformed message', { connectionId, correlationId, stage: 'message_parse' });
+        return;
+      }
+      logger.info('ConversationRelay event received', {
+        connectionId, correlationId, eventType: String(message?.type || 'unknown').slice(0, 40)
+      });
       if (message.type === 'setup') {
-        callSid = String(message.callSid || '').slice(0, 100);
+        callSid = String(message.callSid || message.parentCallSid || '').slice(0, 100);
+        correlationId = callSid || connectionId;
+        let provider = 'unknown';
+        try {
+          const call = callSid ? await Call.findOne({ callSid }).select('provider providerData').lean() : null;
+          provider = call ? resolveCallProvider(call) || 'unknown' : 'not-found';
+        } catch (error) {
+          logger.warn('ConversationRelay call provider lookup failed', { connectionId, correlationId, errorType: error?.name || 'Error' });
+        }
+        logger.info('ConversationRelay setup event received', {
+          connectionId, correlationId, provider, language: data.language,
+          sessionIdPresent: Boolean(message.sessionId), stage: 'setup'
+        });
         return;
       }
       if (message.type === 'interrupt') {
         callGeneration += 1;
+        logger.info('ConversationRelay caller interrupted agent speech', { connectionId, correlationId, stage: 'interrupt' });
         return;
       }
       if (message.type === 'error') {
-        logger.warn('Twilio ConversationRelay reported an error', { callSid, code: message.code || null });
+        logger.warn('Twilio ConversationRelay reported an error', {
+          connectionId, correlationId, stage: 'relay_error', code: String(message.code || '').slice(0, 40) || null,
+          descriptionChars: String(message.description || '').length
+        });
         return;
       }
-      if (message.type !== 'prompt' || message.last === false || finished) return;
-      const text = String(message.voicePrompt || '').trim();
-      if (!text || !callSid) {
-        logger.warn('ConversationRelay prompt ignored: missing final text or CallSid', { callSid });
+      if (message.type !== 'prompt') return;
+      if (finished) {
+        logger.warn('ConversationRelay prompt ignored after session completion', { connectionId, correlationId, stage: 'prompt_after_end' });
         return;
       }
       const generation = ++callGeneration;
-      logger.info('ConversationRelay caller turn received', { callSid, language: data.language, chars: text.length });
-      try {
-        const headers = {};
-        if (process.env.PYTHON_API_KEY) headers['X-API-Key'] = process.env.PYTHON_API_KEY;
-        const { data: result } = await axios.post(`${AI_URL}/conversation-turn`, {
-          text,
-          call_id: callSid,
-          system_prompt: buildPrompt(data),
-          conversation_state: state
-        }, { timeout: 30000, headers });
-        if (finished || generation !== callGeneration) return;
-        const answer = String(result?.response || '').trim();
-        if (!answer) throw new Error('AI service returned an empty response');
-        const intent = String(result.intent || 'continue').toLowerCase();
-        const spokenAnswer = answer;
-        if (intent === 'offer_discounts' && !state.discountAsked) {
-          state.discountAsked = true;
-        }
-        if (intent === 'discount_no') state.waitingForMoreHelp = true;
-        if (intentTransfer(result, state, data)) {
-          finished = true;
-          logger.info('ConversationRelay handing off to configured human agent', { callSid, intent });
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'transfer', intent }) });
-          return;
-        }
-        if (intent === 'end_call') {
-          finished = true;
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'customer-ended' }) });
-          return;
-        }
-        safeSend(socket, { type: 'text', token: spokenAnswer, last: true, interruptible: true });
-        logger.info('ConversationRelay response generated', { callSid, intent, chars: spokenAnswer.length });
+      const startedAt = Date.now();
+      if (message.lang && message.lang !== data.language) {
+        logger.warn('ConversationRelay prompt language differs from configured language', {
+          connectionId, correlationId, stage: 'language_mismatch', promptLanguage: String(message.lang).slice(0, 20),
+          configuredLanguage: data.language
+        });
+      }
+      const turn = await processRelayPrompt({
+        message,
+        callSid,
+        isCurrent: () => !finished && generation === callGeneration,
+        requestAI: async (text, promptMessage) => {
+          const aiBaseUrl = resolveConversationAIBaseUrl();
+          const headers = { 'X-Correlation-ID': correlationId };
+          if (process.env.PYTHON_API_KEY) headers['X-API-Key'] = process.env.PYTHON_API_KEY;
+          logger.info('ConversationRelay forwarding transcript to Python AI', {
+            connectionId, correlationId, stage: 'python_request', language: promptMessage.lang || data.language,
+            chars: text.length, endpoint: describeConversationAIEndpoint(`${aiBaseUrl}/conversation-turn`)
+          });
+          const { data: result } = await axios.post(`${aiBaseUrl}/conversation-turn`, {
+            text,
+            call_id: callSid,
+            system_prompt: buildPrompt(data),
+            conversation_state: state
+          }, { timeout: 35000, headers });
+          return result;
+        },
+        shouldTransfer: (result) => intentTransfer(result, state, data),
+        onAIResult: (result) => {
+          const intent = String(result.intent || 'continue').toLowerCase();
+          if (intent === 'offer_discounts' && !state.discountAsked) state.discountAsked = true;
+          if (intent === 'discount_no') state.waitingForMoreHelp = true;
+        },
+        send: (payload) => safeSend(socket, payload),
+        onStage: (stage, fields = {}) => logger.info(`ConversationRelay ${stage}`, {
+          connectionId, correlationId, stage, durationMs: Date.now() - startedAt, ...fields
+        })
+      });
+      if (turn.status === 'transfer' || turn.status === 'end') finished = true;
       } catch (error) {
-        logger.error('ConversationRelay AI turn failed', { callSid, message: error.message, status: error.response?.status || null });
-        if (generation === callGeneration && socket.readyState === WebSocket.OPEN) {
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'ai-service' }) });
-          finished = true;
-        }
+        logger.error('ConversationRelay message handler failed', {
+          connectionId, correlationId, stage: 'message_handler', errorType: error?.name || 'Error'
+        });
+        if (callSid && !finished) safeSend(socket, {
+          ...buildAiFailureMessage()
+        });
       }
     });
 
-    socket.on('close', () => {
+    socket.on('close', (code, reason) => {
       clearTimeout(timer);
+      logger.info('ConversationRelay websocket closed', {
+        connectionId, correlationId, stage: 'websocket_close', code,
+        reason: String(reason || '').slice(0, 120), durationMs: Date.now() - connectionStartedAt
+      });
       if (callSid) {
-        const headers = process.env.PYTHON_API_KEY ? { 'X-API-Key': process.env.PYTHON_API_KEY } : {};
-        void axios.post(`${AI_URL}/reset-conversation/${encodeURIComponent(callSid)}`, {}, { timeout: 3000, headers })
-          .catch(() => logger.warn('Unable to clear AI conversation memory after relay close', { callSid }));
+        void (async () => {
+          try {
+            const aiBaseUrl = resolveConversationAIBaseUrl();
+            const headers = { 'X-Correlation-ID': correlationId };
+            if (process.env.PYTHON_API_KEY) headers['X-API-Key'] = process.env.PYTHON_API_KEY;
+            await axios.post(`${aiBaseUrl}/reset-conversation/${encodeURIComponent(callSid)}`, {}, { timeout: 3000, headers });
+          } catch (error) {
+            logger.warn('Unable to clear AI conversation memory after relay close', {
+              connectionId, correlationId, stage: 'conversation_reset', errorType: error?.name || 'Error',
+              status: error?.response?.status || null
+            });
+          }
+        })();
       }
     });
-    socket.on('error', (error) => logger.warn('ConversationRelay websocket error', { callSid, message: error.message }));
+    socket.on('error', (error) => logger.warn('ConversationRelay websocket error', {
+      connectionId, correlationId, stage: 'websocket_error', errorType: error?.name || 'Error', code: error?.code || null
+    }));
   }
 }
 

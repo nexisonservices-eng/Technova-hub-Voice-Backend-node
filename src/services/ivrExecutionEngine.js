@@ -459,7 +459,9 @@ class IVRExecutionEngine {
       Number.isFinite(requestedSpeechTimeout) ? requestedSpeechTimeout : 2000
     )));
     logger.info('Starting Twilio ConversationRelay', {
-      workflowId: String(config._id), nodeId: node.id, language: data.language, voice: data.voiceSelection
+      callSid: String(callSid), workflowId: String(config._id), nodeId: node.id,
+      language: data.language, voice: data.voiceSelection,
+      relayWelcomeConfigured: Boolean(String(data.welcomeMessage || '').trim()), stage: 'relay_twiml_generated'
     });
     return buildConversationRelayTwiML({
       url: wsUrl,

@@ -7,6 +7,7 @@ import campaignAutomationService from './src/services/campaignAutomationService.
 import { connectDB } from './src/config/db.js';
 import logger from './src/utils/logger.js';
 import { WebSocketServer } from 'ws';
+import { randomUUID } from 'node:crypto';
 import conversationRelayService, { verifyRelayUpgrade } from './src/services/conversationRelayService.js';
 
 // ===== STARTUP SEQUENCE =====
@@ -33,11 +34,20 @@ server.on('upgrade', async (req, socket, head) => {
   let pathname = '';
   try { pathname = new URL(req.url, 'http://localhost').pathname; } catch { socket.destroy(); return; }
   if (pathname !== '/ws/conversation-relay') return;
+  req.relayConnectionId = randomUUID();
+  logger.info('ConversationRelay websocket upgrade received', {
+    connectionId: req.relayConnectionId, stage: 'upgrade_received'
+  });
   let authorized = false;
   try { authorized = await verifyRelayUpgrade(req); } catch (error) {
-    logger.warn('ConversationRelay websocket authorization failed', { message: error.message });
+    logger.warn('ConversationRelay websocket authorization failed', {
+      connectionId: req.relayConnectionId, stage: 'signature_validation', errorType: error?.name || 'Error'
+    });
   }
   if (!authorized) {
+    logger.warn('ConversationRelay websocket rejected', {
+      connectionId: req.relayConnectionId, stage: 'signature_validation'
+    });
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
