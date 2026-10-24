@@ -657,7 +657,8 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       else { response.say('Thank you for calling. Goodbye.'); response.hangup(); }
     }
     logger.info('ConversationRelay session ended', {
-      workflowId, nodeId, callSid, status: handoff.status || 'completed', reason: handoff.reason || null
+      event: 'session_end', workflowId, nodeId, callSid,
+      status: handoff.status || 'completed', reason: handoff.reason || null
     });
     return res.type('text/xml').send(response.toString());
   } catch (error) {

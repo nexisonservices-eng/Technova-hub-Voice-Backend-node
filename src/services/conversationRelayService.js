@@ -107,6 +107,7 @@ class ConversationRelayService {
     let data = null;
     let relaySession = null;
     let callGeneration = 0;
+    let turnNumber = 0;
     let finished = false;
     let timer = null;
     let setupStage = 'python_ai_configuration';
@@ -115,7 +116,7 @@ class ConversationRelayService {
     socket.on('close', (code, reason) => {
       clearTimeout(timer);
       logger.info('ConversationRelay websocket closed', {
-        connectionId, correlationId, stage: 'websocket_close', code,
+        event: 'websocket_closed', connectionId, correlationId, stage: 'websocket_close', code,
         closeKind: code === 1006 ? 'abnormal_network_or_peer_close' : 'normal_or_protocol_close',
         reason: String(reason || '').slice(0, 120), durationMs: Date.now() - connectionStartedAt
       });
@@ -205,6 +206,13 @@ class ConversationRelayService {
           return;
         }
         if (message.type !== 'prompt') return;
+        const currentTurn = ++turnNumber;
+        const promptText = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim() : '';
+        logger.info('ConversationRelay prompt received', {
+          event: 'prompt_received', connectionId, correlationId, turn: currentTurn,
+          last: message.last === true, chars: promptText.length,
+          language: String(message.lang || '').slice(0, 20) || null
+        });
         if (finished) {
           logger.warn('ConversationRelay prompt ignored after session completion', { connectionId, correlationId, stage: 'prompt_after_end' });
           return;
@@ -240,7 +248,7 @@ class ConversationRelayService {
             const headers = { 'X-Correlation-ID': correlationId };
             if (process.env.PYTHON_API_KEY) headers['X-API-Key'] = process.env.PYTHON_API_KEY;
             logger.info('ConversationRelay forwarding transcript to Python AI', {
-              connectionId, correlationId, stage: 'python_request', language: promptMessage.lang || data.language,
+              event: 'node_forwarded', turn: currentTurn, connectionId, correlationId, stage: 'python_request', language: promptMessage.lang || data.language,
               chars: text.length, endpoint: describeConversationAIEndpoint(`${aiBaseUrl}/conversation-turn`)
             });
             let result;
@@ -254,6 +262,7 @@ class ConversationRelayService {
               result = response.data;
             } catch (error) {
               logger.error('ConversationRelay Python request failed', {
+                event: 'python_response', turn: currentTurn, outcome: 'error',
                 connectionId, correlationId, stage: 'python_http_error',
                 errorType: error?.name || 'Error', status: error?.response?.status || null,
                 code: error?.code || null,
@@ -264,6 +273,7 @@ class ConversationRelayService {
             }
             if (result?.success !== true || typeof result?.response !== 'string' || !result.response.trim()) {
               logger.error('ConversationRelay Python response contract invalid', {
+                event: 'python_response', turn: currentTurn, outcome: 'invalid',
                 connectionId, correlationId, stage: 'python_response_validation',
                 success: result?.success === true,
                 responseType: typeof result?.response,
@@ -275,7 +285,7 @@ class ConversationRelayService {
               throw error;
             }
             logger.info('ConversationRelay Python response received', {
-              connectionId, correlationId, stage: 'python_response_received',
+              event: 'python_response', turn: currentTurn, connectionId, correlationId, stage: 'python_response_received',
               responseChars: result.response.length,
               intent: String(result.intent || 'continue').slice(0, 40)
             });
@@ -289,7 +299,9 @@ class ConversationRelayService {
           },
           send: (payload) => safeSend(socket, payload),
           onStage: (stage, fields = {}) => logger.info(`ConversationRelay ${stage}`, {
-            connectionId, correlationId, stage, durationMs: Date.now() - startedAt, ...fields
+            event: stage === 'response_sent' ? 'relay_text_sent' : undefined,
+            turn: currentTurn, connectionId, correlationId, stage,
+            durationMs: Date.now() - startedAt, ...fields
           })
         });
         if (turn.status === 'transfer' || turn.status === 'end') finished = true;
@@ -352,7 +364,10 @@ class ConversationRelayService {
     timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      logger.info('ConversationRelay maximum duration reached', { connectionId, correlationId, stage: 'duration_limit' });
+      logger.info('ConversationRelay maximum duration reached', {
+        event: 'session_end', connectionId, correlationId, stage: 'duration_limit',
+        reason: 'duration-limit', durationSeconds: Number(data.maxDuration || 300)
+      });
       safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'duration-limit' }) });
     }, Number(data.maxDuration || 300) * 1000);
     timer.unref?.();

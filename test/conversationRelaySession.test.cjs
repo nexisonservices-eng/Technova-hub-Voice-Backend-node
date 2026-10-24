@@ -54,6 +54,52 @@ test('setup then Tamil prompt reaches mocked Python and produces a spoken Relay 
   assert.deepEqual(outgoing, [{ type: 'text', token: 'வணக்கம்! எப்படி உதவலாம்?', last: true, interruptible: true }]);
 });
 
+test('three consecutive prompts in one authenticated call each reach Python and can transfer on the third turn', async () => {
+  const { bindRelaySetupCallSid, createRelaySessionContext, getRelaySessionCallSid } = await importSession();
+  const { createOrderedRelayFrameQueue, processRelayPrompt } = await importProtocol();
+  const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
+  const questions = [
+    'What services does TechnovaHub provide?',
+    'What is Nexion?',
+    'Do you have any discounts?'
+  ];
+  const answers = ['TechnovaHub provides technology services.', 'Nexion automates business workflows.', 'I can connect you with a representative.'];
+  const results = [
+    { success: true, response: answers[0], intent: 'continue' },
+    { success: true, response: answers[1], intent: 'continue' },
+    { success: true, response: answers[2], intent: 'discount_yes' }
+  ];
+  const pythonRequests = [];
+  const outgoing = [];
+  let turnIndex = 0;
+  const queue = createOrderedRelayFrameQueue(async (raw) => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === 'setup') {
+      bindRelaySetupCallSid(session, message, { execution: makeExecution(), call: makeCall() });
+      return;
+    }
+    const result = results[turnIndex++];
+    await processRelayPrompt({
+      message, callSid: getRelaySessionCallSid(session),
+      requestAI: async (text) => { pythonRequests.push(text); return result; },
+      shouldTransfer: (aiResult) => aiResult.intent === 'discount_yes',
+      send: (payload) => { outgoing.push(payload); return true; }
+    });
+  });
+  queue.enqueue(Buffer.from(JSON.stringify({ type: 'setup', callSid })));
+  for (const voicePrompt of questions) {
+    queue.enqueue(Buffer.from(JSON.stringify({ type: 'prompt', voicePrompt, lang: 'en-IN', last: true })));
+  }
+  await queue.activate();
+
+  assert.deepEqual(pythonRequests, questions);
+  assert.deepEqual(outgoing.slice(0, 2), answers.slice(0, 2).map((token) => ({
+    type: 'text', token, last: true, interruptible: true
+  })));
+  assert.equal(outgoing[2].type, 'end');
+  assert.deepEqual(JSON.parse(outgoing[2].handoffData), { status: 'transfer', intent: 'discount_yes' });
+});
+
 test('prompt without setup is rejected and never calls Python', async () => {
   const { createRelaySessionContext, getRelaySessionCallSid } = await importSession();
   const { processRelayPrompt } = await importProtocol();
