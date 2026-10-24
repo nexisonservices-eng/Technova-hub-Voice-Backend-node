@@ -265,8 +265,52 @@ class AppointmentBookingService {
   }
 
   resolveAvailableSlotByInput(slotSnapshot = [], selectedInput = '') {
+    const menuSlots = (slotSnapshot || []).filter((slot) => slot?.status !== 'disabled');
     const availableSlots = this.getAvailableSlots(slotSnapshot);
     const normalizedInput = toTrimmedString(selectedInput);
+
+    // The spoken menu displays each slot's configured digit. Resolve against
+    // that same mapping instead of treating the digit as an array position.
+    // Full slots remain in the spoken menu, so recognize them here and let
+    // the caller route to its full-slot branch rather than shifting digits.
+    const hasConfiguredDigits = menuSlots.some((slot) =>
+      toTrimmedString(slot?.metadata?.digit ?? slot?.digit)
+    );
+    if (hasConfiguredDigits) {
+      const selectedSlot = menuSlots.find((slot) =>
+        toTrimmedString(slot?.metadata?.digit ?? slot?.digit) === normalizedInput
+      );
+      if (!selectedSlot) {
+        return {
+          availableSlots,
+          selectedInput: normalizedInput,
+          selectedIndex: -1,
+          selectedSlot: null,
+          reason: availableSlots.length === 0 ? 'slot_already_booked' : 'slot_mapping_not_found'
+        };
+      }
+
+      const selectedIndex = menuSlots.indexOf(selectedSlot);
+      if (selectedSlot.status === 'full' || Number(selectedSlot.availableSeats) <= 0) {
+        return {
+          availableSlots,
+          selectedInput: normalizedInput,
+          selectedIndex,
+          selectedSlot: null,
+          reason: 'slot_already_booked'
+        };
+      }
+
+      return {
+        availableSlots,
+        selectedInput: normalizedInput,
+        selectedIndex,
+        selectedSlot,
+        reason: null
+      };
+    }
+
+    // Compatibility for snapshots created before slot digits were stored.
     const selectedIndex = Number(normalizedInput) - 1;
 
     if (!normalizedInput || !Number.isInteger(selectedIndex)) {
