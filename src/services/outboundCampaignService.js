@@ -259,13 +259,14 @@ class OutboundCampaignService {
     return response.toString();
   }
 
-  async resolveScriptAudioAsset({ script = '', voiceId = 'en-GB-SoniaNeural', language = 'en-GB' }) {
+  async resolveScriptAudioAsset({ script = '', voiceId = 'en-GB-SoniaNeural', language = 'en-GB', userId = null }) {
     const text = String(script || '').trim();
     if (!text) {
       return { audioUrl: '', audioAssetId: '' };
     }
 
-    const hash = crypto.createHash('sha1').update(`${voiceId}|${language}|${text}`).digest('hex');
+    const userKey = String(userId || '');
+    const hash = crypto.createHash('sha1').update(`${userKey}|${voiceId}|${language}|${text}`).digest('hex');
     if (this.audioCache.has(hash)) {
       return this.audioCache.get(hash);
     }
@@ -285,9 +286,16 @@ class OutboundCampaignService {
         audioUrl: String(audioData?.audioUrl || '').trim(),
         audioAssetId: String(audioData?.publicId || '').trim()
       };
+      if (!result.audioUrl && (language === 'ta-IN' || voiceId.startsWith('ta-IN-'))) {
+        throw new Error('Tamil audio generation returned no public audio URL.');
+      }
       this.audioCache.set(hash, result);
       return result;
     } catch (error) {
+      if (language === 'ta-IN' || voiceId.startsWith('ta-IN-')) {
+        logger.error('Tamil outbound campaign audio generation failed', { language, voice: voiceId, error: error.message });
+        throw new Error('Tamil audio generation failed; campaign call was not placed.');
+      }
       logger.warn('Outbound campaign TTS generation failed, continuing with text fallback.', {
         message: error.message
       });
@@ -630,7 +638,8 @@ class OutboundCampaignService {
     const audioAsset = await this.resolveScriptAudioAsset({
       script: campaign.message,
       voiceId: campaign.voice?.voiceId || 'en-GB-SoniaNeural',
-      language: campaign.voice?.language || 'en-GB'
+      language: campaign.voice?.language || 'en-GB',
+      userId: String(campaign.userId || '')
     });
 
     let initiated = 0;
@@ -660,6 +669,13 @@ class OutboundCampaignService {
           await contact.save();
           return { initiated: 1, failed: 0 };
         } catch (error) {
+          logger.error('Outbound campaign call or playback setup failed', {
+            campaignId: campaign.campaignId,
+            language: campaign.voice?.language || 'en-GB',
+            voice: campaign.voice?.voiceId || 'en-GB-SoniaNeural',
+            provider: campaign.provider,
+            error: error.message
+          });
           contact.status = 'failed';
           contact.attempts = Number(contact.attempts || 0) + 1;
           contact.lastAttemptAt = new Date();
@@ -711,6 +727,7 @@ class OutboundCampaignService {
       script: campaign.message || '',
       audioUrl: audioAsset.audioUrl || '',
       voiceId: campaign.voice?.voiceId || '',
+      language: campaign.voice?.language || 'en-GB',
       scheduleId: scheduleId || String(campaign.schedule?.scheduleId || '')
     };
 
@@ -767,6 +784,12 @@ class OutboundCampaignService {
       }
 
       const call = await client.calls.create(callPayload);
+      logger.info('Outbound campaign Twilio playback configured', {
+        campaignId: campaign.campaignId,
+        language: campaign.voice?.language || 'en-GB',
+        voice: campaign.voice?.voiceId || 'en-GB-SoniaNeural',
+        playback: audioAsset.audioUrl ? 'audio_url' : 'say_fallback'
+      });
       callSid = String(call.sid || '');
       raw = {
         sid: call.sid,

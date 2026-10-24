@@ -56,3 +56,52 @@ test('TTS provider failure is propagated with its HTTP status', async () => {
     axios.post = originalPost;
   }
 });
+
+test('Tamil voice and Unicode text reach the Python provider unchanged', async () => {
+  const { service, axios } = await loadService();
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+  let payload;
+  axios.get = async () => ({ data: { voices: [] } });
+  axios.post = async (_url, body) => {
+    payload = body;
+    return { data: Buffer.from('ID3mock-mp3') };
+  };
+  const tamil = 'வணக்கம்! உங்கள் அழைப்புக்கு நன்றி.';
+  try {
+    const audio = await service.generateSpeech(tamil, 'ta-IN', 'ta-IN-PallaviNeural');
+    assert.equal(audio.toString(), 'ID3mock-mp3');
+    assert.equal(payload.text, tamil);
+    assert.equal(payload.voice, 'ta-IN-PallaviNeural');
+    assert.equal(payload.language, 'ta-IN');
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test('outbound campaign Twilio playback uses Play for generated MP3 URLs', async () => {
+  const { default: campaigns } = await import('../src/services/outboundCampaignService.js');
+  const { default: outbound } = await import('../src/controllers/OutboundController.js');
+  const twiml = campaigns.buildTwilioCampaignTwiML({ audioUrl: 'https://res.cloudinary.com/demo/video/upload/calls/tamil.mp3' });
+  assert.match(twiml, /<Play>https:\/\/res\.cloudinary\.com\/demo\/video\/upload\/calls\/tamil\.mp3<\/Play>/);
+  assert.doesNotMatch(twiml, /<Say/);
+  const quickCallTwiml = outbound.buildTwilioTwiML({ audioUrl: 'https://res.cloudinary.com/demo/video/upload/calls/tamil.mp3' });
+  assert.match(quickCallTwiml, /<Play>https:\/\/res\.cloudinary\.com\/demo\/video\/upload\/calls\/tamil\.mp3<\/Play>/);
+  assert.doesNotMatch(quickCallTwiml, /<Say/);
+});
+
+test('Tamil outbound campaign audio failure is returned instead of falling back to English Say', async () => {
+  const { default: campaigns } = await import('../src/services/outboundCampaignService.js');
+  const { default: tts } = await import('../src/services/pythonTTSService.js');
+  const original = tts.getAudioForPrompt;
+  tts.getAudioForPrompt = async () => { throw new Error('Edge TTS unavailable'); };
+  try {
+    await assert.rejects(
+      campaigns.resolveScriptAudioAsset({ script: 'தமிழ் உரை', voiceId: 'ta-IN-PallaviNeural', language: 'ta-IN', userId: 'tenant-test' }),
+      /Tamil audio generation failed/
+    );
+  } finally {
+    tts.getAudioForPrompt = original;
+  }
+});

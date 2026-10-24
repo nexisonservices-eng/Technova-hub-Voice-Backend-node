@@ -266,8 +266,16 @@ class OutboundLocalController {
         return result;
       }
 
+      if (language === 'ta-IN' || voice.startsWith('ta-IN-')) {
+        throw new Error('Tamil audio generation returned no public audio URL.');
+      }
+
       return { audioUrl: '', audioAssetId: '', storage: 'none' };
     } catch (error) {
+      if (language === 'ta-IN' || voice.startsWith('ta-IN-')) {
+        logger.error('Tamil outbound audio generation or upload failed', { language, voice, error: error.message });
+        throw error;
+      }
       logger.error('Failed to generate outbound local script audio URL:', error);
       return { audioUrl: '', audioAssetId: '', storage: 'none' };
     }
@@ -567,18 +575,30 @@ class OutboundLocalController {
         });
       }
 
+      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
+      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
+      if (!voiceLanguage) {
+        return res.status(400).json({ success: false, message: `Unsupported outbound voice: ${voiceId}` });
+      }
+      logger.info('Outbound TTS requested', { language: voiceLanguage, voice: voiceId });
       let resolvedAudio = { audioUrl: '', audioAssetId: '', storage: 'none' };
       const quickCallTtsTimeoutMs = Number(process.env.OUTBOUND_QUICKCALL_TTS_TIMEOUT_MS || 12000);
       try {
         resolvedAudio = await this.runWithTimeout(
           this.resolveScriptAudioAsset({
             script: resolvedScript,
-            userObjectId
+            userObjectId,
+            voice: voiceId,
+            language: voiceLanguage
           }),
           quickCallTtsTimeoutMs,
           `Quick call TTS timed out after ${quickCallTtsTimeoutMs}ms`
         );
       } catch (ttsTimeoutError) {
+        if (voiceLanguage === 'ta-IN') {
+          logger.error('Tamil outbound audio generation failed', { language: voiceLanguage, voice: voiceId, error: ttsTimeoutError.message });
+          return res.status(502).json({ success: false, message: 'Tamil audio generation failed. No call was placed; please retry.' });
+        }
         logger.warn('Quick call TTS unavailable; falling back to Say playback.', {
           message: ttsTimeoutError.message
         });
@@ -647,6 +667,7 @@ class OutboundLocalController {
         }
 
         const call = await client.calls.create(callPayload);
+        logger.info('Outbound Twilio playback configured', { language: voiceLanguage, voice: voiceId, playback: resolvedAudioUrl ? 'audio_url' : 'say_fallback' });
 
         providerResult = {
           callSid: call.sid,
@@ -723,7 +744,12 @@ class OutboundLocalController {
         ttsMode: resolvedAudioUrl ? 'audio_url' : 'say_fallback'
       });
     } catch (error) {
-      logger.error('Outbound Local quick call failed:', error);
+      logger.error('Outbound Local quick call failed:', {
+        provider: String(req.body?.provider || 'exotel'),
+        language: String(req.body?.language || ''),
+        voice: String(req.body?.voiceId || req.body?.voice || ''),
+        error: error.message
+      });
       return res.status(500).json({
         success: false,
         message: 'Failed to initiate outbound local call',
