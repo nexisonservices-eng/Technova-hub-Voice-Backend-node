@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import cloudinary from 'cloudinary';
 import logger from '../utils/logger.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
+import { translateToTamilIfNeeded } from './googleTranslateService.js';
 import Workflow from '../models/Workflow.js';
 import { buildPythonTtsEndpoint, describePythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
 
@@ -129,6 +130,18 @@ class PythonTTSService {
     const startTime = Date.now();
     const requestId = requestContext.requestId || crypto.randomUUID();
 
+    let voice =
+      voiceOverride ||
+      this.languageMappings[language]?.voice ||
+      'en-GB-SoniaNeural';
+
+    // Normalize voice aliases before translating so every Tamil TTS entry point
+    // (IVR, campaigns, broadcasts and workflows) receives Tamil text.
+    const normalizedLanguage = this.VOICE_LANGUAGE[voice] || (language === 'en-US' ? 'en-GB' : language);
+    const speechText = normalizedLanguage === 'ta-IN'
+      ? await translateToTamilIfNeeded(text)
+      : text;
+
     // Get available voices from Python service
     const availableVoices = await this.getAvailableVoices(null, requestId);
     
@@ -138,15 +151,9 @@ class PythonTTSService {
     logger.info(`🔍 Available voices type: ${typeof extractedVoices}, isArray: ${Array.isArray(extractedVoices)}, length: ${extractedVoices?.length || 'N/A'}`);
     logger.info(`🔍 First few voices:`, JSON.stringify(extractedVoices.slice(0, 3), null, 2));
     
-    let voice =
-      voiceOverride ||
-      this.languageMappings[language]?.voice ||
-      'en-GB-SoniaNeural';
-
     // The Python service only accepts canonical voice locales (en-GB, ta-IN,
     // hi-IN). The backend also exposes en-US as a compatibility alias.
-    const normalizedLanguage = this.VOICE_LANGUAGE[voice] || (language === 'en-US' ? 'en-GB' : language);
-    const payload = { text, voice, language: normalizedLanguage };
+    const payload = { text: speechText, voice, language: normalizedLanguage };
     const endpoint = buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl);
     const safeEndpoint = describePythonTtsEndpoint(endpoint);
     
