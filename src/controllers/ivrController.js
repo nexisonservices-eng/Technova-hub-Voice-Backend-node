@@ -28,6 +28,10 @@ class IVRController {
     res.send(twiml);
   }
 
+  isValidWorkflowId(value) {
+    return /^[a-f\d]{24}$/i.test(String(value || '').trim());
+  }
+
   /**
    * Fetch the active IVR workflow
    */
@@ -125,6 +129,7 @@ class IVRController {
     try {
       // Twilio normally returns the workflow/node IDs on the Gather action URL.
       // Recover them by CallSid if a provider/proxy strips that query string.
+      if (!this.isValidWorkflowId(workflowId)) workflowId = null;
       if ((!workflowId || !currentNodeId) && CallSid) {
         const executionState = ivrWorkflowEngine.getExecutionState(CallSid);
         workflowId = workflowId || executionState?.workflowId;
@@ -262,9 +267,37 @@ class IVRController {
    * Handles transitions between non-blocking nodes
    */
   async nextStep(req, res) {
-    const { CallSid, workflowId, currentNodeId, status, fallbackNodeId } = { ...req.body, ...req.query };
+    let { CallSid, workflowId, currentNodeId, status, fallbackNodeId } = { ...req.body, ...req.query };
 
     try {
+      // Provider callback URLs can contain the literal string "undefined".
+      // Treat it as missing and recover context from the call execution.
+      if (!this.isValidWorkflowId(workflowId) && CallSid) {
+        workflowId = null;
+        const state = ivrWorkflowEngine.getExecutionState(CallSid);
+        workflowId = state?.workflowId || null;
+        currentNodeId = currentNodeId || state?.currentNodeId;
+
+        if (!this.isValidWorkflowId(workflowId) || !currentNodeId) {
+          const executionLog = await ExecutionLog.findOne({ callSid: CallSid })
+            .sort({ startTime: -1 })
+            .select('workflowId visitedNodes')
+            .lean();
+          workflowId = this.isValidWorkflowId(workflowId) ? workflowId : executionLog?.workflowId;
+          currentNodeId = currentNodeId || executionLog?.visitedNodes?.at(-1)?.nodeId;
+        }
+      }
+
+      if (!this.isValidWorkflowId(workflowId) || !currentNodeId) {
+        logger.error('Missing workflow context in nextStep', {
+          CallSid: CallSid || null,
+          workflowId: workflowId || null,
+          currentNodeId: currentNodeId || null,
+          failureReason: !this.isValidWorkflowId(workflowId) ? 'workflow_id_missing_or_invalid' : 'current_node_id_missing'
+        });
+        return this.send(res, TwiMLHelper.createErrorResponse());
+      }
+
       if (status) {
         const nextNodeId = await ivrWorkflowEngine.getNextNodeByHandle(workflowId, currentNodeId, status);
         if (nextNodeId) {
