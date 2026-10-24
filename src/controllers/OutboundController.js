@@ -459,6 +459,8 @@ class OutboundLocalController {
       const to = normalizeLocalNumber(toRaw);
       const templateId = String(req.body?.templateId || '').trim();
       const customMessage = String(req.body?.customMessage || '').trim();
+      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
+      const language = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('hi-IN-') ? 'hi-IN' : 'en-GB';
       let resolvedTemplateName = '';
       let resolvedScript = customMessage;
 
@@ -531,8 +533,8 @@ class OutboundLocalController {
           from,
           templateId: templateId || '',
           customMessage: resolvedScript || customMessage,
-          voiceId: String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim(),
-          voice: String(req.body?.voice || req.body?.voiceId || 'en-GB-SoniaNeural').trim(),
+          voiceId,
+          voice: voiceId,
           workflowId,
           scheduleType,
           scheduledAt,
@@ -573,7 +575,9 @@ class OutboundLocalController {
         resolvedAudio = await this.runWithTimeout(
           this.resolveScriptAudioAsset({
             script: resolvedScript,
-            userObjectId
+            userObjectId,
+            voice: voiceId,
+            language
           }),
           quickCallTtsTimeoutMs,
           `Quick call TTS timed out after ${quickCallTtsTimeoutMs}ms`
