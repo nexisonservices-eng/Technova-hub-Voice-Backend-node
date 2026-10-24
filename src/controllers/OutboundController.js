@@ -226,7 +226,7 @@ class OutboundLocalController {
     return xmlBody;
   }
 
-  async resolveScriptAudioAsset({ script = '', userObjectId = null, voice = 'en-GB-SoniaNeural', language = 'en-GB' }) {
+  async resolveScriptAudioAsset({ script = '', userObjectId = null, voice = 'en-GB-SoniaNeural', language = 'en-GB', skipFolderEnsure = false }) {
     const text = String(script || '').trim();
     if (!text) {
       return { audioUrl: '', audioAssetId: '', storage: 'none' };
@@ -253,7 +253,7 @@ class OutboundLocalController {
         voice,
         null,
         { id: `outbound_${hash}`, type: 'outbound' },
-        { userId: String(userObjectId || ''), username: '' }
+        { userId: String(userObjectId || ''), username: '', skipFolderEnsure }
       );
 
       const result = {
@@ -592,7 +592,8 @@ class OutboundLocalController {
             script: resolvedScript,
             userObjectId,
             voice: voiceId,
-            language: voiceLanguage
+            language: voiceLanguage,
+            skipFolderEnsure: true
           }),
           quickCallTtsTimeoutMs,
           `Quick call TTS timed out after ${quickCallTtsTimeoutMs}ms`
