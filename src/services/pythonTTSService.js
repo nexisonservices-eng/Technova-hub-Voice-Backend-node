@@ -5,7 +5,6 @@ import crypto from 'crypto';
 import cloudinary from 'cloudinary';
 import logger from '../utils/logger.js';
 import { resolveCloudinaryAudioFolder } from '../utils/cloudinaryAudioFolders.js';
-import { translateToTamilIfNeeded } from './googleTranslateService.js';
 import Workflow from '../models/Workflow.js';
 import { buildPythonTtsEndpoint, describePythonTtsEndpoint, resolvePythonTtsBaseUrl } from '../config/pythonTtsUrl.js';
 
@@ -135,12 +134,8 @@ class PythonTTSService {
       this.languageMappings[language]?.voice ||
       'en-GB-SoniaNeural';
 
-    // Normalize voice aliases before translating so every Tamil TTS entry point
-    // (IVR, campaigns, broadcasts and workflows) receives Tamil text.
+    // Normalize voice aliases before sending the request to the Python TTS service.
     const normalizedLanguage = this.VOICE_LANGUAGE[voice] || (language === 'en-US' ? 'en-GB' : language);
-    const speechText = normalizedLanguage === 'ta-IN'
-      ? await translateToTamilIfNeeded(text)
-      : text;
 
     // Get available voices from Python service
     const availableVoices = await this.getAvailableVoices(null, requestId);
@@ -153,7 +148,7 @@ class PythonTTSService {
     
     // The Python service only accepts canonical voice locales (en-GB, ta-IN,
     // hi-IN). The backend also exposes en-US as a compatibility alias.
-    const payload = { text: speechText, voice, language: normalizedLanguage };
+    const payload = { text, voice, language: normalizedLanguage };
     const endpoint = buildPythonTtsEndpoint('/tts/broadcast', this.pythonServiceUrl);
     const safeEndpoint = describePythonTtsEndpoint(endpoint);
     
