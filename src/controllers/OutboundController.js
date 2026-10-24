@@ -1,4 +1,6 @@
 import crypto from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
 import twilio from 'twilio';
 import Call from '../models/call.js';
 import Broadcast from '../models/Broadcast.js';
@@ -19,6 +21,7 @@ import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
 const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
+const TAMIL_SCRIPT_REGEX = /[\u0B80-\u0BFF]/;
 
 const normalizeLocalNumber = (value = '') => {
   const digits = String(value || '').replace(/\D/g, '');
@@ -99,6 +102,7 @@ const getTodayWindow = () => {
 class OutboundLocalController {
   constructor() {
     this.outboundAudioCache = new Map();
+    this.outboundAudioInFlight = new Map();
   }
 
   async runWithTimeout(taskPromise, timeoutMs, timeoutErrorMessage = 'Operation timed out') {
@@ -236,44 +240,57 @@ class OutboundLocalController {
       const userKey = String(userObjectId || 'anonymous');
       const hash = crypto.createHash('sha1').update(`${userKey}|${voice}|${language}|${text}`).digest('hex');
       const cacheKey = `${userKey}:${voice}:${language}:${hash}`;
+      const fileName = `${hash}.mp3`;
+      const audioDirectory = path.join(process.cwd(), 'uploads', 'outbound-audio');
+      const audioPath = path.join(audioDirectory, fileName);
       const cached = this.outboundAudioCache.get(cacheKey);
       if (cached?.audioUrl) {
-        return cached;
+        try {
+          await fs.access(audioPath);
+          return cached;
+        } catch {
+          this.outboundAudioCache.delete(cacheKey);
+        }
       }
 
-      if (!process.env.CLOUDINARY_CLOUD_NAME) {
-        logger.warn('Cloudinary is not configured; skipping outbound local audio file generation.');
-        return { audioUrl: '', audioAssetId: '', storage: 'none' };
+      if (this.outboundAudioInFlight.has(cacheKey)) {
+        return await this.outboundAudioInFlight.get(cacheKey);
       }
 
-      const audioData = await pythonTTSService.getAudioForPrompt(
-        `outbound_local_${hash}`,
-        text,
-        language,
-        voice,
-        null,
-        { id: `outbound_${hash}`, type: 'outbound' },
-        { userId: String(userObjectId || ''), username: '', skipFolderEnsure }
-      );
+      const generation = (async () => {
+        const audioBuffer = await pythonTTSService.generateSpeech(text, language, voice);
+        await fs.mkdir(audioDirectory, { recursive: true });
+        await fs.writeFile(audioPath, audioBuffer);
 
-      const result = {
-        audioUrl: String(audioData?.audioUrl || '').trim(),
-        audioAssetId: String(audioData?.publicId || '').trim(),
-        storage: 'cloudinary'
-      };
-      if (result.audioUrl) {
+        const baseUrl = String(process.env.BASE_URL || process.env.PUBLIC_WEBHOOK_BASE_URL || '').replace(/\/$/, '');
+        if (!baseUrl) {
+          await fs.rm(audioPath, { force: true });
+          throw new Error('BASE_URL is required to serve outbound call audio.');
+        }
+
+        const result = {
+          audioUrl: `${baseUrl}/uploads/outbound-audio/${fileName}`,
+          audioAssetId: '',
+          storage: 'local'
+        };
         this.outboundAudioCache.set(cacheKey, result);
+        logger.info('Outbound audio generated and stored locally', {
+          language,
+          voice,
+          bytes: audioBuffer.length,
+          audioUrl: result.audioUrl
+        });
         return result;
+      })();
+      this.outboundAudioInFlight.set(cacheKey, generation);
+      try {
+        return await generation;
+      } finally {
+        this.outboundAudioInFlight.delete(cacheKey);
       }
-
-      if (language === 'ta-IN' || voice.startsWith('ta-IN-')) {
-        throw new Error('Tamil audio generation returned no public audio URL.');
-      }
-
-      return { audioUrl: '', audioAssetId: '', storage: 'none' };
     } catch (error) {
       if (language === 'ta-IN' || voice.startsWith('ta-IN-')) {
-        logger.error('Tamil outbound audio generation or upload failed', { language, voice, error: error.message });
+        logger.error('Tamil outbound audio generation failed', { language, voice, error: error.message });
         throw error;
       }
       logger.error('Failed to generate outbound local script audio URL:', error);
@@ -467,8 +484,7 @@ class OutboundLocalController {
       const to = normalizeLocalNumber(toRaw);
       const templateId = String(req.body?.templateId || '').trim();
       const customMessage = String(req.body?.customMessage || '').trim();
-      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
-      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
+      let voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
       let resolvedTemplateName = '';
       let resolvedScript = customMessage;
 
@@ -531,6 +547,14 @@ class OutboundLocalController {
           resolvedScript = String(template.script || '').trim();
         }
       }
+
+      // Match the spoken language to the supplied script, even when the client
+      // omitted a voice or left its English default selected.
+      if (TAMIL_SCRIPT_REGEX.test(resolvedScript) && !voiceId.startsWith('ta-IN-')) {
+        logger.info('Tamil script detected; selecting Tamil outbound voice', { previousVoice: voiceId });
+        voiceId = 'ta-IN-PallaviNeural';
+      }
+      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
 
       if (scheduleType !== 'immediate') {
         const campaign = await outboundCampaignService.createCampaign({
