@@ -12,6 +12,9 @@ services:
       - key: PYTHON_TTS_BASE_URL
         sync: false
         description: Required public base URL of the Python TTS service reachable by this Node backend; localhost is only for local development.
+      - key: PYTHON_API_KEY
+        sync: false
+        description: Optional shared key sent to the Python service when its ENABLE_AUTH setting is true.
       - key: MONGODB_URI
         description: MongoDB connection string for the voice backend.
       - key: JWT_SECRET

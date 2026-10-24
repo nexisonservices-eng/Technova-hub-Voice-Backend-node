@@ -243,12 +243,42 @@ class ConversationRelayService {
               connectionId, correlationId, stage: 'python_request', language: promptMessage.lang || data.language,
               chars: text.length, endpoint: describeConversationAIEndpoint(`${aiBaseUrl}/conversation-turn`)
             });
-            const { data: result } = await axios.post(`${aiBaseUrl}/conversation-turn`, {
-              text,
-              call_id: sessionCallSid,
-              system_prompt: buildPrompt(data),
-              conversation_state: state
-            }, { timeout: 35000, headers });
+            let result;
+            try {
+              const response = await axios.post(`${aiBaseUrl}/conversation-turn`, {
+                text,
+                call_id: sessionCallSid,
+                system_prompt: buildPrompt(data),
+                conversation_state: state
+              }, { timeout: 35000, headers });
+              result = response.data;
+            } catch (error) {
+              logger.error('ConversationRelay Python request failed', {
+                connectionId, correlationId, stage: 'python_http_error',
+                errorType: error?.name || 'Error', status: error?.response?.status || null,
+                code: error?.code || null,
+                detail: String(error?.response?.data?.detail || '').slice(0, 160),
+                timedOut: error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT'
+              });
+              throw error;
+            }
+            if (result?.success !== true || typeof result?.response !== 'string' || !result.response.trim()) {
+              logger.error('ConversationRelay Python response contract invalid', {
+                connectionId, correlationId, stage: 'python_response_validation',
+                success: result?.success === true,
+                responseType: typeof result?.response,
+                responseChars: typeof result?.response === 'string' ? result.response.length : 0,
+                intent: String(result?.intent || '').slice(0, 40)
+              });
+              const error = new Error('Python conversation response did not match the expected schema');
+              error.code = 'INVALID_PYTHON_RESPONSE';
+              throw error;
+            }
+            logger.info('ConversationRelay Python response received', {
+              connectionId, correlationId, stage: 'python_response_received',
+              responseChars: result.response.length,
+              intent: String(result.intent || 'continue').slice(0, 40)
+            });
             return result;
           },
           shouldTransfer: (result) => intentTransfer(result, state, data),

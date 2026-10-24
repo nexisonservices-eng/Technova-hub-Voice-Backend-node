@@ -64,6 +64,11 @@ export const processRelayPrompt = async ({
       onStage('transfer_requested', { intent: result.intent });
       return { status: 'transfer', result };
     }
+    if (String(result.intent || '').toLowerCase() === 'discount_no') {
+      send({ type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'discount-declined' }) });
+      onStage('session_end_requested', { reason: 'discount-declined' });
+      return { status: 'end', result };
+    }
     if (String(result.intent || '').toLowerCase() === 'end_call') {
       send({ type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'customer-ended' }) });
       onStage('session_end_requested', { reason: 'customer-ended' });

@@ -92,6 +92,51 @@ test('human handoff returns control using the ConversationRelay end message', as
   assert.deepEqual(JSON.parse(outgoing[0].handoffData), { status: 'transfer', intent: 'human_transfer' });
 });
 
+test('exact TechnovaHub answer and second Tamil question are sent as spoken Relay tokens', async () => {
+  const { processRelayPrompt } = await importProtocol();
+  const outgoing = [];
+  const answers = [
+    'TechnovaHub நிறுவனம் IT Services, AI Automation, மற்றும் Digital Transformation Solutions வழங்குகிறது. உங்களுக்கு எந்த service பற்றி தெரிந்துகொள்ள வேண்டும்?',
+    'AI Automation மூலம் மீண்டும் மீண்டும் செய்யும் வேலைகளை தானியக்கமாக்கலாம்.'
+  ];
+  const questions = [
+    'Hello, TechnovaHub என்னென்ன services provide பண்றீங்க?',
+    'AI Automation பற்றி சொல்லுங்க'
+  ];
+  for (let index = 0; index < questions.length; index += 1) {
+    const result = await processRelayPrompt({
+      message: { type: 'prompt', voicePrompt: questions[index], lang: 'ta-IN', last: true },
+      callSid: 'CA-example',
+      requestAI: async () => ({ success: true, response: answers[index], intent: 'continue' }),
+      send: (payload) => { outgoing.push(payload); return true; }
+    });
+    assert.equal(result.status, 'spoken');
+  }
+  assert.deepEqual(outgoing.map(({ type, token, last }) => ({ type, token, last })), [
+    { type: 'text', token: answers[0], last: true },
+    { type: 'text', token: answers[1], last: true }
+  ]);
+});
+
+test('discount YES handoff is distinct from discount NO completion', async () => {
+  const { processRelayPrompt } = await importProtocol();
+  const sent = [];
+  const yes = await processRelayPrompt({
+    message: { type: 'prompt', voicePrompt: 'Yes, I want the offer', last: true }, callSid: 'CA-example',
+    requestAI: async () => ({ response: 'Connecting you now.', intent: 'discount_yes' }),
+    shouldTransfer: () => true, send: (payload) => { sent.push(payload); return true; }
+  });
+  const no = await processRelayPrompt({
+    message: { type: 'prompt', voicePrompt: 'No, thank you', last: true }, callSid: 'CA-example',
+    requestAI: async () => ({ response: 'Thank you.', intent: 'discount_no' }),
+    shouldTransfer: () => false, send: (payload) => { sent.push(payload); return true; }
+  });
+  assert.equal(yes.status, 'transfer');
+  assert.deepEqual(JSON.parse(sent[0].handoffData), { status: 'transfer', intent: 'discount_yes' });
+  assert.equal(no.status, 'end');
+  assert.deepEqual(JSON.parse(sent[1].handoffData), { status: 'completed', reason: 'discount-declined' });
+});
+
 test('Python AI endpoint resolution uses the service URL configured for Render', async () => {
   const { resolveConversationAIBaseUrl } = await importAIUrl();
   assert.equal(resolveConversationAIBaseUrl({ NODE_ENV: 'production', PYTHON_TTS_BASE_URL: 'https://python.example.test/' }), 'https://python.example.test');
