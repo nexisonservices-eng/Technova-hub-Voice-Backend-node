@@ -21,6 +21,7 @@ import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
 
 const LOCAL_MOBILE_REGEX = /^\+91[6-9][0-9]{9}$/;
 const E164_REGEX = /^\+[1-9][0-9]{7,14}$/;
+const TAMIL_SCRIPT_REGEX = /[\u0B80-\u0BFF]/;
 
 const normalizeLocalNumber = (value = '') => {
   const digits = String(value || '').replace(/\D/g, '');
@@ -483,8 +484,7 @@ class OutboundLocalController {
       const to = normalizeLocalNumber(toRaw);
       const templateId = String(req.body?.templateId || '').trim();
       const customMessage = String(req.body?.customMessage || '').trim();
-      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
-      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
+      let voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
       let resolvedTemplateName = '';
       let resolvedScript = customMessage;
 
@@ -547,6 +547,14 @@ class OutboundLocalController {
           resolvedScript = String(template.script || '').trim();
         }
       }
+
+      // Match the spoken language to the supplied script, even when the client
+      // omitted a voice or left its English default selected.
+      if (TAMIL_SCRIPT_REGEX.test(resolvedScript) && !voiceId.startsWith('ta-IN-')) {
+        logger.info('Tamil script detected; selecting Tamil outbound voice', { previousVoice: voiceId });
+        voiceId = 'ta-IN-PallaviNeural';
+      }
+      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
 
       if (scheduleType !== 'immediate') {
         const campaign = await outboundCampaignService.createCampaign({
