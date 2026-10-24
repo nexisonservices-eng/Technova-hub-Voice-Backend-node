@@ -582,7 +582,10 @@ class OutboundLocalController {
       }
       logger.info('Outbound TTS requested', { language: voiceLanguage, voice: voiceId });
       let resolvedAudio = { audioUrl: '', audioAssetId: '', storage: 'none' };
-      const quickCallTtsTimeoutMs = Number(process.env.OUTBOUND_QUICKCALL_TTS_TIMEOUT_MS || 12000);
+      // TTS may take longer on a cold Python service; its upstream request
+      // allows up to 60s (and retries can take longer). Avoid failing Tamil
+      // calls after the previous 12s default.
+      const quickCallTtsTimeoutMs = Number(process.env.OUTBOUND_QUICKCALL_TTS_TIMEOUT_MS || 95000);
       try {
         resolvedAudio = await this.runWithTimeout(
           this.resolveScriptAudioAsset({
