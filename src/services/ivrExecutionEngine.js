@@ -339,7 +339,8 @@ class IVRExecutionEngine {
 
     if (attemptCount >= 1) {
       const lastReason = context.lastInputReasonByNode?.[node.id];
-      const retryRefId = lastReason === 'timeout'
+      const timedOut = lastReason === 'timeout';
+      const retryRefId = timedOut
         ? (data.timeoutAudioNodeId || data.timeout_audio_node_id)
         : (data.invalidAudioNodeId || data.invalid_audio_node_id);
       const retryRef = this._resolveAudioReference(nodes, retryRefId);
@@ -351,7 +352,9 @@ class IVRExecutionEngine {
           retryRef.text
         );
       } else {
-        const retryMessage = data.invalidInputMessage || settings.invalidInputMessage || 'Invalid input. Please try again.';
+        const retryMessage = timedOut
+          ? (data.timeoutMessage || data.timeout_message || settings.timeoutMessage || "I didn't receive a selection. Please try again.")
+          : (data.invalidInputMessage || settings.invalidInputMessage || 'Invalid selection. Please try again.');
         response.say({ voice, language }, retryMessage);
       }
     }

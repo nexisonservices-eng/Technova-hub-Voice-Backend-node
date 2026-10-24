@@ -1454,6 +1454,10 @@ class IVRWorkflowEngine extends EventEmitter {
             const inputDestination = String(currentNode?.data?.destination || '').trim();
             const configuredDigit = normalizeDtmfValue(currentNode?.data?.digit);
             const digitMatches = !configuredDigit || normalizedUserInput === configuredDigit;
+            if (configuredDigit && digitMatches && edges.length === 1) {
+                markInputReason('matched');
+                return edges[0].target;
+            }
             if (hasDestinationNode && digitMatches) {
                 markInputReason('matched');
                 return destinationNodeId;
@@ -1474,6 +1478,14 @@ class IVRWorkflowEngine extends EventEmitter {
             }
 
             // Invalid input
+            logger.warn('IVR input did not match a configured route', {
+                callSid: callSid || null,
+                workflowId: String(workflow?._id || workflowId),
+                nodeId: currentNodeId,
+                receivedDigit: normalizedUserInput || null,
+                configuredDigit: configuredDigit || null,
+                outgoingHandles: edges.map((candidate) => candidate.sourceHandle || null)
+            });
             markInputReason('invalid');
             if (attemptCount < maxRetries) return currentNodeId;
             const fallbackEdge = redirectForHandles(['no_match', 'default', 'fallback', 'invalid']);
