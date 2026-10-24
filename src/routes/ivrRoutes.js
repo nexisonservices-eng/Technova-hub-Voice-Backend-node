@@ -711,6 +711,15 @@ router.get('/menus', async (req, res) => {
           invalidInputMessage: menu.config?.invalidInputMessage || 'Invalid selection. Please try again.'
         },
         status: menu.status || (menu.isActive ? 'active' : 'inactive'),
+        // The IVR editor needs the actual graph, not just summary counts.
+        // Keep both top-level arrays and workflowConfig for older clients.
+        nodes,
+        edges: Array.isArray(menu.edges) ? menu.edges : [],
+        workflowConfig: {
+          nodes,
+          edges: Array.isArray(menu.edges) ? menu.edges : [],
+          settings: menu.config || {}
+        },
         tags: menu.tags || [],
         nodeCount: menu.nodeCount,
         edgeCount: menu.edgeCount,
@@ -1059,6 +1068,35 @@ router.put('/menus/:id', [
         error: 'IVR menu not found'
       });
     }
+
+    // Persist workflow graph updates from the editor's REST fallback as well
+    // as its legacy greeting/menu fields.
+    const submittedWorkflowConfig = updates.workflowConfig || {};
+    if (Array.isArray(updates.nodes)) {
+      menu.nodes = updates.nodes;
+    } else if (Array.isArray(submittedWorkflowConfig.nodes)) {
+      menu.nodes = submittedWorkflowConfig.nodes;
+    }
+    if (Array.isArray(updates.edges)) {
+      menu.edges = updates.edges;
+    } else if (Array.isArray(submittedWorkflowConfig.edges)) {
+      menu.edges = submittedWorkflowConfig.edges;
+    }
+
+    const submittedSettings = submittedWorkflowConfig.settings || updates.config || updates.metadata;
+    if (submittedSettings && typeof submittedSettings === 'object') {
+      menu.config = {
+        ...(menu.config?.toObject?.() || menu.config || {}),
+        ...submittedSettings
+      };
+    }
+    if (updates.displayName) {
+      menu.displayName = updates.displayName;
+    }
+    if (updates.status) {
+      menu.status = updates.status;
+    }
+    menu.lastModifiedBy = userId;
 
     // Update fields
     if (updates.name && updates.name !== id) {
