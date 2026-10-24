@@ -468,7 +468,7 @@ class OutboundLocalController {
       const templateId = String(req.body?.templateId || '').trim();
       const customMessage = String(req.body?.customMessage || '').trim();
       const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
-      const language = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('hi-IN-') ? 'hi-IN' : 'en-GB';
+      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
       let resolvedTemplateName = '';
       let resolvedScript = customMessage;
 
@@ -577,8 +577,6 @@ class OutboundLocalController {
         });
       }
 
-      const voiceId = String(req.body?.voiceId || req.body?.voice || 'en-GB-SoniaNeural').trim();
-      const voiceLanguage = voiceId.startsWith('ta-IN-') ? 'ta-IN' : voiceId.startsWith('en-GB-') ? 'en-GB' : '';
       if (!voiceLanguage) {
         return res.status(400).json({ success: false, message: `Unsupported outbound voice: ${voiceId}` });
       }
