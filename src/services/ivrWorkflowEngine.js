@@ -627,7 +627,11 @@ class IVRWorkflowEngine extends EventEmitter {
             if (log) {
                 log.endTime = new Date();
                 log.duration = log.endTime - log.startTime;
-                log.status = errorMessage ? 'failed' : (reason === 'timeout' ? 'timeout' : 'completed');
+                log.status = errorMessage || reason === 'error'
+                    ? 'failed'
+                    : (reason === 'timeout'
+                        ? 'timeout'
+                        : (reason === 'user_hangup' ? 'abandoned' : 'completed'));
                 log.reason = reason;
                 log.nodeExecutionCount = state.nodeExecutionCount;
                 log.loopIterations = state.loopIterations;
