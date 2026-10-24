@@ -18,7 +18,7 @@ const makeCall = (overrides = {}) => ({
 test('authenticated setup binds deterministic FAQ state to the Twilio call SID', async () => {
   const { bindRelaySetupCallSid, createRelaySessionContext, getRelaySessionCallSid } = await importSession();
   const { createOrderedRelayFrameQueue } = await importProtocol();
-  const { createFaqState, processFaqPrompt } = await importFaq();
+  const { FAQ_ENTRIES, createFaqState, processFaqPrompt } = await importFaq();
   const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
   const outgoing = [];
   let faqState = null;
@@ -46,7 +46,7 @@ test('authenticated setup binds deterministic FAQ state to the Twilio call SID',
   assert.deepEqual(setupResult, { valid: true, callSid });
   assert.deepEqual(outgoing, [{
     type: 'text',
-    token: 'Nexion is a business automation solution developed by TechnovaHub. It helps businesses simplify workflows, automate repetitive tasks, and reduce manual work.',
+    token: FAQ_ENTRIES.find(({ id }) => id === 'nexion').answer,
     last: true, interruptible: true
   }]);
 });
@@ -54,7 +54,7 @@ test('authenticated setup binds deterministic FAQ state to the Twilio call SID',
 test('five consecutive prompts in one authenticated call each get an FAQ response', async () => {
   const { bindRelaySetupCallSid, createRelaySessionContext, getRelaySessionCallSid } = await importSession();
   const { createOrderedRelayFrameQueue } = await importProtocol();
-  const { createFaqState, processFaqPrompt } = await importFaq();
+  const { FAQ_ENTRIES, createFaqState, processFaqPrompt } = await importFaq();
   const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
   const questions = [
     'What is TechnovaHub?',
@@ -86,12 +86,8 @@ test('five consecutive prompts in one authenticated call each get an FAQ respons
   assert.equal(faqState.callSid, callSid);
   assert.equal(faqState.turns, 5);
   assert.deepEqual(outgoing.map(({ token }) => token), [
-    'TechnovaHub is a technology company that helps businesses improve their operations through IT services, intelligent automation, and digital transformation.',
-    'TechnovaHub provides IT Services and Consulting, AI Automation, and Digital Transformation Solutions.',
-    'Nexion is a business automation solution developed by TechnovaHub. It helps businesses simplify workflows, automate repetitive tasks, and reduce manual work.',
-    'Nexion helps businesses save time, improve efficiency, connect important tools and processes, and focus on business growth.',
-    'Yes. Nexion is designed to help businesses automate repetitive tasks and simplify everyday workflows.'
-  ]);
+    'technovahub', 'services', 'nexion', 'nexion_benefits', 'repetitive_tasks'
+  ].map((id) => FAQ_ENTRIES.find((entry) => entry.id === id).answer));
 });
 
 test('prompt without authenticated setup cannot enter FAQ conversation', async () => {

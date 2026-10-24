@@ -634,7 +634,7 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
     const faqActions = buildFaqHandoffActions(handoff, node.data || {});
     if (faqActions) {
       for (const action of faqActions) {
-        if (action.type === 'say') response.say(action.text);
+        if (action.type === 'say') response.say({ language: 'ta-IN' }, action.text);
         if (action.type === 'hangup') response.hangup();
         if (action.type === 'dial') {
           logger.info('ConversationRelay dialing configured human agent', { workflowId, nodeId, callSid });

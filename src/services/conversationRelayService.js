@@ -212,7 +212,7 @@ class ConversationRelayService {
         });
         if (result.action === 'answer') {
           const sent = safeSend(socket, {
-            type: 'text', token: result.answer, last: true,
+            type: 'text', token: result.answer, lang: 'ta-IN', last: true,
             interruptible: true, preemptible: false
           });
           logger.info('ConversationRelay FAQ response sent', {
