@@ -125,9 +125,13 @@ export const verifyTwilioRequest = async (req, res, next) => {
       return res.status(403).send('Forbidden: Invalid Twilio signature');
     }
 
-    if (tenant) {
+    // A credentials lookup may return a partial profile. Never promote a
+    // missing/malformed owner to the string "undefined": downstream Workflow
+    // queries cast this value to an ObjectId.
+    const adminId = String(tenant?.userId || '').trim();
+    if (tenant && /^[a-f\d]{24}$/i.test(adminId)) {
       req.tenantContext = {
-        adminId: String(tenant.userId),
+        adminId,
         fromNumber,
         twilioAccountSid: tenant.twilioAccountSid || null,
       };

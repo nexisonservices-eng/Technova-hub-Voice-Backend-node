@@ -32,13 +32,17 @@ class IVRController {
    * Fetch the active IVR workflow
    */
   async getActiveWorkflow(userId = null) {
-    if (!userId) {
+    const ownerId = String(userId || '').trim();
+    // Twilio callbacks can be authenticated with the shared account token
+    // even when the phone number has no tenant profile. Do not pass sentinels
+    // such as "undefined" into Mongoose's ObjectId query casting.
+    if (!/^[a-f\d]{24}$/i.test(ownerId)) {
       return null;
     }
 
     const filter = { status: 'active', isActive: true };
     if (Workflow.schema.path('createdBy')) {
-      filter.createdBy = userId;
+      filter.createdBy = ownerId;
     }
     return await Workflow.findOne(filter);
   }
