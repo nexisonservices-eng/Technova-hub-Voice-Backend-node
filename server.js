@@ -6,6 +6,8 @@ import { initializeSocketIO, shutdownSocketIO } from './src/sockets/unifiedSocke
 import campaignAutomationService from './src/services/campaignAutomationService.js';
 import { connectDB } from './src/config/db.js';
 import logger from './src/utils/logger.js';
+import { WebSocketServer } from 'ws';
+import conversationRelayService, { verifyRelayUpgrade } from './src/services/conversationRelayService.js';
 
 // ===== STARTUP SEQUENCE =====
 logger.info('Starting Technovo Voice Backend...');
@@ -22,6 +24,30 @@ const server = http.createServer((req, res) => {
   }
 
   app(req, res);
+});
+
+// ConversationRelay uses a separate authenticated WebSocket endpoint. Only
+// intercept this path so Socket.IO and any other upgrade handlers stay intact.
+const relayWss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 });
+server.on('upgrade', async (req, socket, head) => {
+  let pathname = '';
+  try { pathname = new URL(req.url, 'http://localhost').pathname; } catch { socket.destroy(); return; }
+  if (pathname !== '/ws/conversation-relay') return;
+  let authorized = false;
+  try { authorized = await verifyRelayUpgrade(req); } catch (error) {
+    logger.warn('ConversationRelay websocket authorization failed', { message: error.message });
+  }
+  if (!authorized) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  relayWss.handleUpgrade(req, socket, head, (websocket) => {
+    relayWss.emit('connection', websocket, req);
+  });
+});
+relayWss.on('connection', (websocket, req) => {
+  void conversationRelayService.handleConnection(websocket, req);
 });
 
 // Initialize Socket.IO.

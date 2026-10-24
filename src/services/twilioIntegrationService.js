@@ -8,6 +8,7 @@ import logger from '../utils/logger.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import Workflow from '../models/Workflow.js';
 import { EventEmitter } from 'events';
+import ivrExecutionEngine from './ivrExecutionEngine.js';
 
 class TwilioIntegrationService extends EventEmitter {
   constructor() {
@@ -200,6 +201,14 @@ class TwilioIntegrationService extends EventEmitter {
         case 'ai_assistant':
           await this.handleAIAssistantNode(response, data, workflow, node.id, execution);
           break;
+
+        case 'ai_voice_agent':
+          return await ivrExecutionEngine.executeNode(
+            node,
+            { callSid: execution?.callSid || '', variables: {} },
+            { nodes: workflow.nodes || [], edges: workflow.edges || [], settings, createdBy: workflow.createdBy, _id: workflow._id },
+            execution?.callSid || ''
+          );
           
         default:
           logger.warn(`Unknown node type: ${node.type}`);
@@ -637,7 +646,10 @@ class TwilioIntegrationService extends EventEmitter {
       // Continue workflow based on result
       const workflow = await Workflow.findById(workflowId);
       if (workflow) {
-        const handle = transferStatus === 'completed' ? 'answered' : 'failed';
+        const sourceNode = (workflow.nodes || []).find((node) => node.id === nodeId);
+        const handle = sourceNode?.type === 'ai_voice_agent'
+          ? (transferStatus === 'completed' ? 'transferred' : 'error')
+          : (transferStatus === 'completed' ? 'answered' : 'failed');
         this.appendNextStep(null, workflow, nodeId, handle);
       }
       
@@ -653,6 +665,8 @@ class TwilioIntegrationService extends EventEmitter {
   mapDialStatusToTransferStatus(dialStatus) {
     const mapping = {
       'answered': 'completed',
+      'completed': 'completed',
+      'in-progress': 'completed',
       'busy': 'rejected',
       'no-answer': 'rejected',
       'failed': 'failed',

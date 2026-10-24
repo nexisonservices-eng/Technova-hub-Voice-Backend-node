@@ -538,7 +538,11 @@ router.post('/voicemail/status', async (req, res) => {
 router.post('/transfer/complete', async (req, res) => {
   try {
     const transferData = req.body;
-    const { DialCallStatus, DialCallDuration, callSid, workflowId, nodeId } = transferData;
+    const DialCallStatus = transferData.DialCallStatus || req.query.DialCallStatus;
+    const DialCallDuration = transferData.DialCallDuration || req.query.DialCallDuration;
+    const callSid = transferData.CallSid || transferData.callSid || req.query.callSid;
+    const workflowId = transferData.workflowId || req.query.workflowId;
+    const nodeId = transferData.nodeId || req.query.nodeId;
     const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
     if (!webhookUserId) {
       logger.warn(`Tenant resolution failed for transfer completion call ${callSid}`);
@@ -548,7 +552,9 @@ router.post('/transfer/complete', async (req, res) => {
     logger.info(`Call transfer completed: ${callSid} -> ${DialCallStatus}`);
     
     // Handle transfer completion
-    await twilioIntegrationService.handleTransferComplete(transferData);
+    await twilioIntegrationService.handleTransferComplete({
+      ...transferData, callSid, workflowId, nodeId, DialCallStatus, DialCallDuration
+    });
     
     // Generate continuation TwiML
     const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -560,7 +566,11 @@ router.post('/transfer/complete', async (req, res) => {
       createdBy: webhookUserId
     });
     if (workflow) {
-      const handle = DialCallStatus === 'answered' ? 'answered' : 'failed';
+      const sourceNode = workflow.nodes.find((node) => node.id === nodeId);
+      const succeeded = ['answered', 'completed', 'in-progress'].includes(String(DialCallStatus || '').toLowerCase());
+      const handle = sourceNode?.type === 'ai_voice_agent'
+        ? (succeeded ? 'transferred' : 'error')
+        : (succeeded ? 'answered' : 'failed');
       const edge = workflow.edges.find(e => 
         e.source === nodeId && e.sourceHandle === handle
       );
@@ -581,6 +591,63 @@ router.post('/transfer/complete', async (req, res) => {
   } catch (error) {
     logger.error('Error handling transfer completion:', error);
     res.sendStatus(500);
+  }
+});
+
+/** ConversationRelay action callback, including handoff and session completion. */
+router.post('/ai-voice-agent/complete', async (req, res) => {
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const response = new VoiceResponse();
+  try {
+    const callSid = req.body.CallSid || req.body.callSid || req.query.callSid;
+    const workflowId = String(req.body.workflowId || req.query.workflowId || '').trim();
+    const nodeId = String(req.body.nodeId || req.query.nodeId || '').trim();
+    const userId = await resolveWebhookUserIdForCall(req, callSid);
+    if (!userId || !workflowId || !nodeId) return res.sendStatus(403);
+    const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
+    const node = workflow?.nodes?.find((entry) => entry.id === nodeId && entry.type === 'ai_voice_agent');
+    if (!node) return res.sendStatus(404);
+    let handoff = {};
+    const rawHandoff = req.body.HandoffData || req.body.handoffData;
+    if (typeof rawHandoff === 'string') {
+      try { handoff = JSON.parse(rawHandoff); } catch { handoff = {}; }
+    } else if (rawHandoff && typeof rawHandoff === 'object') handoff = rawHandoff;
+
+    if (handoff.status === 'transfer') {
+      const config = node.data || {};
+      const permitted = handoff.intent === 'human_transfer'
+        ? config.transferOnCustomerRequest !== false
+        : handoff.intent === 'discount_yes' && config.transferOnDiscountInterest !== false;
+      const destination = String(config.humanAgentPhoneNumber || '').trim();
+      if (!permitted || !/^\+[1-9]\d{7,14}$/.test(destination)) {
+        logger.warn('ConversationRelay transfer rejected by node configuration', { workflowId, nodeId, callSid });
+        response.say('A representative is unavailable right now. Goodbye.');
+        response.hangup();
+      } else {
+        logger.info('ConversationRelay dialing configured human agent', { workflowId, nodeId, callSid });
+        const base = String(process.env.PUBLIC_WEBHOOK_BASE_URL || process.env.BASE_URL || '').replace(/\/$/, '');
+        const callback = new URLSearchParams({ callSid: String(callSid), workflowId, nodeId, userId });
+        response.dial({
+          timeout: 30,
+          action: `${base}/webhook/twilio/transfer/complete?${callback}`,
+          method: 'POST'
+        }, destination);
+      }
+    } else {
+      const edgeHandle = handoff.status === 'error' ? 'error' : 'completed';
+      const edge = workflow.edges.find((entry) => entry.source === nodeId && entry.sourceHandle === edgeHandle);
+      if (edge) response.redirect(`/webhook/twilio/workflow/${workflowId}/node/${edge.target}`);
+      else { response.say('Thank you for calling. Goodbye.'); response.hangup(); }
+    }
+    logger.info('ConversationRelay session ended', {
+      workflowId, nodeId, callSid, status: handoff.status || 'completed', reason: handoff.reason || null
+    });
+    return res.type('text/xml').send(response.toString());
+  } catch (error) {
+    logger.error('ConversationRelay completion callback failed', { message: error.message });
+    response.say('The voice assistant is unavailable. Goodbye.');
+    response.hangup();
+    return res.type('text/xml').send(response.toString());
   }
 });
 

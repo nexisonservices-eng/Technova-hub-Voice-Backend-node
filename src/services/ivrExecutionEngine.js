@@ -5,6 +5,7 @@ import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import emailService from './emailService.js';
 import appointmentBookingService from './appointmentBookingService.js';
 import whatsappNotificationBridge from './whatsappNotificationBridge.js';
+import { RELAY_VOICES } from '../config/conversationRelay.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -239,6 +240,8 @@ class IVRExecutionEngine {
           return await this._handleSms(response, node, context, workflowConfig, callSid);
         case 'ai_assistant':
           return await this._handleAiAssistant(response, node, context, workflowConfig);
+        case 'ai_voice_agent':
+          return await this._handleAIVoiceAgent(response, node, workflowConfig, callSid);
 
         case 'audio':
           return await this._handleAudio(response, node, workflowConfig, context);
@@ -414,6 +417,51 @@ class IVRExecutionEngine {
       timeout: data.timeout || 30
     }, destination);
 
+    return response.toString();
+  }
+
+  async _handleAIVoiceAgent(response, node, config, callSid) {
+    const data = node.data || {};
+    if (!RELAY_VOICES[data.voiceSelection] || RELAY_VOICES[data.voiceSelection] !== data.language) {
+      logger.error('AI Voice Agent has an unsupported voice/language combination', {
+        workflowId: String(config._id || ''), nodeId: node.id, language: data.language
+      });
+      response.say('The voice assistant is currently unavailable. Please try again later.');
+      response.hangup();
+      return response.toString();
+    }
+    const publicBase = String(process.env.PUBLIC_WEBHOOK_BASE_URL || process.env.BASE_URL || '').replace(/\/$/, '');
+    if (!/^https:\/\//i.test(publicBase)) {
+      logger.error('AI Voice Agent requires a public HTTPS webhook base URL', { workflowId: String(config._id || ''), nodeId: node.id });
+      response.say('The voice assistant is currently unavailable. Please try again later.');
+      response.hangup();
+      return response.toString();
+    }
+    if (!callSid || !config.createdBy) {
+      logger.error('AI Voice Agent call context is incomplete', { workflowId: String(config._id || ''), nodeId: node.id });
+      response.say('The voice assistant is currently unavailable. Please try again later.');
+      response.hangup();
+      return response.toString();
+    }
+    const query = new URLSearchParams({
+      userId: String(config.createdBy), workflowId: String(config._id), nodeId: String(node.id)
+    });
+    const wsUrl = publicBase.replace(/^https:/i, 'wss:') + `/ws/conversation-relay?${query}`;
+    const actionUrl = `${publicBase}/webhook/twilio/ai-voice-agent/complete?${query}`;
+    logger.info('Starting Twilio ConversationRelay', {
+      workflowId: String(config._id), nodeId: node.id, language: data.language, voice: data.voiceSelection
+    });
+    response.connect({ action: actionUrl, method: 'POST' }).conversationRelay({
+      url: wsUrl,
+      welcomeGreeting: String(data.welcomeMessage || '').trim(),
+      language: data.language,
+      voice: data.voiceSelection,
+      ttsProvider: 'ElevenLabs',
+      transcriptionProvider: 'Google',
+      speechTimeout: Number(data.silenceTimeout || 2) * 1000,
+      interruptible: 'any',
+      reportInputDuringAgentSpeech: 'speech'
+    });
     return response.toString();
   }
 
