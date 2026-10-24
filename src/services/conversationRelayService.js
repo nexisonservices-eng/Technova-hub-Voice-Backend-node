@@ -8,7 +8,7 @@ import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
 import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
-import { createScriptState, handleScriptReply, SCRIPT_MESSAGES, SCRIPT_RESPONSES, startScript } from './conversationRelayScript.js';
+import { createFaqState, processFaqPrompt } from './conversationRelayFaq.js';
 import {
   bindRelaySetupCallSid,
   createRelaySessionContext,
@@ -85,7 +85,7 @@ class ConversationRelayService {
     let finished = false;
     let timer = null;
     let setupStage = 'tenant_authorization';
-    const scriptState = createScriptState();
+    let faqState = null;
 
     socket.on('close', (code, reason) => {
       clearTimeout(timer);
@@ -111,6 +111,15 @@ class ConversationRelayService {
         });
 
         if (message.type === 'setup') {
+          if (relaySession?.setupReceived) {
+            logger.warn('ConversationRelay duplicate setup event rejected', {
+              connectionId, correlationId, stage: 'setup_validation', reason: 'setup_already_bound'
+            });
+            finished = true;
+            safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'duplicate-setup' }) });
+            socket.close(1008, 'Duplicate ConversationRelay setup');
+            return;
+          }
           const candidateCallSid = String(message.callSid || message.CallSid || '').trim();
           let execution = null;
           let call = null;
@@ -148,23 +157,16 @@ class ConversationRelayService {
             connectionId, correlationId, provider, language: data.language,
             sessionIdPresent: Boolean(message.sessionId), stage: 'setup'
           });
-          const script = startScript(scriptState);
-          const sent = script.messages.length === SCRIPT_MESSAGES.length
-            && script.messages.every((payload) => safeSend(socket, payload));
-          logger.info('ConversationRelay scripted introduction sent', {
-            event: 'script_started', connectionId, correlationId,
-            sectionCount: script.messages.length, sent,
-            finalTokenLast: script.messages.at(-1)?.last === true
+          faqState = createFaqState(binding.callSid);
+          logger.info('ConversationRelay FAQ session ready', {
+            event: 'faq_session_ready', connectionId, correlationId,
+            welcomeConfigured: true, stage: faqState.stage
           });
-          if (!sent) {
-            finished = true;
-            safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'script-send-failed' }) });
-          }
           return;
         }
 
         if (message.type === 'interrupt') {
-          logger.info('ConversationRelay interruption received during scripted playback', { connectionId, correlationId, stage: 'interrupt' });
+          logger.info('ConversationRelay caller interrupted agent speech', { connectionId, correlationId, stage: 'interrupt' });
           return;
         }
         if (message.type === 'error') {
@@ -199,39 +201,42 @@ class ConversationRelayService {
           });
           return;
         }
-        if (message.lang && message.lang !== data.language) {
-          logger.warn('ConversationRelay prompt language differs from configured language', {
-            connectionId, correlationId, stage: 'language_mismatch', promptLanguage: String(message.lang).slice(0, 20),
-            configuredLanguage: data.language
-          });
-        }
         const text = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim().slice(0, 3000) : '';
         const transferAvailable = data.transferOnCustomerRequest !== false
           && /^\+[1-9]\d{7,14}$/.test(String(data.humanAgentPhoneNumber || '').trim());
-        const result = handleScriptReply(scriptState, text, { transferAvailable });
-        logger.info('ConversationRelay scripted reply classified', {
-          event: 'script_reply', connectionId, correlationId, turn: currentTurn,
-          classification: result.classification || 'ignored', action: result.status,
+        const result = processFaqPrompt(faqState, text, { transferAvailable });
+        logger.info('ConversationRelay FAQ prompt matched', {
+          event: 'faq_matched', connectionId, correlationId, turn: currentTurn,
+          faqId: result.faqId || null, action: result.action,
           chars: text.length
         });
-        if (result.status === 'clarify') {
+        if (result.action === 'answer') {
           const sent = safeSend(socket, {
-            type: 'text', token: SCRIPT_RESPONSES.unclear, last: true,
+            type: 'text', token: result.answer, last: true,
             interruptible: true, preemptible: false
           });
-          logger.info('ConversationRelay script clarification sent', {
-            event: 'script_clarification', connectionId, correlationId, turn: currentTurn, sent
+          logger.info('ConversationRelay FAQ response sent', {
+            event: 'response_sent', connectionId, correlationId, turn: currentTurn,
+            faqId: result.faqId, chars: result.answer.length, sent
           });
-        } else if (result.status === 'transfer' || result.status === 'end') {
+        } else if (result.action === 'transfer') {
+          logger.info('ConversationRelay FAQ transfer requested', {
+            event: 'transfer_requested', connectionId, correlationId,
+            turn: currentTurn, faqId: result.faqId
+          });
           finished = true;
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify(result.handoff) });
+          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_transfer' }) });
+        } else if (result.action === 'end') {
+          finished = true;
+          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });
         }
       } catch (error) {
         logger.error('ConversationRelay message handler failed', {
           connectionId, correlationId, stage: 'message_handler', errorType: error?.name || 'Error'
         });
         if (getRelaySessionCallSid(relaySession) && !finished) {
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'script_unavailable' }) });
+          finished = true;
+          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });
         }
       }
     };
@@ -284,8 +289,8 @@ class ConversationRelayService {
     timer = setTimeout(() => {
       if (finished) return;
       finished = true;
-      logger.info('ConversationRelay maximum duration reached', {
-        event: 'session_end', connectionId, correlationId, stage: 'duration_limit',
+      logger.info('ConversationRelay FAQ call reached its maximum duration', {
+        event: 'call_ended', connectionId, correlationId, stage: 'duration_limit',
         reason: 'duration-limit', durationSeconds: Number(data.maxDuration || 300)
       });
       safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'duration-limit' }) });

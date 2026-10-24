@@ -6,6 +6,7 @@ import emailService from './emailService.js';
 import appointmentBookingService from './appointmentBookingService.js';
 import whatsappNotificationBridge from './whatsappNotificationBridge.js';
 import { RELAY_VOICES, buildConversationRelayTwiML, buildUnsupportedProviderTwiML, resolveCallProvider } from '../config/conversationRelay.js';
+import { FAQ_WELCOME } from './conversationRelayFaq.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -461,14 +462,13 @@ class IVRExecutionEngine {
     logger.info('Starting Twilio ConversationRelay', {
       callSid: String(callSid), workflowId: String(config._id), nodeId: node.id,
       language: data.language, voice: data.voiceSelection,
-      relayWelcomeConfigured: false, stage: 'relay_twiml_generated'
+      relayWelcomeConfigured: true, stage: 'relay_twiml_generated'
     });
     return buildConversationRelayTwiML({
       url: wsUrl,
       action: actionUrl,
-      // The authenticated relay setup event starts the deterministic script.
-      // Avoid Twilio's separate welcome greeting so the script is spoken once.
-      welcomeGreeting: '',
+      welcomeGreeting: FAQ_WELCOME,
+      welcomeGreetingInterruptible: 'none',
       language: data.language,
       voice: data.voiceSelection,
       ttsProvider: 'ElevenLabs',
@@ -476,8 +476,7 @@ class IVRExecutionEngine {
       transcriptionLanguage: 'multi',
       reportInputDuringAgentSpeech: 'none',
       speechTimeout,
-      interruptible: 'any',
-      reportInputDuringAgentSpeech: 'speech'
+      interruptible: 'any'
     });
   }
 

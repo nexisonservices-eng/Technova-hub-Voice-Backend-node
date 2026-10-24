@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const importSession = () => import('../src/services/conversationRelaySession.js');
 const importProtocol = () => import('../src/services/conversationRelayProtocol.js');
+const importFaq = () => import('../src/services/conversationRelayFaq.js');
 
 const callSid = 'CA0123456789abcdef0123456789abcdef';
 const otherCallSid = 'CAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -14,108 +15,89 @@ const makeCall = (overrides = {}) => ({
   callSid, user: owner, provider: 'twilio', providerData: { workflowId }, ...overrides
 });
 
-test('setup then Tamil prompt reaches mocked Python and produces a spoken Relay text token', async () => {
+test('authenticated setup binds deterministic FAQ state to the Twilio call SID', async () => {
   const { bindRelaySetupCallSid, createRelaySessionContext, getRelaySessionCallSid } = await importSession();
-  const { createOrderedRelayFrameQueue, processRelayPrompt } = await importProtocol();
+  const { createOrderedRelayFrameQueue } = await importProtocol();
+  const { createFaqState, processFaqPrompt } = await importFaq();
   const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
   const outgoing = [];
-  const pythonRequests = [];
-  const setupResult = [];
+  let faqState = null;
+  let setupResult;
 
   const queue = createOrderedRelayFrameQueue(async (raw) => {
     const message = JSON.parse(raw.toString());
     if (message.type === 'setup') {
-      setupResult.push(bindRelaySetupCallSid(session, message, {
-        execution: makeExecution(), call: makeCall()
-      }));
+      setupResult = bindRelaySetupCallSid(session, message, { execution: makeExecution(), call: makeCall() });
+      if (setupResult.valid) faqState = createFaqState(setupResult.callSid);
       return;
     }
-    await processRelayPrompt({
-      message,
-      callSid: getRelaySessionCallSid(session),
-      requestAI: async (text) => {
-        pythonRequests.push({ text, call_id: getRelaySessionCallSid(session) });
-        return { success: true, response: 'வணக்கம்! எப்படி உதவலாம்?', intent: 'continue' };
-      },
-      send: (payload) => { outgoing.push(payload); return true; }
-    });
+    assert.equal(getRelaySessionCallSid(session), callSid);
+    assert.equal(faqState.callSid, callSid);
+    const result = processFaqPrompt(faqState, message.voicePrompt, { transferAvailable: true });
+    outgoing.push({ type: 'text', token: result.answer, last: true, interruptible: true });
   });
 
-  // Twilio can send setup before authorization finishes and the listener's queue is activated.
   queue.enqueue(Buffer.from(JSON.stringify({ type: 'setup', callSid, sessionId: 'VX-test' })));
   queue.enqueue(Buffer.from(JSON.stringify({
-    type: 'prompt', voicePrompt: 'வணக்கம்', lang: 'ta-IN', last: true,
-    callSid: otherCallSid // A prompt field cannot override the setup-bound call identity.
+    type: 'prompt', voicePrompt: 'Nexion enna?', lang: 'ta-IN', last: true, callSid: otherCallSid
   })));
   await queue.activate();
 
-  assert.deepEqual(setupResult, [{ valid: true, callSid }]);
-  assert.deepEqual(pythonRequests, [{ text: 'வணக்கம்', call_id: callSid }]);
-  assert.deepEqual(outgoing, [{ type: 'text', token: 'வணக்கம்! எப்படி உதவலாம்?', last: true, interruptible: true }]);
+  assert.deepEqual(setupResult, { valid: true, callSid });
+  assert.deepEqual(outgoing, [{
+    type: 'text',
+    token: 'Nexion is a business automation solution developed by TechnovaHub. It helps businesses simplify workflows, automate repetitive tasks, and reduce manual work.',
+    last: true, interruptible: true
+  }]);
 });
 
-test('three consecutive prompts in one authenticated call each reach Python and can transfer on the third turn', async () => {
+test('five consecutive prompts in one authenticated call each get an FAQ response', async () => {
   const { bindRelaySetupCallSid, createRelaySessionContext, getRelaySessionCallSid } = await importSession();
-  const { createOrderedRelayFrameQueue, processRelayPrompt } = await importProtocol();
+  const { createOrderedRelayFrameQueue } = await importProtocol();
+  const { createFaqState, processFaqPrompt } = await importFaq();
   const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
   const questions = [
+    'What is TechnovaHub?',
     'What services does TechnovaHub provide?',
     'What is Nexion?',
-    'Do you have any discounts?'
+    'How does Nexion help businesses?',
+    'Can Nexion automate repetitive tasks?'
   ];
-  const answers = ['TechnovaHub provides technology services.', 'Nexion automates business workflows.', 'I can connect you with a representative.'];
-  const results = [
-    { success: true, response: answers[0], intent: 'continue' },
-    { success: true, response: answers[1], intent: 'continue' },
-    { success: true, response: answers[2], intent: 'discount_yes' }
-  ];
-  const pythonRequests = [];
   const outgoing = [];
-  let turnIndex = 0;
+  let faqState = null;
   const queue = createOrderedRelayFrameQueue(async (raw) => {
     const message = JSON.parse(raw.toString());
     if (message.type === 'setup') {
-      bindRelaySetupCallSid(session, message, { execution: makeExecution(), call: makeCall() });
+      const binding = bindRelaySetupCallSid(session, message, { execution: makeExecution(), call: makeCall() });
+      if (binding.valid) faqState = createFaqState(binding.callSid);
       return;
     }
-    const result = results[turnIndex++];
-    await processRelayPrompt({
-      message, callSid: getRelaySessionCallSid(session),
-      requestAI: async (text) => { pythonRequests.push(text); return result; },
-      shouldTransfer: (aiResult) => aiResult.intent === 'discount_yes',
-      send: (payload) => { outgoing.push(payload); return true; }
-    });
+    assert.equal(getRelaySessionCallSid(session), callSid);
+    const result = processFaqPrompt(faqState, message.voicePrompt, { transferAvailable: true });
+    outgoing.push({ type: 'text', token: result.answer, last: true, interruptible: true });
   });
+
   queue.enqueue(Buffer.from(JSON.stringify({ type: 'setup', callSid })));
   for (const voicePrompt of questions) {
     queue.enqueue(Buffer.from(JSON.stringify({ type: 'prompt', voicePrompt, lang: 'en-IN', last: true })));
   }
   await queue.activate();
 
-  assert.deepEqual(pythonRequests, questions);
-  assert.deepEqual(outgoing.slice(0, 2), answers.slice(0, 2).map((token) => ({
-    type: 'text', token, last: true, interruptible: true
-  })));
-  assert.equal(outgoing[2].type, 'end');
-  assert.deepEqual(JSON.parse(outgoing[2].handoffData), { status: 'transfer', intent: 'discount_yes' });
+  assert.equal(faqState.callSid, callSid);
+  assert.equal(faqState.turns, 5);
+  assert.deepEqual(outgoing.map(({ token }) => token), [
+    'TechnovaHub is a technology company that helps businesses improve their operations through IT services, intelligent automation, and digital transformation.',
+    'TechnovaHub provides IT Services and Consulting, AI Automation, and Digital Transformation Solutions.',
+    'Nexion is a business automation solution developed by TechnovaHub. It helps businesses simplify workflows, automate repetitive tasks, and reduce manual work.',
+    'Nexion helps businesses save time, improve efficiency, connect important tools and processes, and focus on business growth.',
+    'Yes. Nexion is designed to help businesses automate repetitive tasks and simplify everyday workflows.'
+  ]);
 });
 
-test('prompt without setup is rejected and never calls Python', async () => {
+test('prompt without authenticated setup cannot enter FAQ conversation', async () => {
   const { createRelaySessionContext, getRelaySessionCallSid } = await importSession();
-  const { processRelayPrompt } = await importProtocol();
   const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
-  let aiCalls = 0;
-  const stages = [];
-  const result = await processRelayPrompt({
-    message: { type: 'prompt', voicePrompt: 'hello', last: true, callSid },
-    callSid: getRelaySessionCallSid(session),
-    requestAI: async () => { aiCalls += 1; return { response: 'No' }; },
-    send: () => true,
-    onStage: (stage, fields) => stages.push([stage, fields])
-  });
-  assert.equal(result.status, 'invalid');
-  assert.equal(aiCalls, 0);
-  assert.equal(stages[0][1].reason, 'missing_setup');
+  assert.equal(getRelaySessionCallSid(session), '');
 });
 
 test('invalid session and wrong-tenant setup identities are rejected', async () => {
@@ -136,37 +118,20 @@ test('invalid session and wrong-tenant setup identities are rejected', async () 
   }).reason, 'wrong_workflow');
 });
 
-test('wrong call provider and malformed setup/prompt events fail closed with safe reasons', async () => {
+test('wrong call provider and malformed setup identities fail closed', async () => {
   const { bindRelaySetupCallSid, createRelaySessionContext } = await importSession();
-  const { processRelayPrompt } = await importProtocol();
   const session = createRelaySessionContext({ userId: owner, workflowId, nodeId });
   assert.equal(bindRelaySetupCallSid(session, { type: 'setup', callSid: 'not-a-call-sid' }, { execution: makeExecution() }).reason, 'malformed_call_sid');
   assert.equal(bindRelaySetupCallSid(session, { type: 'setup', callSid }, {
     execution: makeExecution(), call: makeCall({ provider: 'exotel' })
   }).reason, 'wrong_provider');
-
-  const stages = [];
-  const malformed = await processRelayPrompt({
-    message: { type: 'prompt', voicePrompt: { unexpected: true }, last: true },
-    callSid,
-    requestAI: async () => assert.fail('Malformed prompt must not reach Python'),
-    send: () => true,
-    onStage: (stage, fields) => stages.push([stage, fields])
-  });
-  assert.equal(malformed.status, 'invalid');
-  assert.equal(stages[0][1].reason, 'missing_text');
-  assert.equal(JSON.stringify(stages).includes('unexpected'), false);
 });
 
 test('callback call-owner association requires the expected tenant and workflow', async () => {
   const { resolveCallOwnerFromRecords } = await importSession();
   const result = resolveCallOwnerFromRecords({
-    callSid,
-    tenantUserId: owner,
-    queryUserId: '64b000000000000000000009',
-    workflowId,
-    call: makeCall(),
-    execution: makeExecution()
+    callSid, tenantUserId: owner, queryUserId: '64b000000000000000000009',
+    workflowId, call: makeCall(), execution: makeExecution()
   });
   assert.deepEqual(result, { valid: false, reason: 'wrong_tenant' });
   const wrongWorkflow = resolveCallOwnerFromRecords({

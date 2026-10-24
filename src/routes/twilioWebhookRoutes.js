@@ -18,7 +18,7 @@ import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
 import { resolveCallOwnerFromRecords } from '../services/conversationRelaySession.js';
-import { buildScriptHandoffActions } from '../services/conversationRelayScript.js';
+import { buildFaqHandoffActions } from '../services/conversationRelayFaq.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { emitOutboundCallUpdate, emitQueueUpdate } from '../sockets/unifiedSocket.js';
 
@@ -631,9 +631,9 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       try { handoff = JSON.parse(rawHandoff); } catch { handoff = {}; }
     } else if (rawHandoff && typeof rawHandoff === 'object') handoff = rawHandoff;
 
-    const scriptActions = buildScriptHandoffActions(handoff, node.data || {});
-    if (scriptActions) {
-      for (const action of scriptActions) {
+    const faqActions = buildFaqHandoffActions(handoff, node.data || {});
+    if (faqActions) {
+      for (const action of faqActions) {
         if (action.type === 'say') response.say(action.text);
         if (action.type === 'hangup') response.hangup();
         if (action.type === 'dial') {
@@ -646,6 +646,14 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
             method: 'POST'
           }, action.destination);
         }
+      }
+      const spokenAction = faqActions.find((action) => action.type === 'say');
+      if (spokenAction) {
+        logger.info('ConversationRelay FAQ handoff response prepared', {
+          event: 'response_sent', workflowId, nodeId, callSid,
+          faqId: handoff.status === 'faq_goodbye' ? 'goodbye' : 'human_representative',
+          chars: spokenAction.text.length
+        });
       }
     } else if (handoff.status === 'transfer') {
       const config = node.data || {};
@@ -677,6 +685,11 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       event: 'session_end', workflowId, nodeId, callSid,
       status: handoff.status || 'completed', reason: handoff.reason || null
     });
+    if (handoff.status === 'faq_goodbye') {
+      logger.info('ConversationRelay caller ended the FAQ call', {
+        event: 'call_ended', workflowId, nodeId, callSid, reason: 'caller-goodbye'
+      });
+    }
     return res.type('text/xml').send(response.toString());
   } catch (error) {
     logger.error('ConversationRelay completion callback failed', { message: error.message });

@@ -20,14 +20,15 @@ export const buildUnsupportedProviderTwiML = () =>
   '<?xml version="1.0" encoding="UTF-8"?><Response><Say>The voice assistant is unavailable for this call provider. Please try again later.</Say><Hangup/></Response>';
 
 export const buildConversationRelayTwiML = ({
-  url, action, welcomeGreeting = '', language, voice,
+  url, action, welcomeGreeting = '', welcomeGreetingInterruptible,
+  language, voice,
   ttsProvider = 'ElevenLabs', transcriptionProvider = 'Google', transcriptionLanguage,
   reportInputDuringAgentSpeech = 'speech', speechTimeout = 2000
 }) => {
   if (!/^wss:\/\//i.test(String(url || ''))) throw new Error('ConversationRelay requires a secure wss URL');
   if (!/^https:\/\//i.test(String(action || ''))) throw new Error('ConversationRelay requires a public HTTPS action URL');
   const attributes = {
-    url, welcomeGreeting, language, voice, ttsProvider, transcriptionProvider,
+    url, welcomeGreeting, welcomeGreetingInterruptible, language, voice, ttsProvider, transcriptionProvider,
     transcriptionLanguage,
     speechTimeout: String(speechTimeout), interruptible: 'any',
     reportInputDuringAgentSpeech
