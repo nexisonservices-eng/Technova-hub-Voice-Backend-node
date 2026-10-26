@@ -14,7 +14,7 @@ test('welcome is a one-time ConversationRelay greeting and FAQ answers can progr
     ['Can Nexion automate repetitive tasks?', 'repetitive_tasks']
   ];
 
-  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
+  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு வெல்கம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
   assert.equal(state.callSid, 'CA0123456789abcdef0123456789abcdef');
   assert.equal(state.stage, 'awaiting_question');
   for (const [question, faqId] of turns) {
@@ -96,7 +96,7 @@ test('live ConversationRelay handler uses WebSocket prompt transcriptions with t
     assert.deepEqual(outgoing.map(({ type, token }) => ({ type, token })), [{ type: 'text', token: servicesAnswer }]);
   }
 
-  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
+  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு வெல்கம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
   const outgoing = [];
   const state = createFaqState('CA-sequence');
   const send = (message) => { outgoing.push(message); return true; };
@@ -125,7 +125,7 @@ test('live ConversationRelay handler uses WebSocket prompt transcriptions with t
 
 test('services then AI Automation offer then YES confirms and transfers; NO continues listening', async () => {
   const { FAQ_WELCOME, createFaqState, processFaqPrompt, buildFaqHandoffActions } = await importFaq();
-  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
+  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு வெல்கம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
   const servicesText = 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம்.';
   const offerText = 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ்க்கு சில ஸ்பெஷல் ஆஃபர்ஸ் இருக்கு. அதைப் பத்தி இன்னும் டீடெயிலா தெரிஞ்சிக்க உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?';
   const confirmText = 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.';

@@ -39,12 +39,12 @@ export const buildConversationRelayTwiML = ({
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Connect action="${escapeXmlAttribute(action)}" method="POST"><ConversationRelay ${relayAttributes}/></Connect></Response>`;
 };
 
-export const validateAgentConfig = (data = {}) => {
+export const validateAgentConfig = (data = {}, handoffDestination = '') => {
   if (!RELAY_VOICES[data.voiceSelection] || RELAY_VOICES[data.voiceSelection] !== data.language) {
     throw new Error('AI Voice Agent voice does not match a supported ConversationRelay language');
   }
   const transferEnabled = data.transferOnCustomerRequest !== false || data.transferOnDiscountInterest !== false;
-  if (transferEnabled && !/^\+[1-9]\d{7,14}$/.test(String(data.humanAgentPhoneNumber || '').trim())) {
+  if (transferEnabled && !/^\+[1-9]\d{7,14}$/.test(String(handoffDestination || data.humanAgentPhoneNumber || '').trim())) {
     throw new Error('A valid human agent number is required when transfer is enabled');
   }
   return true;

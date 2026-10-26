@@ -9,12 +9,12 @@ const teamB = '+14155550222';
 
 const makeWorkflow = (destination = teamB) => ({
   nodes: [
-    { id: 'voice-agent', type: 'ai_voice_agent', data: { humanAgentPhoneNumber: customerA } },
+    { id: 'voice-agent', type: 'ai_voice_agent', data: { humanAgentPhoneNumber: '' } },
     { id: 'team-handoff', type: 'handoff', data: { destination } },
     { id: 'after-handoff', type: 'end', data: {} }
   ],
   edges: [
-    { source: 'voice-agent', sourceHandle: 'transferred', target: 'team-handoff' },
+    { source: 'voice-agent', sourceHandle: 'completed', target: 'team-handoff' },
     { source: 'team-handoff', sourceHandle: 'connected', target: 'after-handoff' }
   ]
 });
@@ -58,10 +58,10 @@ test('missing or invalid connected Hand Off destination fails closed without dia
   }
 });
 
-test('a missing transferred edge never falls back to the AI node humanAgentPhoneNumber', async () => {
+test('a missing Hand Off edge never falls back to the AI node phone number', async () => {
   const { resolveConnectedHandoffDestination } = await importTransfer();
   const workflow = makeWorkflow();
   workflow.edges = [];
   const result = resolveConnectedHandoffDestination(workflow, 'voice-agent');
-  assert.deepEqual(result, { destination: '', handoffNodeId: '', reason: 'transferred_edge_missing' });
+  assert.deepEqual(result, { destination: '', handoffNodeId: '', reason: 'transfer_or_completed_edge_missing' });
 });

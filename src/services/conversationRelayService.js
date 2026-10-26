@@ -15,6 +15,7 @@ import {
   processLiveConversationRelayFaqTurn,
   redactFaqDiagnosticText
 } from './conversationRelayFaq.js';
+import { resolveConnectedHandoffDestination } from './conversationRelayTransfer.js';
 import {
   bindRelaySetupCallSid,
   createRelaySessionContext,
@@ -86,6 +87,7 @@ class ConversationRelayService {
     let correlationId = connectionId;
     const connectionStartedAt = Date.now();
     let data = null;
+    let workflowConfig = null;
     let relaySession = null;
     let turnNumber = 0;
     let finished = false;
@@ -208,8 +210,9 @@ class ConversationRelayService {
           return;
         }
         const text = promptText;
+        const transferDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
         const transferAvailable = data.transferOnCustomerRequest !== false
-          && /^\+[1-9]\d{7,14}$/.test(String(data.humanAgentPhoneNumber || '').trim());
+          && /^\+[1-9]\d{7,14}$/.test(String(transferDestination.destination || '').trim());
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
           transferAvailable,
           send: (payload) => safeSend(socket, payload)
@@ -219,6 +222,8 @@ class ConversationRelayService {
           event: 'faq_matched', connectionId, correlationId, turn: currentTurn,
           faqId: result.faqId || null, matchedIntent, action: result.action,
           responseStatus: result.responseStatus,
+          transferAvailable,
+          transferDestinationReason: transferAvailable ? null : transferDestination.reason,
           chars: text.length,
           receivedTranscription: redactFaqDiagnosticText(text),
           normalizedTranscription: redactFaqDiagnosticText(normalizeFaqQuestion(text)),
@@ -279,12 +284,13 @@ class ConversationRelayService {
         connectionId, correlationId
       });
       setupStage = 'tenant_authorization';
-      const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
-      const node = workflow?.nodes?.find((entry) => entry.id === nodeId && entry.type === 'ai_voice_agent');
+      workflowConfig = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
+      const node = workflowConfig?.nodes?.find((entry) => entry.id === nodeId && entry.type === 'ai_voice_agent');
       if (!node) throw new Error('AI Voice Agent workflow node was not found for this tenant');
       data = node.data || {};
       setupStage = 'agent_configuration';
-      validateAgentConfig(data);
+      const handoffDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
+      validateAgentConfig(data, handoffDestination.destination);
       relaySession = createRelaySessionContext({ userId, workflowId, nodeId });
       logger.info('ConversationRelay tenant workflow authorized', {
         connectionId, correlationId, language: data.language, voice: data.voiceSelection

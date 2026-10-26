@@ -1,4 +1,4 @@
-export const FAQ_WELCOME = 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?';
+export const FAQ_WELCOME = 'வணக்கம்! TechnovaHub-க்கு வெல்கம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?';
 
 const TAMIL_NEXION_NAMES = [
   '\u0ba8\u0bc6\u0b95\u0bcd\u0b9a\u0bbf\u0baf\u0ba9\u0bcd', // நெக்சியன்
