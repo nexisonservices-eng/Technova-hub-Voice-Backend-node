@@ -56,7 +56,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       welcomeGreeting: FAQ_WELCOME, language: 'ta-IN', voice: 'ZhJ5LanYnCmLKQUXvsV7'
     }).includes(`welcomeGreeting="${FAQ_WELCOME}"`));
 
-    async function session(question, { blankFinal = false, interrupt = false } = {}) {
+    async function session(question, { blankFinal = false, interrupt = false, speechAfterSetup = false } = {}) {
       logs.length = 0;
       const workflowGate = deferred();
       const setupGate = deferred();
@@ -89,8 +89,10 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       frame({ type: 'setup', callSid: CALL, sessionId: 'test-session' });
       if (interrupt) frame({ type: 'interrupt', utteranceUntilInterrupt: 'Welcome', durationUntilInterruptMs: 100 });
       if (blankFinal) frame({ type: 'prompt', voicePrompt: '', last: true });
-      frame({ type: 'prompt', voicePrompt: question, lang: 'ta-IN', last: false });
-      frame({ type: 'prompt', voicePrompt: question, lang: 'ta-IN', last: true });
+      if (!speechAfterSetup) {
+        frame({ type: 'prompt', voicePrompt: question, lang: 'ta-IN', last: false });
+        frame({ type: 'prompt', voicePrompt: question, lang: 'ta-IN', last: true });
+      }
       await tick();
       assert.deepEqual(socket.sent, [], 'speech must wait for workflow authorization');
       workflowGate.resolve(workflow);
@@ -100,7 +102,12 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       setupGate.resolve({ callSid: CALL, userId: 'tenant', workflowId: 'workflow' });
       await tick();
       await tick();
-      return { socket, prompt };
+      if (speechAfterSetup) {
+        await prompt(question, false);
+        assert.deepEqual(socket.sent, [], 'partial alone must not select any response');
+        await prompt(question);
+      }
+      return { socket, prompt, frame };
     }
 
     const variants = [
@@ -137,6 +144,101 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       const { socket } = await session('Enna service pandringa?', { blankFinal: true });
       try { assert.deepEqual(socket.sent.map((frame) => frame.token), [services]); }
       finally { socket.close(); }
+    });
+    for (const [question, answer] of variants) await t.test(`after setup: ${question}`, async () => {
+      const { socket } = await session(question, { speechAfterSetup: true });
+      try {
+        assert.deepEqual(socket.sent.map((frame) => frame.token), [answer]);
+        const decision = logs.find((entry) => entry.event === 'relay_faq_decision');
+        assert.equal(decision.candidateFaqId, decision.selectedFaqId);
+        assert.equal(decision.fallbackReason, null);
+        assert.equal(decision.stateBefore.faqReady, true);
+        assert.equal(decision.stateBefore.awaitingHumanConfirmation, false);
+      } finally { socket.close(); }
+    });
+    await t.test('runtime trace distinguishes raw arrival, queued processing, state and writes', async () => {
+      const oldCommit = process.env.RENDER_GIT_COMMIT;
+      process.env.RENDER_GIT_COMMIT = 'a'.repeat(40);
+      const { socket, prompt, frame } = await session('Enna services pandringa?', { interrupt: true });
+      try {
+        const diagnostics = () => logs.filter((entry) => entry.diagnosticVersion === 'relay_first_speech_v2');
+        const identity = diagnostics().find((entry) => entry.event === 'relay_runtime_identity');
+        assert.equal(identity.deployedCommit, 'a'.repeat(40));
+        assert.match(identity.faqConfigurationHash, /^[a-f0-9]{64}$/);
+        assert.ok(identity.handlerInstanceId);
+        const arrivals = diagnostics().filter((entry) => entry.event === 'relay_frame_received');
+        assert.deepEqual(arrivals.map((entry) => entry.frameSequence), [1, 2, 3, 4]);
+        assert.equal(arrivals[0].faqReady, false);
+        assert.ok(arrivals.every((entry) => entry.messageListenerCount === 1));
+        const processed = diagnostics().filter((entry) => entry.event === 'relay_frame_processing');
+        assert.deepEqual(processed.map((entry) => entry.frameSequence), [1, 2, 3, 4]);
+        assert.equal(processed[2].faqReady, true);
+        assert.ok(processed.every((entry) => Number.isFinite(entry.queueWaitMs)));
+        assert.ok(diagnostics().some((entry) => entry.event === 'relay_interruption'));
+        const decision = diagnostics().find((entry) => entry.event === 'relay_faq_decision');
+        assert.equal(decision.candidateFaqId, 'services');
+        assert.equal(decision.selectedFaqId, 'services');
+        assert.equal(decision.stateBefore.awaitingHumanConfirmation, false);
+        assert.equal(decision.stateAfter.awaitingHumanConfirmation, false);
+        assert.equal(diagnostics().filter((entry) => entry.event === 'relay_output_attempt').length, 1);
+        assert.equal(diagnostics().find((entry) => entry.event === 'relay_output_write').written, true);
+        await prompt('Enna services pandringa?');
+        const inputs = diagnostics().filter((entry) => entry.event === 'relay_faq_input');
+        assert.equal(inputs[0].sameAsPreviousFinal, false);
+        assert.equal(inputs[1].sameAsPreviousFinal, true);
+        assert.equal(inputs[0].normalizedFingerprint, inputs[1].normalizedFingerprint);
+        assert.equal(socket.sent.length, 2, 'intentional repetition still receives its own answer');
+        const beforeInvalid = socket.sent.length;
+        frame({ type: 'prompt', voicePrompt: 'Enna services pandringa?', last: 'true' });
+        await tick();
+        assert.equal(socket.sent.length, beforeInvalid);
+        assert.ok(diagnostics().some((entry) => entry.event === 'relay_prompt_disposition'
+          && entry.reason === 'invalid_last_flag' && entry.lastFieldType === 'string'));
+        const traceText = JSON.stringify(diagnostics());
+        for (const value of ['Enna services pandringa?', 'enna services pandringa', '+14155550222', 'Welcome']) {
+          assert.equal(traceText.includes(value), false, 'new trace must not contain transcript or destination');
+        }
+      } finally {
+        socket.close();
+        if (oldCommit === undefined) delete process.env.RENDER_GIT_COMMIT;
+        else process.env.RENDER_GIT_COMMIT = oldCommit;
+      }
+      assert.ok(logs.some((entry) => entry.event === 'relay_session_summary'));
+    });
+    await t.test('runtime trace correlates asynchronous write errors without changing FAQ output', async () => {
+      const { socket, prompt } = await session('Enna services pandringa?');
+      try {
+        socket.send = (frame, callback) => {
+          socket.sent.push(JSON.parse(frame));
+          setImmediate(() => callback(new Error('simulated write failure')));
+        };
+        await prompt('Enna services pandringa?');
+        await tick();
+        assert.equal(socket.sent.at(-1).token, services);
+        const write = logs.find((entry) => entry.event === 'relay_output_write' && entry.written === false);
+        assert.equal(write.outboundFrame, 2);
+        assert.equal(write.customerTurn, 2);
+        assert.equal(write.correlationId, CALL);
+        assert.equal(write.errorType, 'Error');
+        assert.equal(socket.sent.length, 2);
+      } finally { socket.close(); }
+    });
+    await t.test('runtime trace shows fallback creates pending offer, NO clears it, and services recovers', async () => {
+      const { socket, prompt } = await session('Enna services pandringa?');
+      try {
+        await prompt('unlisted question');
+        await prompt('No');
+        await prompt('Enna services pandringa?');
+        const decisions = logs.filter((entry) => entry.event === 'relay_faq_decision');
+        assert.deepEqual(decisions.map((entry) => entry.selectedFaqId), ['services', 'unknown', 'declined_transfer', 'services']);
+        assert.equal(decisions[1].fallbackReason, 'no_faq_intent_match');
+        assert.equal(decisions[1].stateBefore.awaitingHumanConfirmation, false);
+        assert.equal(decisions[1].stateAfter.awaitingHumanConfirmation, true);
+        assert.equal(decisions[2].stateBefore.awaitingHumanConfirmation, true);
+        assert.equal(decisions[2].stateAfter.awaitingHumanConfirmation, false);
+        assert.equal(socket.sent.length, 4);
+        assert.equal(socket.sent.at(-1).token, services);
+      } finally { socket.close(); }
     });
     // The actual pre-09:34:38 frames are unavailable. This is a control for
     // the reported wording and an interrupt event, not a production replay.

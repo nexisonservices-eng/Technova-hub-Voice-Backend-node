@@ -462,7 +462,10 @@ class IVRExecutionEngine {
     logger.info('Starting Twilio ConversationRelay', {
       callSid: String(callSid), workflowId: String(config._id), nodeId: node.id,
       language: data.language, voice: data.voiceSelection,
-      relayWelcomeConfigured: true, stage: 'relay_twiml_generated'
+      relayWelcomeConfigured: true, stage: 'relay_twiml_generated',
+      transcriptionProvider: 'Deepgram', transcriptionLanguage: 'multi',
+      ttsProvider: 'ElevenLabs', welcomeGreetingInterruptible: 'none',
+      reportInputDuringAgentSpeech: 'none', speechTimeout
     });
     return buildConversationRelayTwiML({
       url: wsUrl,

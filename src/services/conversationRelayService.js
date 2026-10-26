@@ -1,6 +1,6 @@
 import twilio from 'twilio';
 import WebSocket from 'ws';
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import Workflow from '../models/Workflow.js';
 import Call from '../models/call.js';
 import ExecutionLog from '../models/ExecutionLog.js';
@@ -13,6 +13,8 @@ import {
   createFaqState,
   extractConversationRelayTranscription,
   normalizeFaqQuestion,
+  matchFaq,
+  classifyConfirmation,
   processLiveConversationRelayFaqTurn,
   redactFaqDiagnosticText
 } from './conversationRelayFaq.js';
@@ -24,6 +26,15 @@ import {
 } from './conversationRelaySession.js';
 
 export { validateAgentConfig };
+
+const handlerInstanceId = randomUUID();
+const diagnosticVersion = 'relay_first_speech_v2';
+const faqConfigurationHash = createHash('sha256').update(JSON.stringify(FAQ_ENTRIES)).digest('hex');
+const snapshotFaqState = (state) => ({
+  faqReady: Boolean(state), stage: state?.stage || null, turns: state?.turns || 0,
+  awaitingHumanConfirmation: state?.awaitingHumanConfirmation === true,
+  awaitingAutomationConfirmation: state?.awaitingAutomationConfirmation === true
+});
 
 export const verifyRelayUpgrade = async (req) => {
   try {
@@ -65,10 +76,11 @@ export const verifyRelayUpgrade = async (req) => {
   }
 };
 
-const safeSend = (socket, payload) => {
+const safeSend = (socket, payload, onWrite = () => {}) => {
   if (socket.readyState !== WebSocket.OPEN) return false;
   try {
     socket.send(JSON.stringify(payload), (error) => {
+      onWrite(error || null);
       if (error) logger.warn('ConversationRelay websocket send failed', { errorType: error.name || 'Error' });
     });
     return true;
@@ -96,6 +108,29 @@ class ConversationRelayService {
     let timer = null;
     let setupStage = 'tenant_authorization';
     let faqState = null;
+    let frameSequence = 0;
+    let outboundSequence = 0;
+    let previousFinalFingerprint = null;
+    let previousFinalAt = null;
+    // Per-connection keyed fingerprints compare repeated speech without adding
+    // transcript content or reusable hashes of customer speech to diagnostics.
+    const fingerprintKey = randomUUID();
+    const fingerprint = (text) => createHmac('sha256', fingerprintKey).update(text).digest('hex');
+    const trace = (event, fields = {}) => logger.info('ConversationRelay diagnostic', {
+      event, diagnosticVersion, handlerInstanceId, connectionId, correlationId,
+      elapsedMs: Date.now() - connectionStartedAt, ...fields
+    });
+    const sendFrame = (payload, context = {}) => {
+      const outboundFrame = ++outboundSequence;
+      const fields = { ...context, outboundFrame, frameType: payload.type };
+      // A write callback confirms a local WebSocket write, not audible playback.
+      trace('relay_output_attempt', fields);
+      const accepted = safeSend(socket, payload, (error) => trace('relay_output_write', {
+        ...fields, written: !error, errorType: error?.name || null
+      }));
+      trace('relay_output_enqueued', { ...fields, accepted });
+      return accepted;
+    };
 
     socket.on('close', (code, reason) => {
       clearTimeout(timer);
@@ -104,12 +139,17 @@ class ConversationRelayService {
         closeKind: code === 1006 ? 'abnormal_network_or_peer_close' : 'normal_or_protocol_close',
         reason: String(reason || '').slice(0, 120), durationMs: Date.now() - connectionStartedAt
       });
+      trace('relay_session_summary', {
+        receivedFrames: frameSequence, promptFrames: turnNumber,
+        customerTurns: customerTurnNumber, outboundFrames: outboundSequence,
+        finished, ...snapshotFaqState(faqState)
+      });
     });
     socket.on('error', (error) => logger.warn('ConversationRelay websocket error', {
       connectionId, correlationId, stage: 'websocket_error', errorType: error?.name || 'Error', code: error?.code || null
     }));
 
-    const processMessage = async (raw) => {
+    const processMessage = async ({ raw, sequence, receivedAt }) => {
       try {
         let message;
         try { message = JSON.parse(raw.toString()); } catch {
@@ -119,6 +159,11 @@ class ConversationRelayService {
         logger.info('ConversationRelay event received', {
           connectionId, correlationId, eventType: String(message?.type || 'unknown').slice(0, 40)
         });
+        trace('relay_frame_processing', {
+          frameSequence: sequence, eventType: String(message?.type || 'unknown').slice(0, 40),
+          receivedAtUtc: new Date(receivedAt).toISOString(), queueWaitMs: Date.now() - receivedAt,
+          ...snapshotFaqState(faqState), finished
+        });
 
         if (message.type === 'setup') {
           if (relaySession?.setupReceived) {
@@ -126,7 +171,7 @@ class ConversationRelayService {
               connectionId, correlationId, stage: 'setup_validation', reason: 'setup_already_bound'
             });
             finished = true;
-            safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'duplicate-setup' }) });
+            sendFrame({ type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'duplicate-setup' }) });
             socket.close(1008, 'Duplicate ConversationRelay setup');
             return;
           }
@@ -146,7 +191,7 @@ class ConversationRelayService {
               errorType: error?.name || 'Error'
             });
             finished = true;
-            safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'session-validation' }) });
+            sendFrame({ type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'session-validation' }) });
             socket.close(1011, 'Session validation failed');
             return;
           }
@@ -156,7 +201,7 @@ class ConversationRelayService {
               connectionId, correlationId, stage: 'setup_validation', reason: binding.reason
             });
             finished = true;
-            safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'invalid-session' }) });
+            sendFrame({ type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'invalid-session' }) });
             socket.close(1008, 'Invalid ConversationRelay setup');
             return;
           }
@@ -182,6 +227,14 @@ class ConversationRelayService {
         }
 
         if (message.type === 'interrupt') {
+          trace('relay_interruption', {
+            frameSequence: sequence,
+            durationUntilInterruptMs: Number.isFinite(message.durationUntilInterruptMs)
+              ? message.durationUntilInterruptMs : null,
+            interruptedTextChars: typeof message.utteranceUntilInterrupt === 'string'
+              ? message.utteranceUntilInterrupt.length : 0,
+            ...snapshotFaqState(faqState)
+          });
           logger.info('ConversationRelay caller interrupted agent speech', { connectionId, correlationId, stage: 'interrupt' });
           return;
         }
@@ -192,7 +245,10 @@ class ConversationRelayService {
           });
           return;
         }
-        if (message.type !== 'prompt') return;
+        if (message.type !== 'prompt') {
+          trace('relay_event_not_routed', { frameSequence: sequence, reason: 'non_prompt_event' });
+          return;
+        }
         const currentTurn = ++turnNumber;
         const promptText = extractConversationRelayTranscription(message);
         logger.info('ConversationRelay prompt received', {
@@ -202,6 +258,18 @@ class ConversationRelayService {
           language: String(message.lang || '').slice(0, 20) || null
         });
         const normalizedPrompt = normalizeFaqQuestion(promptText);
+        const promptDiagnostic = {
+          frameSequence: sequence, turn: currentTurn,
+          last: typeof message.last === 'boolean' ? message.last : null,
+          lastFieldType: typeof message.last,
+          voicePromptFieldType: typeof message.voicePrompt,
+          rawChars: typeof message.voicePrompt === 'string' ? message.voicePrompt.length : 0,
+          normalizedChars: normalizedPrompt.length,
+          transcriptFingerprint: fingerprint(promptText), normalizedFingerprint: fingerprint(normalizedPrompt),
+          candidateFaqId: matchFaq(promptText)?.id || null,
+          ...snapshotFaqState(faqState), finished
+        };
+        const routeDecision = (reason) => trace('relay_prompt_disposition', { ...promptDiagnostic, reason });
         logger.info('ConversationRelay prompt normalized', {
           event: 'normalized_prompt', connectionId, correlationId, turn: currentTurn,
           normalizedTranscription: redactFaqDiagnosticText(normalizedPrompt)
@@ -216,17 +284,20 @@ class ConversationRelayService {
           transcription: redactFaqDiagnosticText(normalizedPrompt)
         });
         if (message.last !== true) {
+          routeDecision(message.last === false ? 'partial_waiting_for_final' : 'invalid_last_flag');
           logger.info('ConversationRelay partial prompt ignored by script state machine', {
             connectionId, correlationId, turn: currentTurn, stage: 'prompt_partial'
           });
           return;
         }
         if (finished) {
+          routeDecision('session_finished');
           logger.warn('ConversationRelay prompt ignored after session completion', { connectionId, correlationId, stage: 'prompt_after_end' });
           return;
         }
 
         if (!getRelaySessionCallSid(relaySession)) {
+          routeDecision('setup_not_authenticated');
           logger.warn('ConversationRelay prompt received before a valid setup event', {
             connectionId, correlationId, stage: 'prompt_without_setup'
           });
@@ -235,6 +306,7 @@ class ConversationRelayService {
         // An empty/noise-only final frame is not a customer question. In
         // particular, it must not create a handoff offer just after the welcome.
         if (!normalizedPrompt) {
+          routeDecision('empty_normalized_final');
           logger.info('ConversationRelay empty final transcription ignored', {
             event: 'fallback_reason', connectionId, correlationId, turn: currentTurn,
             reason: 'empty_final_transcription_ignored', fallbackSent: false
@@ -242,6 +314,17 @@ class ConversationRelayService {
           return;
         }
         customerTurnNumber += 1;
+        routeDecision('routed_to_faq');
+        const stateBefore = snapshotFaqState(faqState);
+        const normalizedFingerprint = promptDiagnostic.normalizedFingerprint;
+        trace('relay_faq_input', {
+          ...promptDiagnostic, customerTurn: customerTurnNumber, stateBefore,
+          confirmation: classifyConfirmation(promptText),
+          sameAsPreviousFinal: normalizedFingerprint === previousFinalFingerprint,
+          sincePreviousFinalMs: previousFinalAt === null ? null : receivedAt - previousFinalAt
+        });
+        previousFinalFingerprint = normalizedFingerprint;
+        previousFinalAt = receivedAt;
         if (customerTurnNumber === 1) {
           logger.info('ConversationRelay first customer turn received', {
             event: 'first_turn_received', connectionId, correlationId, turn: currentTurn,
@@ -256,7 +339,16 @@ class ConversationRelayService {
           && /^\+[1-9]\d{7,14}$/.test(String(transferDestination.destination || '').trim());
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
           transferAvailable,
-          send: (payload) => safeSend(socket, payload)
+          send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
+            customerTurn: customerTurnNumber })
+        });
+        trace('relay_faq_decision', {
+          frameSequence: sequence, turn: currentTurn, customerTurn: customerTurnNumber,
+          candidateFaqId: promptDiagnostic.candidateFaqId,
+          selectedFaqId: result.faqId || null, action: result.action,
+          responseStatus: result.responseStatus, stateBefore, stateAfter: snapshotFaqState(faqState),
+          fallbackReason: result.faqId === 'unknown' ? 'no_faq_intent_match'
+            : result.faqId === 'transfer_confirmation_unclear' ? 'transfer_confirmation_unclear' : null
         });
         const matchedIntent = result.matchedIntent;
         logger.info('ConversationRelay FAQ match result', {
@@ -323,7 +415,7 @@ class ConversationRelayService {
         });
         if (getRelaySessionCallSid(relaySession) && !finished) {
           finished = true;
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });
+          sendFrame({ type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });
         }
       }
     };
@@ -336,7 +428,14 @@ class ConversationRelayService {
       });
     });
     socket.on('message', (raw) => {
-      const result = frameQueue.enqueue(raw);
+      const receivedAt = Date.now();
+      const sequence = ++frameSequence;
+      trace('relay_frame_received', {
+        frameSequence: sequence, receivedAtUtc: new Date(receivedAt).toISOString(),
+        bytes: Buffer.byteLength(raw), messageListenerCount: socket.listenerCount('message'),
+        ...snapshotFaqState(faqState)
+      });
+      const result = frameQueue.enqueue({ raw, sequence, receivedAt });
       if (result.overflow) {
         logger.warn('ConversationRelay pre-authorization frame queue limit reached', {
           connectionId, correlationId, stage: 'preauthorization_queue_limit'
@@ -352,6 +451,12 @@ class ConversationRelayService {
     try {
       logger.info('ConversationRelay websocket accepted', {
         connectionId, correlationId
+      });
+      const commit = String(process.env.RENDER_GIT_COMMIT || '');
+      trace('relay_runtime_identity', {
+        handler: 'node_predefined_faq_v1', processId: process.pid, faqConfigurationHash,
+        deployedCommit: /^[a-f0-9]{40}$/i.test(commit) ? commit : null,
+        messageListenerCount: socket.listenerCount('message')
       });
       setupStage = 'tenant_authorization';
       workflowConfig = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
@@ -373,7 +478,7 @@ class ConversationRelayService {
       logger.error('ConversationRelay setup failed', {
         connectionId, correlationId, stage: setupStage, errorType: error?.name || 'Error'
       });
-      safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'configuration' }) });
+      sendFrame({ type: 'end', handoffData: JSON.stringify({ status: 'error', reason: 'configuration' }) });
       socket.close(1011, 'Configuration error');
       return;
     }
@@ -385,7 +490,7 @@ class ConversationRelayService {
         event: 'call_ended', connectionId, correlationId, stage: 'duration_limit',
         reason: 'duration-limit', durationSeconds: Number(data.maxDuration || 300)
       });
-      safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'duration-limit' }) });
+      sendFrame({ type: 'end', handoffData: JSON.stringify({ status: 'completed', reason: 'duration-limit' }) });
     }, Number(data.maxDuration || 300) * 1000);
     timer.unref?.();
 

@@ -1,5 +1,11 @@
 # First customer question: investigation status
 
+Updated production evidence: callSid `CA3a393a788a9efea092e6469187766089`,
+2026-10-26 UTC. The three times below are now known to be UTC. Earlier frames
+remain unavailable. See [the current runtime diagnostic report and capture
+procedure](production-first-speech-capture.md); it supersedes the historical
+test/change status below.
+
 The production cause is undetermined. The supplied excerpts contain only:
 
 | Time (date/timezone not supplied) | Evidence |
