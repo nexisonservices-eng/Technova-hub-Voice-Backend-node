@@ -116,6 +116,10 @@ export const extractConversationRelayTranscription = (message) =>
     : '';
 
 export const redactFaqDiagnosticText = (value) => String(value || '')
+  .replace(/\b(?:bearer|basic)\s+\S+/gi, '[credential]')
+  .replace(/\b(?:auth[\s_-]*token|access[\s_-]*token|api[\s_-]*key|password|secret)\s*[:=]?\s*\S+/gi, '[credential]')
+  .replace(/\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\b/g, '[credential]')
+  .replace(/\b[a-f0-9]{32,}\b/gi, '[credential]')
   .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
   .replace(/https?:\/\/\S+/gi, '[url]')
   .replace(/\+?\d[\d\s().-]{6,}\d/g, '[number]')

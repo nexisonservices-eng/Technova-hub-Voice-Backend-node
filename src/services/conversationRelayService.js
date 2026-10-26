@@ -190,7 +190,13 @@ class ConversationRelayService {
         logger.info('ConversationRelay prompt received', {
           event: 'prompt_received', connectionId, correlationId, turn: currentTurn,
           last: message.last === true, chars: promptText.length,
+          receivedTranscription: redactFaqDiagnosticText(promptText),
           language: String(message.lang || '').slice(0, 20) || null
+        });
+        const normalizedPrompt = normalizeFaqQuestion(promptText);
+        logger.info('ConversationRelay prompt normalized', {
+          event: 'normalized_prompt', connectionId, correlationId, turn: currentTurn,
+          normalizedTranscription: redactFaqDiagnosticText(normalizedPrompt)
         });
         if (message.last !== true) {
           logger.info('ConversationRelay partial prompt ignored by script state machine', {
@@ -226,9 +232,21 @@ class ConversationRelayService {
           transferDestinationReason: transferAvailable ? null : transferDestination.reason,
           chars: text.length,
           receivedTranscription: redactFaqDiagnosticText(text),
-          normalizedTranscription: redactFaqDiagnosticText(normalizeFaqQuestion(text)),
-          selectedResponse: redactFaqDiagnosticText(result.answer || '')
+          normalizedTranscription: redactFaqDiagnosticText(normalizedPrompt)
         });
+        logger.info('ConversationRelay FAQ response selected', {
+          event: 'response_selected', connectionId, correlationId, turn: currentTurn,
+          faqId: result.faqId || null, matchedIntent,
+          selectedResponse: redactFaqDiagnosticText(result.answer || ''),
+          action: result.action
+        });
+        if (['unknown', 'transfer_confirmation_unclear'].includes(result.faqId)) {
+          logger.warn('ConversationRelay FAQ fallback selected', {
+            event: 'faq_fallback_reason', connectionId, correlationId, turn: currentTurn,
+            reason: result.faqId === 'unknown' ? (normalizedPrompt ? 'no_faq_intent_match' : 'empty_transcription')
+              : 'transfer_confirmation_unclear'
+          });
+        }
         if (result.action === 'answer') {
           logger.info('ConversationRelay FAQ response sent', {
             event: 'response_sent', connectionId, correlationId, turn: currentTurn,
@@ -242,6 +260,11 @@ class ConversationRelayService {
             responseStatus: result.responseStatus,
             confirmationSent: result.faqId === 'ai_automation' ? result.confirmationSent : undefined,
             handoffSent: result.handoffSent
+          });
+          logger.info('ConversationRelay transfer confirmation response sent', {
+            event: 'response_sent', connectionId, correlationId, turn: currentTurn,
+            faqId: result.faqId, matchedIntent, sent: result.confirmationSent,
+            responseStatus: result.confirmationSent ? 'spoken' : 'send_failed'
           });
           finished = true;
         } else if (result.action === 'end') {

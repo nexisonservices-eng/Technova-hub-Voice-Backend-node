@@ -31,6 +31,9 @@ test('English, Tamil and Tanglish question variants map to predefined FAQ entrie
   const { matchFaq, normalizeFaqQuestion, redactFaqDiagnosticText } = await importFaq();
   const cases = [
     ['Enna services pandringa?', 'services'],
+    ['Enna service panreenga?', 'services'],
+    ['என்ன சர்வீசஸ் பண்றீங்க?', 'services'],
+    ['ஏஐ ஆட்டோமேஷன் என்ன?', 'ai_automation'],
     ['What services does TechnovaHub provide?', 'services'],
     ['TechnovaHub என்னென்ன services வழங்குறீங்க?', 'services'],
     ['AI automation services na enna?', 'ai_automation'],
@@ -72,6 +75,9 @@ test('English, Tamil and Tanglish question variants map to predefined FAQ entrie
   }
   assert.equal(normalizeFaqQuestion('  ENNA,   SEVIES apndrings?!  '), 'enna sevies apndrings');
   assert.equal(redactFaqDiagnosticText('Call me at +1 (415) 555-0123 or a@b.com'), 'Call me at [number] or [email]');
+  for (const secret of ['Bearer private-token', 'authToken=private-token', 'api key private-token', 'a'.repeat(32)]) {
+    assert.equal(redactFaqDiagnosticText(secret), '[credential]');
+  }
 });
 
 test('live ConversationRelay handler uses WebSocket prompt transcriptions with the matcher and keeps the call flow ordered', async () => {

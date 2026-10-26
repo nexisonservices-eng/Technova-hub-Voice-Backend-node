@@ -1,8 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-let routeDependenciesAvailable = true;
-try { require.resolve('twilio'); require.resolve('express'); } catch { routeDependenciesAvailable = false; }
 
 const CUSTOMER_A = '+14155550111';
 const TEAM_B = '+14155550222';
@@ -38,8 +36,7 @@ const sendFrame = async (socket, frame) => {
   await delay();
 };
 
-test('live ConversationRelay prompt flow and completion callback transfer to Hand Off Team B for inbound/outbound calls',
-  { skip: !routeDependenciesAvailable }, async () => {
+test('live ConversationRelay prompt flow and completion callback transfer to Hand Off Team B for inbound/outbound calls', async () => {
   const [{ default: relayService }, Workflow, Call, ExecutionLog, WorkflowExecution,
     twilioIntegrationService, router, twilio] = await Promise.all([
     import('../src/services/conversationRelayService.js'),
@@ -55,7 +52,15 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
     transferComplete: twilioIntegrationService.default.handleTransferComplete
   };
   try {
-    for (const direction of ['inbound', 'outbound']) {
+    const questions = [
+      ['Enna services pandringa?', 'AI automation na enna?'],
+      ['Enna service panreenga?', 'AI automation na enna?'],
+      ['என்ன சர்வீசஸ் பண்றீங்க?', 'ஏஐ ஆட்டோமேஷன் என்ன?'],
+      ['What services do you provide?', 'What is AI automation?']
+    ];
+    const scenarios = ['inbound', 'outbound'].flatMap((direction) =>
+      questions.map(([servicesQuestion, automationQuestion]) => ({ direction, servicesQuestion, automationQuestion })));
+    for (const { direction, servicesQuestion, automationQuestion } of scenarios) {
       const workflow = makeWorkflow();
       const call = {
         callSid: CALL_SID, user: USER_ID, provider: 'twilio',
@@ -66,7 +71,8 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
       Call.default.findOne = () => query(call);
       ExecutionLog.default.findOne = () => query(execution);
       WorkflowExecution.default.findOne = () => query(null);
-      twilioIntegrationService.default.handleTransferComplete = async () => {};
+      const transferCompletions = [];
+      twilioIntegrationService.default.handleTransferComplete = async (payload) => { transferCompletions.push(payload); };
 
       const socket = new EventEmitter();
       socket.readyState = 1;
@@ -77,17 +83,24 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
       await relayService.handleConnection(socket, request);
       await sendFrame(socket, { type: 'setup', callSid: CALL_SID, from: CUSTOMER_A });
 
-      await sendFrame(socket, { type: 'prompt', voicePrompt: 'Enna services pandringa?', lang: 'ta-IN', last: true });
+      await sendFrame(socket, { type: 'prompt', voicePrompt: servicesQuestion, lang: 'ta-IN', last: false });
+      assert.deepEqual(socket.sent, [], 'partial speech must not select a response or advance FAQ state');
+      await sendFrame(socket, { type: 'prompt', voicePrompt: servicesQuestion, lang: 'ta-IN', last: true });
       assert.equal(socket.sent.at(-1)?.token,
         'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம்.');
 
-      await sendFrame(socket, { type: 'prompt', voicePrompt: 'AI automation na enna?', lang: 'ta-IN', last: true });
+      assert.equal(socket.sent.length, 1, 'first FAQ sends only its approved answer');
+      await sendFrame(socket, { type: 'prompt', voicePrompt: automationQuestion, lang: 'ta-IN', last: false });
+      assert.equal(socket.sent.length, 1);
+      await sendFrame(socket, { type: 'prompt', voicePrompt: automationQuestion, lang: 'ta-IN', last: true });
       assert.equal(socket.sent.at(-1)?.token,
         'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ்க்கு சில ஸ்பெஷல் ஆஃபர்ஸ் இருக்கு. அதைப் பத்தி இன்னும் டீடெயிலா தெரிஞ்சிக்க உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?');
       assert.equal(socket.sent.at(-1)?.type, 'text');
       assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
 
-      await sendFrame(socket, { type: 'prompt', voicePrompt: 'Yes', lang: 'ta-IN', last: true });
+      await sendFrame(socket, { type: 'prompt', voicePrompt: 'Yes.', lang: 'ta-IN', last: false });
+      assert.equal(socket.sent.length, 2, 'partial YES must not invoke handoff');
+      await sendFrame(socket, { type: 'prompt', voicePrompt: 'Yes.', lang: 'ta-IN', last: true });
       assert.equal(socket.sent.at(-2)?.token, 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.');
       assert.equal(JSON.parse(socket.sent.at(-1).handoffData).status, 'faq_transfer');
 
@@ -98,7 +111,7 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
         send(xml) { this.xml = xml; return this; }
       };
       await completionRoute({ body: { CallSid: CALL_SID, workflowId: WORKFLOW_ID, nodeId: NODE_ID,
-        HandoffData: JSON.stringify({ status: 'faq_transfer', faqId: 'ai_automation' }) }, query: {} }, res);
+        HandoffData: socket.sent.at(-1).handoffData }, query: {} }, res);
       assert.match(res.xml, new RegExp(`<Number>${TEAM_B.replace('+', '\\+')}</Number>`));
       assert.doesNotMatch(res.xml, new RegExp(CUSTOMER_A.replace('+', '\\+')));
 
@@ -108,6 +121,9 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
       await transferRoute({ body: { CallSid: CALL_SID, DialCallStatus: 'completed', workflowId: WORKFLOW_ID,
         nodeId: NODE_ID }, query: {} }, transferRes);
       assert.match(transferRes.xml, /\/webhook\/twilio\/workflow\/workflow-test\/node\/end/);
+      assert.equal(transferCompletions.length, 1, 'existing transfer completion function is invoked');
+      assert.equal(transferCompletions[0].callSid, CALL_SID);
+      socket.emit('close', 1000, Buffer.from('test complete'));
     }
   } finally {
     Workflow.default.findOne = originals.workflow;
