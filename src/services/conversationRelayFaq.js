@@ -155,7 +155,8 @@ const isAiAutomationQuestion = (text) => {
   const hasAutomation = tokens.some((token) => token === 'automation' || token === 'automtion'
     || token === 'ஆட்டோமேஷன்' || token === 'ஆட்டோமேசன்');
   const hasServiceContext = tokens.some((token) => isServiceToken(token));
-  return hasAutomation && (hasAi || hasServiceContext);
+  const hasQuestionCue = ['enna', 'na', 'what', 'about', 'pathi', 'என்ன', 'னா', 'பத்தி'].some((token) => tokenSet.has(token));
+  return hasAutomation && (hasAi || hasServiceContext || hasQuestionCue);
 };
 
 const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yup', 'okay', 'ok', 'sure', 'interested', 'venum', 'aamam', 'aama', 'sari']);

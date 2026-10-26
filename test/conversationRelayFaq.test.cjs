@@ -35,6 +35,7 @@ test('English, Tamil and Tanglish question variants map to predefined FAQ entrie
     ['TechnovaHub என்னென்ன services வழங்குறீங்க?', 'services'],
     ['AI automation services na enna?', 'ai_automation'],
     ['ஏஐ ஆட்டோமேஷன் னா என்ன?', 'ai_automation'],
+    ['ஆட்டோமேஷன் னா என்ன?', 'ai_automation'],
     ['What is AI automation?', 'ai_automation'],
     ['AI ஆட்டோமேஷன் சர்வீசஸ் என்ன?', 'ai_automation'],
     ['What services do you offer?', 'services'],
@@ -99,6 +100,8 @@ test('live ConversationRelay handler uses the matcher for five service phrasings
   const send = (message) => { outgoing.push(message); return true; };
   const services = processLiveConversationRelayFaqTurn(state, 'Enna service pandringa?', { transferAvailable: true, send });
   const automation = processLiveConversationRelayFaqTurn(state, 'AI automation na enna?', { transferAvailable: true, send });
+  assert.equal(state.awaitingAutomationConfirmation, true);
+  assert.deepEqual(outgoing.map(({ type }) => type), ['text', 'text']);
   const yes = processLiveConversationRelayFaqTurn(state, 'Yes', { transferAvailable: true, send });
   assert.equal(services.matchedIntent, 'COMPANY_SERVICES');
   assert.equal(services.action, 'answer');
