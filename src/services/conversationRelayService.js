@@ -8,7 +8,13 @@ import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
 import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
-import { createFaqState, normalizeFaqQuestion, processLiveConversationRelayFaqTurn } from './conversationRelayFaq.js';
+import {
+  createFaqState,
+  extractConversationRelayTranscription,
+  normalizeFaqQuestion,
+  processLiveConversationRelayFaqTurn,
+  redactFaqDiagnosticText
+} from './conversationRelayFaq.js';
 import {
   bindRelaySetupCallSid,
   createRelaySessionContext,
@@ -178,7 +184,7 @@ class ConversationRelayService {
         }
         if (message.type !== 'prompt') return;
         const currentTurn = ++turnNumber;
-        const promptText = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim() : '';
+        const promptText = extractConversationRelayTranscription(message);
         logger.info('ConversationRelay prompt received', {
           event: 'prompt_received', connectionId, correlationId, turn: currentTurn,
           last: message.last === true, chars: promptText.length,
@@ -201,7 +207,7 @@ class ConversationRelayService {
           });
           return;
         }
-        const text = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim().slice(0, 3000) : '';
+        const text = promptText;
         const transferAvailable = data.transferOnCustomerRequest !== false
           && /^\+[1-9]\d{7,14}$/.test(String(data.humanAgentPhoneNumber || '').trim());
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
@@ -214,10 +220,9 @@ class ConversationRelayService {
           faqId: result.faqId || null, matchedIntent, action: result.action,
           responseStatus: result.responseStatus,
           chars: text.length,
-          ...(process.env.NODE_ENV === 'production' ? {} : {
-            transcription: text,
-            normalizedText: normalizeFaqQuestion(text)
-          })
+          receivedTranscription: redactFaqDiagnosticText(text),
+          normalizedTranscription: redactFaqDiagnosticText(normalizeFaqQuestion(text)),
+          selectedResponse: redactFaqDiagnosticText(result.answer || '')
         });
         if (result.action === 'answer') {
           logger.info('ConversationRelay FAQ response sent', {

@@ -28,7 +28,7 @@ test('welcome is a one-time ConversationRelay greeting and FAQ answers can progr
 });
 
 test('English, Tamil and Tanglish question variants map to predefined FAQ entries', async () => {
-  const { matchFaq, normalizeFaqQuestion } = await importFaq();
+  const { matchFaq, normalizeFaqQuestion, redactFaqDiagnosticText } = await importFaq();
   const cases = [
     ['Enna services pandringa?', 'services'],
     ['What services does TechnovaHub provide?', 'services'],
@@ -71,10 +71,11 @@ test('English, Tamil and Tanglish question variants map to predefined FAQ entrie
     assert.equal(matchFaq(question)?.intent, 'COMPANY_SERVICES', question);
   }
   assert.equal(normalizeFaqQuestion('  ENNA,   SEVIES apndrings?!  '), 'enna sevies apndrings');
+  assert.equal(redactFaqDiagnosticText('Call me at +1 (415) 555-0123 or a@b.com'), 'Call me at [number] or [email]');
 });
 
-test('live ConversationRelay handler uses the matcher for five service phrasings and keeps the call flow ordered', async () => {
-  const { FAQ_WELCOME, createFaqState, processLiveConversationRelayFaqTurn } = await importFaq();
+test('live ConversationRelay handler uses WebSocket prompt transcriptions with the matcher and keeps the call flow ordered', async () => {
+  const { FAQ_WELCOME, createFaqState, extractConversationRelayTranscription, processLiveConversationRelayFaqTurn } = await importFaq();
   const servicesAnswer = 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம்.';
   const automationAnswer = 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ்க்கு சில ஸ்பெஷல் ஆஃபர்ஸ் இருக்கு. அதைப் பத்தி இன்னும் டீடெயிலா தெரிஞ்சிக்க உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?';
   const yesAnswer = 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.';
@@ -85,7 +86,8 @@ test('live ConversationRelay handler uses the matcher for five service phrasings
 
   for (const transcription of samples) {
     const outgoing = [];
-    const result = processLiveConversationRelayFaqTurn(createFaqState('CA-test'), transcription, {
+    const promptMessage = { type: 'prompt', voicePrompt: transcription, last: true, lang: 'ta-IN' };
+    const result = processLiveConversationRelayFaqTurn(createFaqState('CA-test'), extractConversationRelayTranscription(promptMessage), {
       transferAvailable: true, send: (message) => { outgoing.push(message); return true; }
     });
     assert.equal(result.matchedIntent, 'COMPANY_SERVICES');
@@ -98,11 +100,16 @@ test('live ConversationRelay handler uses the matcher for five service phrasings
   const outgoing = [];
   const state = createFaqState('CA-sequence');
   const send = (message) => { outgoing.push(message); return true; };
-  const services = processLiveConversationRelayFaqTurn(state, 'Enna service pandringa?', { transferAvailable: true, send });
-  const automation = processLiveConversationRelayFaqTurn(state, 'AI automation na enna?', { transferAvailable: true, send });
+  const liveTurn = (voicePrompt) => processLiveConversationRelayFaqTurn(
+    state,
+    extractConversationRelayTranscription({ type: 'prompt', voicePrompt, last: true, lang: 'ta-IN' }),
+    { transferAvailable: true, send }
+  );
+  const services = liveTurn('Enna services pandringa?');
+  const automation = liveTurn('AI automation na enna?');
   assert.equal(state.awaitingAutomationConfirmation, true);
   assert.deepEqual(outgoing.map(({ type }) => type), ['text', 'text']);
-  const yes = processLiveConversationRelayFaqTurn(state, 'Yes', { transferAvailable: true, send });
+  const yes = liveTurn('Yes');
   assert.equal(services.matchedIntent, 'COMPANY_SERVICES');
   assert.equal(services.action, 'answer');
   assert.equal(automation.matchedIntent, 'AI_AUTOMATION');

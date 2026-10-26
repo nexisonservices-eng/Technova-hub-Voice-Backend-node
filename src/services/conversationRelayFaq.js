@@ -110,6 +110,17 @@ export const normalizeFaqQuestion = (value) => {
   return text;
 };
 
+export const extractConversationRelayTranscription = (message) =>
+  message?.type === 'prompt' && typeof message.voicePrompt === 'string'
+    ? message.voicePrompt.trim().slice(0, 3000)
+    : '';
+
+export const redactFaqDiagnosticText = (value) => String(value || '')
+  .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
+  .replace(/https?:\/\/\S+/gi, '[url]')
+  .replace(/\+?\d[\d\s().-]{6,}\d/g, '[number]')
+  .slice(0, 300);
+
 const containsAny = (text, phrases) => phrases.some((phrase) => text.includes(normalize(phrase)));
 const levenshteinDistance = (left, right) => {
   const row = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -182,12 +193,12 @@ export const matchFaq = (value) => {
     return FAQ_ENTRIES.find(({ id }) => id === 'thanks');
   }
 
-  // Specific intents come first so broad services/company phrases cannot mask Automation.
   const automationEntry = FAQ_ENTRIES.find(({ id }) => id === 'ai_automation');
-  if (isAiAutomationQuestion(text) || containsAny(text, automationEntry.patterns)) return automationEntry;
+  const isAutomation = isAiAutomationQuestion(text) || containsAny(text, automationEntry.patterns);
+  if (!isAutomation && isCompanyServicesQuestion(text)) return FAQ_ENTRIES.find(({ id }) => id === 'services');
+  if (isAutomation) return automationEntry;
   const humanEntry = FAQ_ENTRIES.find(({ id }) => id === 'human_representative');
   if (containsAny(text, humanEntry.patterns)) return humanEntry;
-  if (isCompanyServicesQuestion(text)) return FAQ_ENTRIES.find(({ id }) => id === 'services');
 
   const remainingPriority = ['offers', 'repetitive_tasks', 'nexion_benefits', 'businesses', 'contact', 'services', 'nexion', 'technovahub'];
   for (const id of remainingPriority) {
