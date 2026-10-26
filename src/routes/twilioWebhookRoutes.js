@@ -19,6 +19,7 @@ import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
 import { resolveCallOwnerFromRecords } from '../services/conversationRelaySession.js';
 import { buildFaqHandoffActions } from '../services/conversationRelayFaq.js';
+import { resolveAIVoiceTransferContinuation, resolveConnectedHandoffDestination } from '../services/conversationRelayTransfer.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { emitOutboundCallUpdate, emitQueueUpdate } from '../sockets/unifiedSocket.js';
 
@@ -580,15 +581,17 @@ router.post('/transfer/complete', async (req, res) => {
     if (workflow) {
       const sourceNode = workflow.nodes.find((node) => node.id === nodeId);
       const succeeded = ['answered', 'completed', 'in-progress'].includes(String(DialCallStatus || '').toLowerCase());
-      const handle = sourceNode?.type === 'ai_voice_agent'
-        ? (succeeded ? 'transferred' : 'error')
-        : (succeeded ? 'answered' : 'failed');
-      const edge = workflow.edges.find(e => 
-        e.source === nodeId && e.sourceHandle === handle
-      );
+      const aiVoiceContinuation = sourceNode?.type === 'ai_voice_agent'
+        ? resolveAIVoiceTransferContinuation(workflow, nodeId, succeeded)
+        : '';
+      const handle = succeeded ? 'answered' : 'failed';
+      const edge = sourceNode?.type === 'ai_voice_agent'
+        ? null
+        : workflow.edges.find((candidate) => candidate.source === nodeId && candidate.sourceHandle === handle);
       
-      if (edge) {
-        response.redirect(`/webhook/twilio/workflow/${workflowId}/node/${edge.target}`);
+      const continuationNodeId = sourceNode?.type === 'ai_voice_agent' ? aiVoiceContinuation : edge?.target;
+      if (continuationNodeId) {
+        response.redirect(`/webhook/twilio/workflow/${workflowId}/node/${continuationNodeId}`);
       } else {
         response.say('Thank you for calling. Goodbye.');
         response.hangup();
@@ -631,7 +634,20 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       try { handoff = JSON.parse(rawHandoff); } catch { handoff = {}; }
     } else if (rawHandoff && typeof rawHandoff === 'object') handoff = rawHandoff;
 
-    const faqActions = buildFaqHandoffActions(handoff, node.data || {});
+    const configuredHandoff = ['faq_transfer', 'transfer'].includes(handoff.status)
+      ? resolveConnectedHandoffDestination(workflow, nodeId)
+      : { destination: '', handoffNodeId: '', reason: '' };
+    const transferConfig = {
+      ...(node.data || {}),
+      humanAgentPhoneNumber: configuredHandoff.destination
+    };
+    if (['faq_transfer', 'transfer'].includes(handoff.status)) {
+      logger.info('ConversationRelay workflow handoff destination resolved', {
+        workflowId, nodeId, handoffNodeId: configuredHandoff.handoffNodeId || null,
+        destinationValid: Boolean(configuredHandoff.destination), reason: configuredHandoff.reason || null
+      });
+    }
+    const faqActions = buildFaqHandoffActions(handoff, transferConfig);
     if (faqActions) {
       for (const action of faqActions) {
         if (action.type === 'say') response.say({ language: 'ta-IN' }, action.text);
@@ -660,7 +676,7 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       const permitted = handoff.intent === 'human_transfer'
         ? config.transferOnCustomerRequest !== false
         : handoff.intent === 'discount_yes' && config.transferOnDiscountInterest !== false;
-      const destination = String(config.humanAgentPhoneNumber || '').trim();
+      const destination = configuredHandoff.destination;
       if (!permitted || !/^\+[1-9]\d{7,14}$/.test(destination)) {
         logger.warn('ConversationRelay transfer rejected by node configuration', { workflowId, nodeId, callSid });
         response.say('A representative is unavailable right now. Goodbye.');
