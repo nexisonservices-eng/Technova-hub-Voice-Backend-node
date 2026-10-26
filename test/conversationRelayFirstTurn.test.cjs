@@ -111,6 +111,10 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
     }
 
     const variants = [
+      ['Yeah, automationальна.', automation],
+      ['AI automationальна na enna?', automation],
+      ['என்ன service?', services],
+      ['என்னென்ன service பண்றீங்க?', services],
       ['Enna services pandringa?', services],
       ['Enna service pandringa?', services], ['Enna service panreenga?', services],
       ['என்ன சர்வீசஸ் பண்றீங்க?', services], ['What services do you provide?', services],
@@ -144,6 +148,46 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       const { socket } = await session('Enna service pandringa?', { blankFinal: true });
       try { assert.deepEqual(socket.sent.map((frame) => frame.token), [services]); }
       finally { socket.close(); }
+    });
+    await t.test('reported mixed-script topic after a pending offer answers once, then NO and YES keep existing transfer behavior', async () => {
+      const { socket, prompt } = await session('unlisted question');
+      try {
+        await prompt('Yeah, automationальна.', false);
+        assert.equal(socket.sent.length, 1, 'partial must not accept the pending transfer');
+        await prompt('Yeah, automationальна.');
+        assert.deepEqual(socket.sent.map((frame) => frame.type), ['text', 'text']);
+        assert.equal(socket.sent.at(-1).token, automation);
+        await prompt('No');
+        await prompt('Enna services pandringa?');
+        assert.equal(socket.sent.at(-1).token, services);
+        await prompt('Yeah, automationальна.');
+        assert.equal(socket.sent.at(-1).token, automation);
+        await prompt('Yeah, automationальна.');
+        assert.equal(socket.sent.at(-1).token, automation);
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
+        await prompt('Yes');
+        assert.equal(socket.sent.at(-2).token, 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.');
+        assert.deepEqual(JSON.parse(socket.sent.at(-1).handoffData), { status: 'faq_transfer', faqId: 'ai_automation' });
+        assert.equal(socket.sent.filter((frame) => frame.type === 'end').length, 1);
+      } finally { socket.close(); }
+    });
+    await t.test('human-transfer NO continues and a later plain Yeah accepts only the pending human offer', async () => {
+      const { socket, prompt } = await session('unlisted question');
+      try {
+        await prompt('No');
+        await prompt('Enna services pandringa?');
+        assert.equal(socket.sent.at(-1).token, services);
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
+        await prompt('unlisted question');
+        const beforePartial = socket.sent.length;
+        await prompt('Yeah', false);
+        assert.equal(socket.sent.length, beforePartial);
+        await prompt('Yeah');
+        assert.equal(socket.sent.filter((frame) => frame.type === 'end').length, 1);
+        assert.deepEqual(JSON.parse(socket.sent.at(-1).handoffData), {
+          status: 'faq_transfer', faqId: 'human_representative'
+        });
+      } finally { socket.close(); }
     });
     for (const [question, answer] of variants) await t.test(`after setup: ${question}`, async () => {
       const { socket } = await session(question, { speechAfterSetup: true });

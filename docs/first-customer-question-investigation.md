@@ -1,5 +1,37 @@
 # First customer question: investigation status
 
+## 2026-10-26: mixed-script matcher correction
+
+New reported call: `CA67a2e5078067dde0926d47c6f738be8f`; first fallback at
+10:35:14 UTC. The later supplied transcript `Yeah, automationальна.` reproduces
+a deterministic failure: normalization previously retained the Cyrillic suffix,
+and the automation matcher required an exact automation token plus AI/question/
+service context. The same input in pending-human state instead transferred
+because `Yeah` was classified as consent before FAQ routing. These are confirmed
+local reproductions, not a reconstruction of the missing first-turn events.
+
+The matcher now recovers a complete `automation` token with a bounded Cyrillic
+suffix and recognizes short automation topic replies. Other scripts and arbitrary
+Latin substrings are not stripped. Services questions accept Tamil `என்ன` and
+`என்னென்ன` with a service token, including singular English `service`.
+Recognized services/automation topics take precedence over a leading affirmative
+in pending-transfer state; plain YES/Yeah and negative replies retain their
+existing handling. Approved answers, welcome, STT/TTS and Hand Off are unchanged.
+
+The new regressions failed before the runtime change. Afterward, 56 focused tests
+pass with zero failures/skips, including real-handler first turns before/after
+setup, exact reported mixed-script speech, repetition, partial/final handling,
+human-transfer NO/Yeah and automation NO/YES handoff frames. SDK/network/database
+dependencies are replaced in the handler tests. Actual STT/TTS playback and a live
+transfer are not verified. No deployment or paid call was performed.
+
+The exact first-turn transcript and state for 10:35:14 remain unavailable. Correct
+`Enna services pandringa?` matches on first and repeated attempts locally; this
+change must not be reported as a verified fix for that unidentified first event.
+Use the existing runtime capture procedure for that remaining investigation.
+
+---
+
 Updated production evidence: callSid `CA3a393a788a9efea092e6469187766089`,
 2026-10-26 UTC. The three times below are now known to be UTC. Earlier frames
 remain unavailable. See [the current runtime diagnostic report and capture

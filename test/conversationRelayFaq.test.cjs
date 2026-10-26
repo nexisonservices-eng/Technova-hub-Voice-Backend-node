@@ -3,6 +3,40 @@ const assert = require('node:assert/strict');
 
 const importFaq = () => import('../src/services/conversationRelayFaq.js');
 
+test('reported mixed-script automation transcript maps to the configured topic without broad substring matching', async () => {
+  const { matchFaq, normalizeFaqQuestion, classifyConfirmation } = await importFaq();
+  assert.equal(normalizeFaqQuestion('Yeah, automationальна.'), 'yeah automation');
+  for (const text of ['Yeah, automationальна.', 'AI automationальна na enna?',
+    'ஆட்டோமேஷன்', 'Automation', 'என்ன service?', 'என்னென்ன service பண்றீங்க?']) {
+    assert.equal(matchFaq(text)?.id, text.includes('service') ? 'services' : 'ai_automation', text);
+  }
+  for (const text of ['Yeah', 'No', 'automationish', 'preautomationальна',
+    'automationальныйextra', 'payroll automation', 'unrelated кириллица']) {
+    assert.equal(matchFaq(text), null, text);
+  }
+  assert.equal(classifyConfirmation('Yeah'), 'yes');
+  assert.equal(classifyConfirmation('No'), 'no');
+});
+
+test('topic-bearing affirmative speech is a FAQ question while plain YES/NO still confirms pending transfers', async () => {
+  const { createFaqState, processFaqPrompt } = await importFaq();
+  for (const offer of ['unlisted question', 'AI automation na enna?']) {
+    for (const topic of ['Yeah, automationальна.', 'Yeah, what services do you provide?']) {
+      const state = createFaqState();
+      processFaqPrompt(state, offer, { transferAvailable: true });
+      const result = processFaqPrompt(state, topic, { transferAvailable: true });
+      assert.equal(result.action, 'answer');
+      assert.equal(result.faqId, topic.includes('services') ? 'services' : 'ai_automation');
+      assert.equal(state.awaitingHumanConfirmation, false);
+    }
+    for (const [reply, action] of [['Yes', 'transfer'], ['Yeah', 'transfer'], ['No', 'answer']]) {
+      const state = createFaqState();
+      processFaqPrompt(state, offer, { transferAvailable: true });
+      assert.equal(processFaqPrompt(state, reply, { transferAvailable: true }).action, action);
+    }
+  }
+});
+
 test('welcome is a one-time ConversationRelay greeting and FAQ answers can progress through five turns', async () => {
   const { FAQ_WELCOME, FAQ_ENTRIES, createFaqState, processFaqPrompt } = await importFaq();
   const state = createFaqState('CA0123456789abcdef0123456789abcdef');

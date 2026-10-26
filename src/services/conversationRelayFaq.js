@@ -107,7 +107,11 @@ const normalize = (value) => String(value || '')
 export const normalizeFaqQuestion = (value) => {
   let text = normalize(value);
   for (const tamilName of TAMIL_NEXION_NAMES) text = text.replaceAll(tamilName, 'nexion');
-  return text;
+  // Observed STT: "automationальна". Recover the complete configured keyword
+  // only when a short Cyrillic suffix is attached. Do not strip other scripts
+  // globally or match arbitrary Latin words containing "automation".
+  return text.split(' ').map((token) => /^automation\p{Script=Cyrillic}{1,8}$/u.test(token)
+    ? 'automation' : token).join(' ');
 };
 
 export const extractConversationRelayTranscription = (message) =>
@@ -154,24 +158,31 @@ const isServiceActivityToken = (token) => [
 const isCompanyServicesQuestion = (text) => {
   const tokens = text.split(' ').filter(Boolean);
   const tokenSet = new Set(tokens);
-  const tamilOrTanglishQuestion = ['enna', 'neenga', 'ungaloda', 'ungal', 'என்ன', 'நீங்க', 'உங்களோட'].some((token) => tokenSet.has(token));
+  const tamilOrTanglishQuestion = ['enna', 'neenga', 'ungaloda', 'ungal', 'என்ன', 'என்னென்ன', 'நீங்க', 'உங்களோட'].some((token) => tokenSet.has(token));
   const englishQuestion = ['what', 'which', 'provide', 'offer', 'services'].some((token) => tokenSet.has(token));
   const hasService = tokens.some(isServiceToken);
   const hasQuestionMarker = tamilOrTanglishQuestion || tokenSet.has('what') || tokenSet.has('which');
   const hasActivity = tokens.some(isServiceActivityToken);
   const asksAboutWork = tokenSet.has('vela') && tamilOrTanglishQuestion && hasActivity;
-  return (hasService && hasQuestionMarker && (hasActivity || englishQuestion || tokenSet.has('enna'))) || asksAboutWork;
+  const asksWhat = ['enna', 'என்ன', 'என்னென்ன'].some((token) => tokenSet.has(token));
+  return (hasService && hasQuestionMarker && (hasActivity || englishQuestion || asksWhat)) || asksAboutWork;
 };
+
+const isAutomationToken = (token) => ['automation', 'automtion', 'ஆட்டோமேஷன்', 'ஆட்டோமேசன்'].includes(token);
 
 const isAiAutomationQuestion = (text) => {
   const tokens = text.split(' ').filter(Boolean);
   const tokenSet = new Set(tokens);
   const hasAi = ['ai', 'ஏஐ', 'ஏஐய', 'ஐ'].some((token) => tokenSet.has(token));
-  const hasAutomation = tokens.some((token) => token === 'automation' || token === 'automtion'
-    || token === 'ஆட்டோமேஷன்' || token === 'ஆட்டோமேசன்');
+  const hasAutomation = tokens.some(isAutomationToken);
   const hasServiceContext = tokens.some((token) => isServiceToken(token));
   const hasQuestionCue = ['enna', 'na', 'what', 'about', 'pathi', 'என்ன', 'னா', 'பத்தி'].some((token) => tokenSet.has(token));
-  return hasAutomation && (hasAi || hasServiceContext || hasQuestionCue);
+  // A short topic-only reply (including the reported "Yeah, automation...")
+  // requests this configured FAQ. "Yeah" alone remains a confirmation, and
+  // unrelated subjects such as "payroll automation" do not gain a match.
+  const shortTopic = tokens.length <= 3 && tokens.every((token) =>
+    isAutomationToken(token) || ['yeah', 'yes', 'ok', 'okay'].includes(token));
+  return hasAutomation && (hasAi || hasServiceContext || hasQuestionCue || shortTopic);
 };
 
 const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yup', 'okay', 'ok', 'sure', 'interested', 'venum', 'aamam', 'aama', 'sari']);
@@ -224,9 +235,15 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
   if (state.stage !== 'awaiting_question') return { action: 'ignored' };
   const text = String(prompt || '').trim().slice(0, 3000);
   state.turns += 1;
+  const faq = matchFaq(text);
+  const confirmation = classifyConfirmation(text);
+  // "Yeah, <recognized FAQ question>" must not be consumed as consent to
+  // transfer. Keep plain affirmatives and negative replies on the existing path.
+  const transferConfirmation = confirmation === 'yes' && ['services', 'ai_automation'].includes(faq?.id)
+    ? 'unclear' : confirmation;
 
   if (state.awaitingAutomationConfirmation) {
-    const confirmation = classifyConfirmation(text);
+    const confirmation = transferConfirmation;
     if (confirmation === 'yes') {
       state.awaitingAutomationConfirmation = false;
       if (!transferAvailable) return { action: 'answer', answer: FAQ_RESPONSES.unavailable, faqId: 'transfer_unavailable' };
@@ -241,7 +258,7 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
   }
 
   if (state.awaitingHumanConfirmation) {
-    const confirmation = classifyConfirmation(text);
+    const confirmation = transferConfirmation;
     if (confirmation === 'yes') {
       if (!transferAvailable) {
         state.awaitingHumanConfirmation = false;
@@ -255,12 +272,10 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
       return { action: 'answer', answer: FAQ_RESPONSES.noTransfer, faqId: 'declined_transfer' };
     }
     // A new question takes precedence over an ambiguous yes/no reply.
-    const followup = matchFaq(text);
-    if (!followup) return { action: 'answer', answer: FAQ_RESPONSES.clarifyTransfer, faqId: 'transfer_confirmation_unclear' };
+    if (!faq) return { action: 'answer', answer: FAQ_RESPONSES.clarifyTransfer, faqId: 'transfer_confirmation_unclear' };
     state.awaitingHumanConfirmation = false;
   }
 
-  const faq = matchFaq(text);
   if (!faq) {
     state.awaitingHumanConfirmation = true;
     return { action: 'answer', answer: FAQ_RESPONSES.unknown, faqId: 'unknown' };
