@@ -18,7 +18,7 @@ export const FAQ_ENTRIES = Object.freeze([
   {
     id: 'ai_automation',
     intent: 'AI_AUTOMATION',
-    answer: 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?',
+    answer: 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ்க்கு சில ஸ்பெஷல் ஆஃபர்ஸ் இருக்கு. அதைப் பத்தி இன்னும் டீடெயிலா தெரிஞ்சிக்க உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?',
     patterns: [
       'what is ai automation', 'what is artificial intelligence automation', 'tell me about ai automation', 'ai automation services',
       'ai automation na enna', 'ai automation pathi', 'ai automation services na enna', 'ai automation services enna pannum',
@@ -34,7 +34,7 @@ export const FAQ_ENTRIES = Object.freeze([
   {
     id: 'services',
     intent: 'COMPANY_SERVICES',
-    answer: 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம். பிசினஸ்க்கு தேவையான டெக்னாலஜி சொல்யூஷன்ஸ் கொடுக்குறோம்.',
+    answer: 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம்.',
     patterns: ['what services', 'which services', 'services do you provide', 'services do you offer', 'what do you provide', 'what do you offer', 'what do you do', 'என்னென்ன சேவைகள்', 'என்ன சேவைகள்', 'என்னென்ன சர்வீசஸ்', 'சர்வீசஸ் என்ன', 'என்னென்ன services பண்றீங்க', 'என்னென்ன services வழங்குறீங்க', 'services வழங்குறீங்க', 'enna services', 'enna service', 'services enna', 'services provide', 'services offer', 'enna services pandringa', 'enna services panringa', 'what services are you doing', 'what services does technovahub provide']
   },
   {
@@ -126,7 +126,7 @@ const levenshteinDistance = (left, right) => {
 };
 
 const isServiceToken = (token) => {
-  if (['service', 'services', 'sevies', 'servis', 'servises', 'sevice', 'சர்வீசஸ்', 'சேவைகள்', 'சேவை'].includes(token)) return true;
+  if (['service', 'services', 'sevies', 'servis', 'servises', 'sevice', 'சர்வீசஸ்', 'சர்வீஸ்', 'சர்விசஸ்', 'சேவைகள்', 'சேவை'].includes(token)) return true;
   return token.length >= 6 && Math.abs(token.length - 8) <= 2 && levenshteinDistance(token, 'services') <= 2;
 };
 
@@ -146,6 +146,16 @@ const isCompanyServicesQuestion = (text) => {
   const hasActivity = tokens.some(isServiceActivityToken);
   const asksAboutWork = tokenSet.has('vela') && tamilOrTanglishQuestion && hasActivity;
   return (hasService && hasQuestionMarker && (hasActivity || englishQuestion || tokenSet.has('enna'))) || asksAboutWork;
+};
+
+const isAiAutomationQuestion = (text) => {
+  const tokens = text.split(' ').filter(Boolean);
+  const tokenSet = new Set(tokens);
+  const hasAi = ['ai', 'ஏஐ', 'ஏஐய', 'ஐ'].some((token) => tokenSet.has(token));
+  const hasAutomation = tokens.some((token) => token === 'automation' || token === 'automtion'
+    || token === 'ஆட்டோமேஷன்' || token === 'ஆட்டோமேசன்');
+  const hasServiceContext = tokens.some((token) => isServiceToken(token));
+  return hasAutomation && (hasAi || hasServiceContext);
 };
 
 const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yup', 'okay', 'ok', 'sure', 'interested', 'venum', 'aamam', 'aama', 'sari']);
@@ -172,11 +182,10 @@ export const matchFaq = (value) => {
   }
 
   // Specific intents come first so broad services/company phrases cannot mask Automation.
-  const priority = ['human_representative', 'ai_automation'];
-  for (const id of priority) {
-    const entry = FAQ_ENTRIES.find((candidate) => candidate.id === id);
-    if (containsAny(text, entry.patterns)) return entry;
-  }
+  const automationEntry = FAQ_ENTRIES.find(({ id }) => id === 'ai_automation');
+  if (isAiAutomationQuestion(text) || containsAny(text, automationEntry.patterns)) return automationEntry;
+  const humanEntry = FAQ_ENTRIES.find(({ id }) => id === 'human_representative');
+  if (containsAny(text, humanEntry.patterns)) return humanEntry;
   if (isCompanyServicesQuestion(text)) return FAQ_ENTRIES.find(({ id }) => id === 'services');
 
   const remainingPriority = ['offers', 'repetitive_tasks', 'nexion_benefits', 'businesses', 'contact', 'services', 'nexion', 'technovahub'];
@@ -210,7 +219,7 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
     }
     if (confirmation === 'no') {
       state.awaitingAutomationConfirmation = false;
-      return { action: 'answer', answer: 'சரி, பரவாயில்லை. வேற ஏதாவது தெரிஞ்சிக்கணுமா?', faqId: 'declined_automation_transfer' };
+      return { action: 'answer', answer: 'சரி, பரவாயில்லை. வேற ஏதாவது ஹெல்ப் வேணுமா?', faqId: 'declined_automation_transfer' };
     }
     state.awaitingAutomationConfirmation = false;
   }
