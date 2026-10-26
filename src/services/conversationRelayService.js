@@ -220,12 +220,18 @@ class ConversationRelayService {
             faqId: result.faqId, chars: result.answer.length, sent
           });
         } else if (result.action === 'transfer') {
+          if (result.faqId === 'ai_automation') {
+            safeSend(socket, {
+              type: 'text', token: result.answer, lang: 'ta-IN', last: true,
+              interruptible: true, preemptible: false
+            });
+          }
           logger.info('ConversationRelay FAQ transfer requested', {
             event: 'transfer_requested', connectionId, correlationId,
             turn: currentTurn, faqId: result.faqId
           });
           finished = true;
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_transfer' }) });
+          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_transfer', faqId: result.faqId || null }) });
         } else if (result.action === 'end') {
           finished = true;
           safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });

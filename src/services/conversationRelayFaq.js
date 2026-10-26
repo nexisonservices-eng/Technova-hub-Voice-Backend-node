@@ -1,4 +1,4 @@
-export const FAQ_WELCOME = 'வணக்கம்! TechnovaHub நிறுவனத்திற்கு உங்களை அன்புடன் வரவேற்கிறோம். நான் உங்கள் AI உதவியாளர். உங்களுக்கு எப்படி உதவலாம்?';
+export const FAQ_WELCOME = 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?';
 
 const TAMIL_NEXION_NAMES = [
   '\u0ba8\u0bc6\u0b95\u0bcd\u0b9a\u0bbf\u0baf\u0ba9\u0bcd', // நெக்சியன்
@@ -16,14 +16,24 @@ const TAMIL_NEXION_QUESTION_PATTERNS = [
 
 export const FAQ_ENTRIES = Object.freeze([
   {
+    id: 'ai_automation',
+    answer: 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஸ்பெஷல் ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?',
+    patterns: [
+      'what is ai automation', 'what is artificial intelligence automation', 'tell me about ai automation', 'ai automation services',
+      'ai automation na enna', 'ai automation pathi', 'ai automation services na enna', 'ai automation services enna pannum',
+      'ai automation enna pannum', 'ai automation pathi sollunga', 'ai automation pathi sollunga',
+      'AI ஆட்டோமேஷன் என்ன', 'AI ஆட்டோமேஷன் பத்தி', 'ஆட்டோமேஷன் சர்வீசஸ் என்ன', 'AI ஆட்டோமேஷன் சர்வீசஸ்'
+    ]
+  },
+  {
     id: 'technovahub',
     answer: 'TechnovaHub என்பது நிறுவனங்களுக்கு IT Services, AI Automation மற்றும் Digital Transformation Solutions வழங்கும் ஒரு தொழில்நுட்ப நிறுவனம்.',
     patterns: ['what is technovahub', 'whats technovahub', 'tell me about technovahub', 'explain technovahub', 'technovahub na enna', 'technovahub என்றால் என்ன', 'technovahub என்ன', 'technovahub pathi']
   },
   {
     id: 'services',
-    answer: 'TechnovaHub நிறுவனத்தில் IT Services, AI Automation மற்றும் Digital Transformation Solutions வழங்குகிறோம்.',
-    patterns: ['what services', 'which services', 'services do you provide', 'services do you offer', 'what do you provide', 'what do you offer', 'what do you do', 'என்னென்ன சேவைகள்', 'என்ன சேவைகள்', 'enna services', 'enna service', 'services enna', 'services provide', 'services offer']
+    answer: 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம். பிசினஸ்க்கு தேவையான டெக்னாலஜி சொல்யூஷன்ஸ் கொடுக்குறோம்.',
+    patterns: ['what services', 'which services', 'services do you provide', 'services do you offer', 'what do you provide', 'what do you offer', 'what do you do', 'என்னென்ன சேவைகள்', 'என்ன சேவைகள்', 'என்னென்ன சர்வீசஸ்', 'சர்வீசஸ் என்ன', 'என்னென்ன services பண்றீங்க', 'என்னென்ன services வழங்குறீங்க', 'services வழங்குறீங்க', 'enna services', 'enna service', 'services enna', 'services provide', 'services offer', 'enna services pandringa', 'enna services panringa', 'what services are you doing', 'what services does technovahub provide']
   },
   {
     id: 'nexion',
@@ -124,7 +134,7 @@ export const matchFaq = (value) => {
 
   // Specific intents come first so broad phrases such as "Nexion" cannot
   // swallow benefit, automation, or contact questions.
-  const priority = ['human_representative', 'offers', 'repetitive_tasks', 'nexion_benefits', 'businesses', 'contact', 'services', 'nexion', 'technovahub'];
+  const priority = ['human_representative', 'ai_automation', 'offers', 'repetitive_tasks', 'nexion_benefits', 'businesses', 'contact', 'services', 'nexion', 'technovahub'];
   for (const id of priority) {
     const entry = FAQ_ENTRIES.find((candidate) => candidate.id === id);
     if (containsAny(text, entry.patterns)) return entry;
@@ -136,6 +146,7 @@ export const createFaqState = (callSid = '') => ({
   callSid: String(callSid || ''),
   stage: 'awaiting_question',
   awaitingHumanConfirmation: false,
+  awaitingAutomationConfirmation: false,
   turns: 0
 });
 
@@ -143,6 +154,21 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
   if (state.stage !== 'awaiting_question') return { action: 'ignored' };
   const text = String(prompt || '').trim().slice(0, 3000);
   state.turns += 1;
+
+  if (state.awaitingAutomationConfirmation) {
+    const confirmation = classifyConfirmation(text);
+    if (confirmation === 'yes') {
+      state.awaitingAutomationConfirmation = false;
+      if (!transferAvailable) return { action: 'answer', answer: FAQ_RESPONSES.unavailable, faqId: 'transfer_unavailable' };
+      state.stage = 'transferring';
+      return { action: 'transfer', answer: 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.', faqId: 'ai_automation' };
+    }
+    if (confirmation === 'no') {
+      state.awaitingAutomationConfirmation = false;
+      return { action: 'answer', answer: 'சரி, பரவாயில்லை. வேற ஏதாவது தெரிஞ்சிக்கணுமா?', faqId: 'declined_automation_transfer' };
+    }
+    state.awaitingAutomationConfirmation = false;
+  }
 
   if (state.awaitingHumanConfirmation) {
     const confirmation = classifyConfirmation(text);
@@ -178,6 +204,7 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
     state.stage = 'transferring';
     return { action: 'transfer', answer: faq.answer, faqId: faq.id };
   }
+  if (faq.id === 'ai_automation') state.awaitingAutomationConfirmation = true;
   if (faq.id === 'offers' || faq.id === 'unknown') state.awaitingHumanConfirmation = true;
   return { action: 'answer', answer: faq.answer, faqId: faq.id };
 };
@@ -187,6 +214,13 @@ export const buildFaqHandoffActions = (handoff, data = {}) => {
     return [{ type: 'say', text: FAQ_RESPONSES.goodbye }, { type: 'hangup' }];
   }
   if (handoff?.status !== 'faq_transfer') return null;
+  if (handoff.faqId === 'ai_automation') {
+    const destination = String(data.humanAgentPhoneNumber || '').trim();
+    if (data.transferOnCustomerRequest === false || !/^\+[1-9]\d{7,14}$/.test(destination)) {
+      return [{ type: 'say', text: FAQ_RESPONSES.unavailable }, { type: 'hangup' }];
+    }
+    return [{ type: 'dial', destination }];
+  }
   const destination = String(data.humanAgentPhoneNumber || '').trim();
   if (data.transferOnCustomerRequest === false || !/^\+[1-9]\d{7,14}$/.test(destination)) {
     return [{ type: 'say', text: FAQ_RESPONSES.unavailable }, { type: 'hangup' }];

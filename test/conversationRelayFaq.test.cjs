@@ -14,7 +14,7 @@ test('welcome is a one-time ConversationRelay greeting and FAQ answers can progr
     ['Can Nexion automate repetitive tasks?', 'repetitive_tasks']
   ];
 
-  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub நிறுவனத்திற்கு உங்களை அன்புடன் வரவேற்கிறோம். நான் உங்கள் AI உதவியாளர். உங்களுக்கு எப்படி உதவலாம்?');
+  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
   assert.equal(state.callSid, 'CA0123456789abcdef0123456789abcdef');
   assert.equal(state.stage, 'awaiting_question');
   for (const [question, faqId] of turns) {
@@ -30,6 +30,12 @@ test('welcome is a one-time ConversationRelay greeting and FAQ answers can progr
 test('English, Tamil and Tanglish question variants map to predefined FAQ entries', async () => {
   const { matchFaq } = await importFaq();
   const cases = [
+    ['Enna services pandringa?', 'services'],
+    ['What services does TechnovaHub provide?', 'services'],
+    ['TechnovaHub என்னென்ன services வழங்குறீங்க?', 'services'],
+    ['AI automation services na enna?', 'ai_automation'],
+    ['What is AI automation?', 'ai_automation'],
+    ['AI ஆட்டோமேஷன் சர்வீசஸ் என்ன?', 'ai_automation'],
     ['What services do you offer?', 'services'],
     ['What is Nexion?', 'nexion'],
     ['Tell me about Nexion', 'nexion'],
@@ -52,6 +58,36 @@ test('English, Tamil and Tanglish question variants map to predefined FAQ entrie
   for (const [question, expectedId] of cases) {
     assert.equal(matchFaq(question)?.id, expectedId, question);
   }
+});
+
+test('services then AI Automation offer then YES confirms and transfers; NO continues listening', async () => {
+  const { FAQ_WELCOME, createFaqState, processFaqPrompt, buildFaqHandoffActions } = await importFaq();
+  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
+  const servicesText = 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம். பிசினஸ்க்கு தேவையான டெக்னாலஜி சொல்யூஷன்ஸ் கொடுக்குறோம்.';
+  const offerText = 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஸ்பெஷல் ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?';
+  const confirmText = 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.';
+  const noText = 'சரி, பரவாயில்லை. வேற ஏதாவது தெரிஞ்சிக்கணுமா?';
+  const state = createFaqState('CA0123456789abcdef0123456789abcdef');
+  const services = processFaqPrompt(state, 'Enna services pandringa?', { transferAvailable: true });
+  assert.equal(services.answer, servicesText);
+  assert.equal(state.stage, 'awaiting_question');
+  const offer = processFaqPrompt(state, 'AI automation services na enna?', { transferAvailable: true });
+  assert.equal(offer.answer, offerText);
+  assert.equal(state.stage, 'awaiting_question');
+  const yes = processFaqPrompt(state, 'YES', { transferAvailable: true });
+  assert.equal(yes.action, 'transfer');
+  assert.equal(yes.answer, confirmText);
+  assert.deepEqual(buildFaqHandoffActions({ status: 'faq_transfer', faqId: yes.faqId }, {
+    transferOnCustomerRequest: true, humanAgentPhoneNumber: '+14155550123'
+  }), [{ type: 'dial', destination: '+14155550123' }]);
+
+  const noState = createFaqState('CAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  processFaqPrompt(noState, 'AI automation services na enna?', { transferAvailable: true });
+  const no = processFaqPrompt(noState, 'No', { transferAvailable: true });
+  assert.equal(no.action, 'answer');
+  assert.equal(no.answer, noText);
+  assert.equal(noState.stage, 'awaiting_question');
+  assert.equal(noState.awaitingAutomationConfirmation, false);
 });
 
 test('services then Nexion, reverse order, and repeated Nexion questions return Tamil answers', async () => {

@@ -61,7 +61,7 @@ test('workflow node emits ConversationRelay TwiML with language, voice and callb
   assert.match(xml, /ZhJ5LanYnCmLKQUXvsV7/);
   assert.match(xml, /language="ta-IN"/);
   assert.match(xml, /speechTimeout="2000"/);
-  assert.match(xml, /welcomeGreeting="Hello! Welcome to TechnovaHub\. I&apos;m your virtual assistant\. How may I help you today\?"/);
+  assert.match(xml, /welcomeGreeting="வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம்\. நான் உங்களோட AI ஹெல்ப்பர்\. உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்\?"/);
   assert.match(xml, /welcomeGreetingInterruptible="none"/);
   assert.match(xml, /transcriptionLanguage="multi"/);
   assert.match(xml, /transcriptionProvider="Deepgram"/);
@@ -91,7 +91,7 @@ test('ConversationRelay supports multilingual STT while preserving the configure
     transcriptionLanguage: 'multi', reportInputDuringAgentSpeech: 'none',
     welcomeGreeting: FAQ_WELCOME, welcomeGreetingInterruptible: 'none'
   });
-  assert.match(xml, /welcomeGreeting="Hello! Welcome to TechnovaHub\. I&apos;m your virtual assistant\. How may I help you today\?"/);
+  assert.match(xml, /welcomeGreeting="வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம்\. நான் உங்களோட AI ஹெல்ப்பர்\. உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்\?"/);
   assert.match(xml, /welcomeGreetingInterruptible="none"/);
   assert.match(xml, /voice="ZhJ5LanYnCmLKQUXvsV7"/);
   assert.match(xml, /ttsProvider="ElevenLabs"/);
