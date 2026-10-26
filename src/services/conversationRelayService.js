@@ -9,6 +9,7 @@ import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
 import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
 import {
+  FAQ_ENTRIES,
   createFaqState,
   extractConversationRelayTranscription,
   normalizeFaqQuestion,
@@ -90,6 +91,7 @@ class ConversationRelayService {
     let workflowConfig = null;
     let relaySession = null;
     let turnNumber = 0;
+    let customerTurnNumber = 0;
     let finished = false;
     let timer = null;
     let setupStage = 'tenant_authorization';
@@ -166,6 +168,12 @@ class ConversationRelayService {
             sessionIdPresent: Boolean(message.sessionId), stage: 'setup'
           });
           faqState = createFaqState(binding.callSid);
+          logger.info('ConversationRelay FAQ configuration ready', {
+            event: 'faq_configuration_ready', connectionId, correlationId,
+            faqCount: FAQ_ENTRIES.length, workflowId, nodeId,
+            stage: faqState.stage, awaitingHumanConfirmation: false,
+            awaitingAutomationConfirmation: false, handler: 'node_predefined_faq_v1'
+          });
           logger.info('ConversationRelay FAQ session ready', {
             event: 'faq_session_ready', connectionId, correlationId,
             welcomeConfigured: true, stage: faqState.stage
@@ -198,6 +206,15 @@ class ConversationRelayService {
           event: 'normalized_prompt', connectionId, correlationId, turn: currentTurn,
           normalizedTranscription: redactFaqDiagnosticText(normalizedPrompt)
         });
+        logger.info('ConversationRelay transcription received', {
+          event: 'transcription_received', connectionId, correlationId, turn: currentTurn,
+          final: message.last === true, chars: promptText.length,
+          transcription: redactFaqDiagnosticText(promptText)
+        });
+        logger.info('ConversationRelay transcription normalized', {
+          event: 'normalized_transcription', connectionId, correlationId, turn: currentTurn,
+          transcription: redactFaqDiagnosticText(normalizedPrompt)
+        });
         if (message.last !== true) {
           logger.info('ConversationRelay partial prompt ignored by script state machine', {
             connectionId, correlationId, turn: currentTurn, stage: 'prompt_partial'
@@ -215,6 +232,24 @@ class ConversationRelayService {
           });
           return;
         }
+        // An empty/noise-only final frame is not a customer question. In
+        // particular, it must not create a handoff offer just after the welcome.
+        if (!normalizedPrompt) {
+          logger.info('ConversationRelay empty final transcription ignored', {
+            event: 'fallback_reason', connectionId, correlationId, turn: currentTurn,
+            reason: 'empty_final_transcription_ignored', fallbackSent: false
+          });
+          return;
+        }
+        customerTurnNumber += 1;
+        if (customerTurnNumber === 1) {
+          logger.info('ConversationRelay first customer turn received', {
+            event: 'first_turn_received', connectionId, correlationId, turn: currentTurn,
+            customerTurn: customerTurnNumber, faqReady: Boolean(faqState),
+            stage: faqState.stage, awaitingHumanConfirmation: faqState.awaitingHumanConfirmation,
+            awaitingAutomationConfirmation: faqState.awaitingAutomationConfirmation
+          });
+        }
         const text = promptText;
         const transferDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
         const transferAvailable = data.transferOnCustomerRequest !== false
@@ -224,6 +259,13 @@ class ConversationRelayService {
           send: (payload) => safeSend(socket, payload)
         });
         const matchedIntent = result.matchedIntent;
+        logger.info('ConversationRelay FAQ match result', {
+          event: 'faq_match_result', connectionId, correlationId, turn: currentTurn,
+          customerTurn: customerTurnNumber, faqId: result.faqId || null,
+          matchedIntent, action: result.action, stage: faqState.stage,
+          awaitingHumanConfirmation: faqState.awaitingHumanConfirmation,
+          awaitingAutomationConfirmation: faqState.awaitingAutomationConfirmation
+        });
         logger.info('ConversationRelay FAQ prompt matched', {
           event: 'faq_matched', connectionId, correlationId, turn: currentTurn,
           faqId: result.faqId || null, matchedIntent, action: result.action,
@@ -241,6 +283,11 @@ class ConversationRelayService {
           action: result.action
         });
         if (['unknown', 'transfer_confirmation_unclear'].includes(result.faqId)) {
+          logger.warn('ConversationRelay fallback reason', {
+            event: 'fallback_reason', connectionId, correlationId, turn: currentTurn,
+            customerTurn: customerTurnNumber,
+            reason: result.faqId === 'unknown' ? 'no_faq_intent_match' : 'transfer_confirmation_unclear'
+          });
           logger.warn('ConversationRelay FAQ fallback selected', {
             event: 'faq_fallback_reason', connectionId, correlationId, turn: currentTurn,
             reason: result.faqId === 'unknown' ? (normalizedPrompt ? 'no_faq_intent_match' : 'empty_transcription')
@@ -315,6 +362,10 @@ class ConversationRelayService {
       const handoffDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
       validateAgentConfig(data, handoffDestination.destination);
       relaySession = createRelaySessionContext({ userId, workflowId, nodeId });
+      logger.info('ConversationRelay session initialized', {
+        event: 'session_initialized', connectionId, correlationId, workflowId, nodeId,
+        handler: 'node_predefined_faq_v1', stage: 'awaiting_setup'
+      });
       logger.info('ConversationRelay tenant workflow authorized', {
         connectionId, correlationId, language: data.language, voice: data.voiceSelection
       });

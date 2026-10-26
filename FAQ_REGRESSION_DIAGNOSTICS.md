@@ -1,9 +1,17 @@
 # Live FAQ investigation
 
-The reported production fallback was not reproduced with the current local matcher.
-Both approved Tamil answers, their requested language variants, and the YES
-confirmation already exist. No FAQ selection or transfer behavior was changed.
-Do not describe this patch as a confirmed production fix.
+The real WebSocket handler reproduces an unsolicited fallback when an empty final
+prompt arrives before the first customer question. That frame previously entered
+`processFaqPrompt`, selected `unknown`, and set `awaitingHumanConfirmation`.
+The handler now ignores empty/noise-only final transcriptions without changing
+FAQ state. The regression test fails before this guard and passes after it.
+
+The reported first-question failure itself is still not reproduced: all seven
+requested nonempty transcription variants already answer correctly on turn one,
+including while workflow authorization and setup association are delayed. This
+proves neither a production empty-frame cause nor the identity of the deployed
+handler. Production logs are still required before claiming the live issue fixed.
+Approved FAQ answers and all transfer behavior remain unchanged.
 
 ## Response path in this checkout
 
@@ -40,6 +48,12 @@ For one already-observed failing call, provide:
 - Each turn's `prompt_received` (including `last`, chars, language and redacted
   transcription), `normalized_prompt`, `faq_matched`, `response_selected`,
   `response_sent`, and `faq_fallback_reason`.
+- New first-turn events: `session_initialized`, `faq_configuration_ready`,
+  `first_turn_received`, `transcription_received`, `normalized_transcription`,
+  `faq_match_result`, and `fallback_reason`. Initialization records include
+  `handler: node_predefined_faq_v1`; first-turn records expose pending flags.
+  Compare both occurrences' redacted transcription, normalization, FAQ result,
+  and response. Check whether an empty final frame preceded the question.
 - Any `prompt_partial`, `prompt_without_setup`, queue errors, handler errors,
   send failures, Twilio relay errors, or WebSocket close events for that session.
 
@@ -52,11 +66,28 @@ Do not share authorization headers, tokens, raw WebSocket URLs, or phone numbers
 
 ## Local validation and deployment
 
-Before these changes, FAQ tests: 12 passed, 0 failed; the existing integration
-test skipped because Twilio/Express dependencies were unavailable. Dependency
-installation failed in the sandbox; the subsequent installation request was
-denied. Execution of the expanded test suite was also denied. The new assertions
-and credential-redaction changes therefore remain unverified.
+The current focused run passed 31 tests, with zero failures and zero skips:
+
+```sh
+node --test --test-isolation=none test/conversationRelayFirstTurn.test.cjs test/conversationRelayFaq.test.cjs test/conversationRelaySession.test.cjs test/conversationRelayTransfer.test.cjs
+```
+
+`conversationRelayFirstTurn.test.cjs` uses Node 24 synchronous module hooks to
+replace external SDKs, models, credential lookup and logging. It executes the
+actual production WebSocket service, frame queue, session binding, FAQ state,
+matcher and response frames. Workflow/setup lookups are deliberately held pending
+while setup, partial and final frames arrive. It checks welcome TwiML, all seven
+first-question variants, identical repeated questions, empty finals, NO/recovery,
+YES gating, diagnostic ordering and pending flags. It does not exercise real
+WebSocket networking, Twilio speech playback, or a production database.
+
+The broader protocol run had 8 passes and 1 pre-existing failure:
+`discount YES handoff is distinct from discount NO completion` reads
+`sent[0].handoffData`, but `sent[0]` is the confirmation text frame. The existing
+transfer code and that test were left unchanged.
+
+The dependency-backed live integration test remains blocked by unavailable
+Twilio/Express dependencies; installation was denied. It is not counted as passed.
 
 The expanded integration test requires installed dependencies rather than
 silently skipping. It simulates all requested language variants, partial and
@@ -70,7 +101,8 @@ In the Node project, install dependencies with `npm ci --ignore-scripts`, then r
 node --test test/conversationRelayFaq.test.cjs test/conversationRelayLiveIntegration.test.cjs test/conversationRelayProtocol.test.cjs test/conversationRelaySession.test.cjs test/conversationRelayTransfer.test.cjs test/conversationRelay.test.cjs
 ```
 
-After tests pass, review only the FAQ diagnostics and tests, then manually deploy
+After dependency-backed tests pass, review the empty-final guard, FAQ diagnostics
+and tests, then manually deploy
 the reviewed commit to the existing Node Render service using its existing build
 and start commands. No environment, frontend, Python, workflow, voice, or transfer
 configuration change is needed. The checked-in Render blueprint enables automatic
