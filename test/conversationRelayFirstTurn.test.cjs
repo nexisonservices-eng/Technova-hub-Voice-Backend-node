@@ -56,7 +56,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       welcomeGreeting: FAQ_WELCOME, language: 'ta-IN', voice: 'ZhJ5LanYnCmLKQUXvsV7'
     }).includes(`welcomeGreeting="${FAQ_WELCOME}"`));
 
-    async function session(question, { blankFinal = false } = {}) {
+    async function session(question, { blankFinal = false, interrupt = false } = {}) {
       logs.length = 0;
       const workflowGate = deferred();
       const setupGate = deferred();
@@ -87,6 +87,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         url: '/ws/conversation-relay?userId=tenant&workflowId=workflow&nodeId=agent'
       });
       frame({ type: 'setup', callSid: CALL, sessionId: 'test-session' });
+      if (interrupt) frame({ type: 'interrupt', utteranceUntilInterrupt: 'Welcome', durationUntilInterruptMs: 100 });
       if (blankFinal) frame({ type: 'prompt', voicePrompt: '', last: true });
       frame({ type: 'prompt', voicePrompt: question, lang: 'ta-IN', last: false });
       frame({ type: 'prompt', voicePrompt: question, lang: 'ta-IN', last: true });
@@ -103,6 +104,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
     }
 
     const variants = [
+      ['Enna services pandringa?', services],
       ['Enna service pandringa?', services], ['Enna service panreenga?', services],
       ['என்ன சர்வீசஸ் பண்றீங்க?', services], ['What services do you provide?', services],
       ['AI automation na enna?', automation], ['ஏஐ ஆட்டோமேஷன் என்ன?', automation],
@@ -135,6 +137,37 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       const { socket } = await session('Enna service pandringa?', { blankFinal: true });
       try { assert.deepEqual(socket.sent.map((frame) => frame.token), [services]); }
       finally { socket.close(); }
+    });
+    // The actual pre-09:34:38 frames are unavailable. This is a control for
+    // the reported wording and an interrupt event, not a production replay.
+    await t.test('reported services wording after interrupt matches on the first final without a pending offer', async () => {
+      const question = 'Enna services pandringa?';
+      const { socket, prompt } = await session(question, { interrupt: true });
+      try {
+        assert.deepEqual(socket.sent.map((frame) => frame.token), [services]);
+        const partial = logs.find((entry) => entry.event === 'prompt_received' && !entry.last);
+        const final = logs.find((entry) => entry.event === 'prompt_received' && entry.last);
+        assert.equal(partial.receivedTranscription, question);
+        assert.equal(final.receivedTranscription, question);
+        assert.ok(partial.turn < final.turn);
+        assert.equal(logs.find((entry) => entry.event === 'normalized_prompt' && entry.turn === final.turn)
+          .normalizedTranscription, 'enna services pandringa');
+        const matches = logs.filter((entry) => entry.event === 'faq_match_result');
+        assert.equal(matches.length, 1, 'partial and interrupt events must not route a question');
+        assert.equal(matches[0].turn, final.turn);
+        assert.equal(matches[0].customerTurn, 1);
+        assert.equal(matches[0].faqId, 'services');
+        assert.equal(matches[0].awaitingHumanConfirmation, false);
+        assert.equal(matches[0].awaitingAutomationConfirmation, false);
+        assert.equal(logs.find((entry) => entry.event === 'response_selected').selectedResponse, services);
+        assert.equal(logs.some((entry) => ['fallback_reason', 'faq_fallback_reason'].includes(entry.event)), false);
+        await prompt('No');
+        assert.notEqual(logs.filter((entry) => entry.event === 'faq_match_result').at(-1).faqId,
+          'declined_transfer', 'services alone must not leave a human-transfer offer pending');
+        await prompt(question);
+        assert.equal(socket.sent.at(-1).token, services);
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
+      } finally { socket.close(); }
     });
     await t.test('NO continues, YES transfers only with a pending offer', async () => {
       const { socket, prompt } = await session('Enna service pandringa?');
