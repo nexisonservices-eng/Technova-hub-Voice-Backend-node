@@ -28,7 +28,7 @@ test('welcome is a one-time ConversationRelay greeting and FAQ answers can progr
 });
 
 test('English, Tamil and Tanglish question variants map to predefined FAQ entries', async () => {
-  const { matchFaq } = await importFaq();
+  const { matchFaq, normalizeFaqQuestion } = await importFaq();
   const cases = [
     ['Enna services pandringa?', 'services'],
     ['What services does TechnovaHub provide?', 'services'],
@@ -58,13 +58,65 @@ test('English, Tamil and Tanglish question variants map to predefined FAQ entrie
   for (const [question, expectedId] of cases) {
     assert.equal(matchFaq(question)?.id, expectedId, question);
   }
+  const companyServiceSamples = [
+    'Enna services pandringa',
+    'Enna sevies apndrings',
+    'Neenga enna service panreenga',
+    'என்ன சர்வீசஸ் பண்றீங்க',
+    'What services do you provide?'
+  ];
+  for (const question of companyServiceSamples) {
+    assert.equal(matchFaq(question)?.intent, 'COMPANY_SERVICES', question);
+  }
+  assert.equal(normalizeFaqQuestion('  ENNA,   SEVIES apndrings?!  '), 'enna sevies apndrings');
+});
+
+test('live ConversationRelay handler uses the matcher for five service phrasings and keeps the call flow ordered', async () => {
+  const { FAQ_WELCOME, createFaqState, processLiveConversationRelayFaqTurn } = await importFaq();
+  const servicesAnswer = 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம். பிசினஸ்க்கு தேவையான டெக்னாலஜி சொல்யூஷன்ஸ் கொடுக்குறோம்.';
+  const automationAnswer = 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?';
+  const yesAnswer = 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.';
+  const samples = [
+    'Enna services pandringa', 'Enna sevies apndrings', 'Neenga enna service panreenga',
+    'என்ன சர்வீசஸ் பண்றீங்க', 'What services do you provide?'
+  ];
+
+  for (const transcription of samples) {
+    const outgoing = [];
+    const result = processLiveConversationRelayFaqTurn(createFaqState('CA-test'), transcription, {
+      transferAvailable: true, send: (message) => { outgoing.push(message); return true; }
+    });
+    assert.equal(result.matchedIntent, 'COMPANY_SERVICES');
+    assert.equal(result.action, 'answer');
+    assert.equal(result.responseStatus, 'spoken');
+    assert.deepEqual(outgoing.map(({ type, token }) => ({ type, token })), [{ type: 'text', token: servicesAnswer }]);
+  }
+
+  assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
+  const outgoing = [];
+  const state = createFaqState('CA-sequence');
+  const send = (message) => { outgoing.push(message); return true; };
+  const services = processLiveConversationRelayFaqTurn(state, 'Enna services pandringa?', { transferAvailable: true, send });
+  const automation = processLiveConversationRelayFaqTurn(state, 'AI automation services na enna?', { transferAvailable: true, send });
+  const yes = processLiveConversationRelayFaqTurn(state, 'Yes', { transferAvailable: true, send });
+  assert.equal(services.matchedIntent, 'COMPANY_SERVICES');
+  assert.equal(services.action, 'answer');
+  assert.equal(automation.matchedIntent, 'AI_AUTOMATION');
+  assert.equal(automation.action, 'answer');
+  assert.equal(yes.action, 'transfer');
+  assert.equal(yes.responseStatus, 'transfer_requested');
+  assert.deepEqual(outgoing.map((message) => message.type), ['text', 'text', 'text', 'end']);
+  assert.deepEqual(JSON.parse(outgoing[3].handoffData), { status: 'faq_transfer', faqId: 'ai_automation' });
+  assert.equal(outgoing[0].token, servicesAnswer);
+  assert.equal(outgoing[1].token, automationAnswer);
+  assert.equal(outgoing[2].token, yesAnswer);
 });
 
 test('services then AI Automation offer then YES confirms and transfers; NO continues listening', async () => {
   const { FAQ_WELCOME, createFaqState, processFaqPrompt, buildFaqHandoffActions } = await importFaq();
   assert.equal(FAQ_WELCOME, 'வணக்கம்! TechnovaHub-க்கு உங்களை வரவேற்கிறோம். நான் உங்களோட AI ஹெல்ப்பர். உங்களுக்கு எப்படி ஹெல்ப் பண்ணலாம்?');
   const servicesText = 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம். பிசினஸ்க்கு தேவையான டெக்னாலஜி சொல்யூஷன்ஸ் கொடுக்குறோம்.';
-  const offerText = 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஸ்பெஷல் ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?';
+  const offerText = 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?';
   const confirmText = 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.';
   const noText = 'சரி, பரவாயில்லை. வேற ஏதாவது தெரிஞ்சிக்கணுமா?';
   const state = createFaqState('CA0123456789abcdef0123456789abcdef');

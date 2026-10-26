@@ -8,7 +8,7 @@ import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
 import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
-import { createFaqState, processFaqPrompt } from './conversationRelayFaq.js';
+import { createFaqState, normalizeFaqQuestion, processLiveConversationRelayFaqTurn } from './conversationRelayFaq.js';
 import {
   bindRelaySetupCallSid,
   createRelaySessionContext,
@@ -204,37 +204,38 @@ class ConversationRelayService {
         const text = typeof message.voicePrompt === 'string' ? message.voicePrompt.trim().slice(0, 3000) : '';
         const transferAvailable = data.transferOnCustomerRequest !== false
           && /^\+[1-9]\d{7,14}$/.test(String(data.humanAgentPhoneNumber || '').trim());
-        const result = processFaqPrompt(faqState, text, { transferAvailable });
+        const result = processLiveConversationRelayFaqTurn(faqState, text, {
+          transferAvailable,
+          send: (payload) => safeSend(socket, payload)
+        });
+        const matchedIntent = result.matchedIntent;
         logger.info('ConversationRelay FAQ prompt matched', {
           event: 'faq_matched', connectionId, correlationId, turn: currentTurn,
-          faqId: result.faqId || null, action: result.action,
-          chars: text.length
+          faqId: result.faqId || null, matchedIntent, action: result.action,
+          responseStatus: result.responseStatus,
+          chars: text.length,
+          ...(process.env.NODE_ENV === 'production' ? {} : {
+            transcription: text,
+            normalizedText: normalizeFaqQuestion(text)
+          })
         });
         if (result.action === 'answer') {
-          const sent = safeSend(socket, {
-            type: 'text', token: result.answer, lang: 'ta-IN', last: true,
-            interruptible: true, preemptible: false
-          });
           logger.info('ConversationRelay FAQ response sent', {
             event: 'response_sent', connectionId, correlationId, turn: currentTurn,
-            faqId: result.faqId, chars: result.answer.length, sent
+            faqId: result.faqId, matchedIntent, chars: result.answer.length,
+            sent: result.responseStatus === 'spoken', responseStatus: result.responseStatus
           });
         } else if (result.action === 'transfer') {
-          if (result.faqId === 'ai_automation') {
-            safeSend(socket, {
-              type: 'text', token: result.answer, lang: 'ta-IN', last: true,
-              interruptible: true, preemptible: false
-            });
-          }
           logger.info('ConversationRelay FAQ transfer requested', {
             event: 'transfer_requested', connectionId, correlationId,
-            turn: currentTurn, faqId: result.faqId
+            turn: currentTurn, faqId: result.faqId, matchedIntent,
+            responseStatus: result.responseStatus,
+            confirmationSent: result.faqId === 'ai_automation' ? result.confirmationSent : undefined,
+            handoffSent: result.handoffSent
           });
           finished = true;
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_transfer', faqId: result.faqId || null }) });
         } else if (result.action === 'end') {
           finished = true;
-          safeSend(socket, { type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });
         }
       } catch (error) {
         logger.error('ConversationRelay message handler failed', {

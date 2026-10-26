@@ -17,7 +17,8 @@ const TAMIL_NEXION_QUESTION_PATTERNS = [
 export const FAQ_ENTRIES = Object.freeze([
   {
     id: 'ai_automation',
-    answer: 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஸ்பெஷல் ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?',
+    intent: 'AI_AUTOMATION',
+    answer: 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ் பத்தியும், அதுக்கான ஆஃபர்ஸ் பத்தியும் எங்க டீம் கிட்ட டீடெயிலா தெரிஞ்சிக்கலாம். உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?',
     patterns: [
       'what is ai automation', 'what is artificial intelligence automation', 'tell me about ai automation', 'ai automation services',
       'ai automation na enna', 'ai automation pathi', 'ai automation services na enna', 'ai automation services enna pannum',
@@ -32,6 +33,7 @@ export const FAQ_ENTRIES = Object.freeze([
   },
   {
     id: 'services',
+    intent: 'COMPANY_SERVICES',
     answer: 'நம்ம TechnovaHub-ல IT சர்வீசஸ், AI ஆட்டோமேஷன், டிஜிட்டல் டிரான்ஸ்ஃபர்மேஷன் சர்வீசஸ் எல்லாம் பண்ணிட்டு இருக்கோம். பிசினஸ்க்கு தேவையான டெக்னாலஜி சொல்யூஷன்ஸ் கொடுக்குறோம்.',
     patterns: ['what services', 'which services', 'services do you provide', 'services do you offer', 'what do you provide', 'what do you offer', 'what do you do', 'என்னென்ன சேவைகள்', 'என்ன சேவைகள்', 'என்னென்ன சர்வீசஸ்', 'சர்வீசஸ் என்ன', 'என்னென்ன services பண்றீங்க', 'என்னென்ன services வழங்குறீங்க', 'services வழங்குறீங்க', 'enna services', 'enna service', 'services enna', 'services provide', 'services offer', 'enna services pandringa', 'enna services panringa', 'what services are you doing', 'what services does technovahub provide']
   },
@@ -102,13 +104,50 @@ const normalize = (value) => String(value || '')
   .replace(/\bnexian\b/g, 'nexion')
   .replace(/\bnexon\b/g, 'nexion');
 
-const normalizeQuestion = (value) => {
+export const normalizeFaqQuestion = (value) => {
   let text = normalize(value);
   for (const tamilName of TAMIL_NEXION_NAMES) text = text.replaceAll(tamilName, 'nexion');
   return text;
 };
 
 const containsAny = (text, phrases) => phrases.some((phrase) => text.includes(normalize(phrase)));
+const levenshteinDistance = (left, right) => {
+  const row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const above = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (left[i - 1] === right[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return row[right.length];
+};
+
+const isServiceToken = (token) => {
+  if (['service', 'services', 'sevies', 'servis', 'servises', 'sevice', 'சர்வீசஸ்', 'சேவைகள்', 'சேவை'].includes(token)) return true;
+  return token.length >= 6 && Math.abs(token.length - 8) <= 2 && levenshteinDistance(token, 'services') <= 2;
+};
+
+const isServiceActivityToken = (token) => [
+  'provide', 'provides', 'offering', 'offer', 'offers', 'doing', 'do', 'pandringa', 'pandringe',
+  'panringa', 'panreenga', 'panreenga', 'pannreenga', 'apndrings', 'apandrings', 'pandrings',
+  'பண்றீங்க', 'பண்ணுறீங்க', 'பண்ணறீங்க', 'வழங்குறீங்க', 'வழங்குகிறீர்கள்'
+].includes(token);
+
+const isCompanyServicesQuestion = (text) => {
+  const tokens = text.split(' ').filter(Boolean);
+  const tokenSet = new Set(tokens);
+  const tamilOrTanglishQuestion = ['enna', 'neenga', 'ungaloda', 'ungal', 'என்ன', 'நீங்க', 'உங்களோட'].some((token) => tokenSet.has(token));
+  const englishQuestion = ['what', 'which', 'provide', 'offer', 'services'].some((token) => tokenSet.has(token));
+  const hasService = tokens.some(isServiceToken);
+  const hasQuestionMarker = tamilOrTanglishQuestion || tokenSet.has('what') || tokenSet.has('which');
+  const hasActivity = tokens.some(isServiceActivityToken);
+  const asksAboutWork = tokenSet.has('vela') && tamilOrTanglishQuestion && hasActivity;
+  return (hasService && hasQuestionMarker && (hasActivity || englishQuestion || tokenSet.has('enna'))) || asksAboutWork;
+};
+
 const YES_WORDS = new Set(['yes', 'yeah', 'yep', 'yup', 'okay', 'ok', 'sure', 'interested', 'venum', 'aamam', 'aama', 'sari']);
 const NO_WORDS = new Set(['no', 'nope', 'illa', 'vendam']);
 
@@ -123,7 +162,7 @@ export const classifyConfirmation = (value) => {
 };
 
 export const matchFaq = (value) => {
-  const text = normalizeQuestion(value);
+  const text = normalizeFaqQuestion(value);
   if (!text) return null;
   if (containsAny(text, ['goodbye', 'bye bye', 'bye', 'hang up', 'end the call', 'நான் போகிறேன்', 'போயிட்டு வரேன்'])) {
     return { id: 'goodbye', answer: FAQ_RESPONSES.goodbye, endCall: true };
@@ -132,10 +171,16 @@ export const matchFaq = (value) => {
     return FAQ_ENTRIES.find(({ id }) => id === 'thanks');
   }
 
-  // Specific intents come first so broad phrases such as "Nexion" cannot
-  // swallow benefit, automation, or contact questions.
-  const priority = ['human_representative', 'ai_automation', 'offers', 'repetitive_tasks', 'nexion_benefits', 'businesses', 'contact', 'services', 'nexion', 'technovahub'];
+  // Specific intents come first so broad services/company phrases cannot mask Automation.
+  const priority = ['human_representative', 'ai_automation'];
   for (const id of priority) {
+    const entry = FAQ_ENTRIES.find((candidate) => candidate.id === id);
+    if (containsAny(text, entry.patterns)) return entry;
+  }
+  if (isCompanyServicesQuestion(text)) return FAQ_ENTRIES.find(({ id }) => id === 'services');
+
+  const remainingPriority = ['offers', 'repetitive_tasks', 'nexion_benefits', 'businesses', 'contact', 'services', 'nexion', 'technovahub'];
+  for (const id of remainingPriority) {
     const entry = FAQ_ENTRIES.find((candidate) => candidate.id === id);
     if (containsAny(text, entry.patterns)) return entry;
   }
@@ -207,6 +252,34 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
   if (faq.id === 'ai_automation') state.awaitingAutomationConfirmation = true;
   if (faq.id === 'offers' || faq.id === 'unknown') state.awaitingHumanConfirmation = true;
   return { action: 'answer', answer: faq.answer, faqId: faq.id };
+};
+
+// Shared by the authenticated live WebSocket handler and the route-level tests.
+export const processLiveConversationRelayFaqTurn = (state, prompt, { transferAvailable, send }) => {
+  const baseResult = processFaqPrompt(state, prompt, { transferAvailable });
+  const matchedIntent = FAQ_ENTRIES.find(({ id }) => id === baseResult.faqId)?.intent
+    || String(baseResult.faqId || 'unknown').toUpperCase();
+  const result = { ...baseResult, matchedIntent };
+  if (result.action === 'answer') {
+    const sent = send({ type: 'text', token: result.answer, lang: 'ta-IN', last: true, interruptible: true, preemptible: false });
+    return { ...result, responseStatus: sent ? 'spoken' : 'send_failed' };
+  }
+  if (result.action === 'transfer') {
+    let confirmationSent = true;
+    if (result.faqId === 'ai_automation') {
+      confirmationSent = send({ type: 'text', token: result.answer, lang: 'ta-IN', last: true, interruptible: true, preemptible: false });
+    }
+    const handoffSent = send({
+      type: 'end',
+      handoffData: JSON.stringify({ status: 'faq_transfer', faqId: result.faqId || null })
+    });
+    return { ...result, confirmationSent, handoffSent, responseStatus: 'transfer_requested' };
+  }
+  if (result.action === 'end') {
+    const sent = send({ type: 'end', handoffData: JSON.stringify({ status: 'faq_goodbye' }) });
+    return { ...result, responseStatus: sent ? 'end_requested' : 'send_failed' };
+  }
+  return { ...result, responseStatus: 'no_response' };
 };
 
 export const buildFaqHandoffActions = (handoff, data = {}) => {
