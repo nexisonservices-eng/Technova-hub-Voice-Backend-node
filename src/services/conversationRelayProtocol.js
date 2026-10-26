@@ -60,6 +60,9 @@ export const processRelayPrompt = async ({
     onAIResult(result);
 
     if (shouldTransfer(result)) {
+      if (String(result.intent || '').toLowerCase() === 'discount_yes') {
+        send(buildTextTokenMessage(answer));
+      }
       send({ type: 'end', handoffData: JSON.stringify({ status: 'transfer', intent: result.intent }) });
       onStage('transfer_requested', { intent: result.intent });
       return { status: 'transfer', result };

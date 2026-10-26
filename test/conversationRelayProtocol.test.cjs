@@ -140,6 +140,29 @@ test('discount YES handoff is distinct from discount NO completion', async () =>
   assert.deepEqual(JSON.parse(sent[1].handoffData), { status: 'completed', reason: 'discount-declined' });
 });
 
+test('AI Automation YES is spoken before the existing transfer handoff; NO keeps the turn open', async () => {
+  const { processRelayPrompt } = await importProtocol();
+  const sent = [];
+  const yesText = 'சரி! ஒரு நிமிஷம் வெயிட் பண்ணுங்க. உங்களை எங்க டீம் கூட கனெக்ட் பண்றேன்.';
+  const yes = await processRelayPrompt({
+    message: { type: 'prompt', voicePrompt: 'Yes', last: true }, callSid: 'CA-example',
+    requestAI: async () => ({ response: yesText, intent: 'discount_yes' }),
+    shouldTransfer: () => true, send: (payload) => { sent.push(payload); return true; }
+  });
+  assert.equal(yes.status, 'transfer');
+  assert.deepEqual(sent.map((item) => item.type), ['text', 'end']);
+  assert.equal(sent[0].token, yesText);
+  assert.deepEqual(JSON.parse(sent[1].handoffData), { status: 'transfer', intent: 'discount_yes' });
+
+  const no = await processRelayPrompt({
+    message: { type: 'prompt', voicePrompt: 'No', last: true }, callSid: 'CA-example',
+    requestAI: async () => ({ response: 'சரி, பரவாயில்லை. வேற ஏதாவது தெரிஞ்சிக்கணுமா?', intent: 'continue' }),
+    shouldTransfer: () => false, send: (payload) => { sent.push(payload); return true; }
+  });
+  assert.equal(no.status, 'spoken');
+  assert.equal(sent[2].type, 'text');
+});
+
 test('Python AI endpoint resolution uses the service URL configured for Render', async () => {
   const { resolveConversationAIBaseUrl } = await importAIUrl();
   assert.equal(resolveConversationAIBaseUrl({ NODE_ENV: 'production', PYTHON_TTS_BASE_URL: 'https://python.example.test/' }), 'https://python.example.test');
