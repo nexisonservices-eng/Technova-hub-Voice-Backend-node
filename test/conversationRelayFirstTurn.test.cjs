@@ -110,6 +110,42 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       return { socket, prompt, frame };
     }
 
+    await t.test('enabled NLP routes multilingual first finals once and blocks embedded consent', async () => {
+      const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      let socket;
+      try {
+        const active = await session('என்ன சேவைகள் செய்கிறீர்கள்?', { speechAfterSetup: true });
+        socket = active.socket;
+        const { prompt } = active;
+        assert.deepEqual(socket.sent.map((frame) => frame.token), [services]);
+        await prompt('ஏஐ ஆட்டோமேஷன் என்றால் என்ன?', false);
+        assert.equal(socket.sent.length, 1);
+        await prompt('ஏஐ ஆட்டோமேஷன் என்றால் என்ன?');
+        assert.equal(socket.sent.at(-1).token, automation);
+        await prompt('Yeah can you explain my mortgage');
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
+        await prompt('Enna services pandringa?');
+        await prompt('Enna services pandringa?');
+        assert.deepEqual(socket.sent.slice(-2).map((frame) => frame.token), [services, services]);
+        const detected = logs.filter((entry) => entry.event === 'relay_intent_recognized');
+        assert.equal(detected[0].intent, 'COMPANY_SERVICES');
+        assert.ok(detected.every((entry) => entry.processingLatencyMs >= 0));
+        const logged = JSON.stringify(logs);
+        assert.equal(logged.includes('mortgage'), false);
+        await prompt('unlisted question');
+        await prompt('No');
+        await prompt('AI automation na enna?');
+        await prompt('Yes');
+        await prompt('Yes');
+        assert.equal(socket.sent.filter((frame) => frame.type === 'end').length, 1);
+      } finally {
+        socket?.close();
+        if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = oldFlag;
+      }
+    });
+
     const variants = [
       ['Yeah, automationальна.', automation],
       ['AI automationальна na enna?', automation],

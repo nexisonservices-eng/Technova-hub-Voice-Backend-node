@@ -130,7 +130,7 @@ export const redactFaqDiagnosticText = (value) => String(value || '')
   .slice(0, 300);
 
 const containsAny = (text, phrases) => phrases.some((phrase) => text.includes(normalize(phrase)));
-const levenshteinDistance = (left, right) => {
+export const levenshteinDistance = (left, right) => {
   const row = Array.from({ length: right.length + 1 }, (_, index) => index);
   for (let i = 1; i <= left.length; i += 1) {
     let diagonal = row[0];
@@ -198,6 +198,16 @@ export const classifyConfirmation = (value) => {
   return yes ? 'yes' : 'no';
 };
 
+// Optional NLP mode accepts consent only as a complete reply. Never infer
+// consent from an affirmative embedded in an unrecognized customer question.
+export const isStandaloneConfirmation = (value) => {
+  const text = normalize(value);
+  if (text === 'not interested') return true;
+  const words = text.split(' ');
+  return words.length <= 4 && words.every((word) => YES_WORDS.has(word) || NO_WORDS.has(word)
+    || ['ஆமாம்', 'ஆமா', 'சரி', 'வேண்டாம்', 'இல்லை', 'please', 'thanks', 'thank', 'you'].includes(word));
+};
+
 export const matchFaq = (value) => {
   const text = normalizeFaqQuestion(value);
   if (!text) return null;
@@ -231,12 +241,12 @@ export const createFaqState = (callSid = '') => ({
   turns: 0
 });
 
-export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
+export const processFaqPrompt = (state, prompt, { transferAvailable, matcher = matchFaq, strictConfirmation = false }) => {
   if (state.stage !== 'awaiting_question') return { action: 'ignored' };
   const text = String(prompt || '').trim().slice(0, 3000);
   state.turns += 1;
-  const faq = matchFaq(text);
-  const confirmation = classifyConfirmation(text);
+  const faq = matcher(text);
+  const confirmation = strictConfirmation && !isStandaloneConfirmation(text) ? 'unclear' : classifyConfirmation(text);
   // "Yeah, <recognized FAQ question>" must not be consumed as consent to
   // transfer. Keep plain affirmatives and negative replies on the existing path.
   const transferConfirmation = confirmation === 'yes' && ['services', 'ai_automation'].includes(faq?.id)
@@ -295,8 +305,8 @@ export const processFaqPrompt = (state, prompt, { transferAvailable }) => {
 };
 
 // Shared by the authenticated live WebSocket handler and the route-level tests.
-export const processLiveConversationRelayFaqTurn = (state, prompt, { transferAvailable, send }) => {
-  const baseResult = processFaqPrompt(state, prompt, { transferAvailable });
+export const processLiveConversationRelayFaqTurn = (state, prompt, { transferAvailable, send, matcher, strictConfirmation }) => {
+  const baseResult = processFaqPrompt(state, prompt, { transferAvailable, matcher, strictConfirmation });
   const matchedIntent = FAQ_ENTRIES.find(({ id }) => id === baseResult.faqId)?.intent
     || String(baseResult.faqId || 'unknown').toUpperCase();
   const result = { ...baseResult, matchedIntent };

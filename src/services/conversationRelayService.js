@@ -8,6 +8,7 @@ import adminCredentialsService from './adminCredentialsService.js';
 import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
 import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
+import { multilingualIntentEnabled, resolveConversationRelayIntent, intentDiagnostic } from './conversationRelayIntent.js';
 import {
   FAQ_ENTRIES,
   createFaqState,
@@ -112,6 +113,9 @@ class ConversationRelayService {
     let outboundSequence = 0;
     let previousFinalFingerprint = null;
     let previousFinalAt = null;
+    // Snapshot per call; changing the environment cannot alter an active call.
+    const nlpEnabled = multilingualIntentEnabled();
+    const diagnosticText = (value) => nlpEnabled ? '[transcript omitted]' : redactFaqDiagnosticText(value);
     // Per-connection keyed fingerprints compare repeated speech without adding
     // transcript content or reusable hashes of customer speech to diagnostics.
     const fingerprintKey = randomUUID();
@@ -254,7 +258,7 @@ class ConversationRelayService {
         logger.info('ConversationRelay prompt received', {
           event: 'prompt_received', connectionId, correlationId, turn: currentTurn,
           last: message.last === true, chars: promptText.length,
-          receivedTranscription: redactFaqDiagnosticText(promptText),
+          receivedTranscription: diagnosticText(promptText),
           language: String(message.lang || '').slice(0, 20) || null
         });
         const normalizedPrompt = normalizeFaqQuestion(promptText);
@@ -272,16 +276,16 @@ class ConversationRelayService {
         const routeDecision = (reason) => trace('relay_prompt_disposition', { ...promptDiagnostic, reason });
         logger.info('ConversationRelay prompt normalized', {
           event: 'normalized_prompt', connectionId, correlationId, turn: currentTurn,
-          normalizedTranscription: redactFaqDiagnosticText(normalizedPrompt)
+          normalizedTranscription: diagnosticText(normalizedPrompt)
         });
         logger.info('ConversationRelay transcription received', {
           event: 'transcription_received', connectionId, correlationId, turn: currentTurn,
           final: message.last === true, chars: promptText.length,
-          transcription: redactFaqDiagnosticText(promptText)
+          transcription: diagnosticText(promptText)
         });
         logger.info('ConversationRelay transcription normalized', {
           event: 'normalized_transcription', connectionId, correlationId, turn: currentTurn,
-          transcription: redactFaqDiagnosticText(normalizedPrompt)
+          transcription: diagnosticText(normalizedPrompt)
         });
         if (message.last !== true) {
           routeDecision(message.last === false ? 'partial_waiting_for_final' : 'invalid_last_flag');
@@ -337,8 +341,12 @@ class ConversationRelayService {
         const transferDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
         const transferAvailable = data.transferOnCustomerRequest !== false
           && /^\+[1-9]\d{7,14}$/.test(String(transferDestination.destination || '').trim());
+        const recognition = resolveConversationRelayIntent(text, { enabled: nlpEnabled });
+        if (nlpEnabled) trace('relay_intent_recognized', intentDiagnostic(recognition));
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
           transferAvailable,
+          matcher: () => recognition.faq,
+          strictConfirmation: nlpEnabled,
           send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
             customerTurn: customerTurnNumber })
         });
@@ -365,8 +373,8 @@ class ConversationRelayService {
           transferAvailable,
           transferDestinationReason: transferAvailable ? null : transferDestination.reason,
           chars: text.length,
-          receivedTranscription: redactFaqDiagnosticText(text),
-          normalizedTranscription: redactFaqDiagnosticText(normalizedPrompt)
+          receivedTranscription: diagnosticText(text),
+          normalizedTranscription: diagnosticText(normalizedPrompt)
         });
         logger.info('ConversationRelay FAQ response selected', {
           event: 'response_selected', connectionId, correlationId, turn: currentTurn,
