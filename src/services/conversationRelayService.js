@@ -350,6 +350,7 @@ class ConversationRelayService {
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
           transferAvailable,
           matcher: () => recognition.faq,
+          classification: nlpEnabled ? recognition.classification : null,
           strictConfirmation: nlpEnabled,
           contextEnabled: nlpEnabled,
           send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
@@ -359,6 +360,7 @@ class ConversationRelayService {
           frameSequence: sequence, turn: currentTurn, customerTurn: customerTurnNumber,
           candidateFaqId: promptDiagnostic.candidateFaqId,
           selectedFaqId: result.faqId || null, action: result.action,
+          classification: nlpEnabled ? recognition.classification : null,
           responseStatus: result.responseStatus, contextResolution: result.contextResolution || null,
           stateBefore, stateAfter: snapshotFaqState(faqState),
           fallbackReason: result.faqId === 'unknown' ? 'no_faq_intent_match'

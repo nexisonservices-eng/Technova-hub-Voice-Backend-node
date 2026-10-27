@@ -255,6 +255,70 @@ test('unknown question gives fixed fallback and yes transfers only while that of
   ]);
 });
 
+test('opt-in classifications route company misses, unrelated topics and unclear questions without changing transfer consent rules', async () => {
+  const { recognizeMultilingualIntent: recognize } = await import('../src/services/conversationRelayIntent.js');
+  const { FAQ_RESPONSES, createFaqState, processFaqPrompt, processLiveConversationRelayFaqTurn } = await importFaq();
+  const state = createFaqState('CA0123456789abcdef0123456789abcdef');
+  const frames = [];
+  const turn = (text) => {
+    const intent = recognize(text);
+    return processLiveConversationRelayFaqTurn(state, text, {
+      transferAvailable: true,
+      matcher: () => intent.faq,
+      classification: intent.classification,
+      strictConfirmation: true,
+      contextEnabled: true,
+      send: (frame) => { frames.push(frame); return true; }
+    });
+  };
+
+  const services = turn('What services do you provide?');
+  assert.equal(services.faqId, 'services');
+  assert.equal(frames.at(-1).token, services.answer);
+  assert.equal(state.awaitingHumanConfirmation, false);
+
+  const unsupportedPolicy = turn('What is your refund policy?');
+  assert.equal(unsupportedPolicy.faqId, 'unknown');
+  assert.equal(unsupportedPolicy.answer, FAQ_RESPONSES.unknown);
+  assert.equal(frames.at(-1).type, 'text');
+  assert.equal(frames.at(-1).token, FAQ_RESPONSES.unknown);
+  assert.equal(state.awaitingHumanConfirmation, true);
+  const no = turn('No');
+  assert.equal(no.faqId, 'declined_transfer');
+  assert.equal(state.awaitingHumanConfirmation, false);
+
+  const unrelated = turn('latest cricket scores');
+  assert.equal(unrelated.faqId, 'unrelated_redirect');
+  assert.equal(unrelated.answer, FAQ_RESPONSES.unrelatedRedirect);
+  assert.equal(frames.at(-1).type, 'text');
+  assert.equal(frames.at(-1).token, FAQ_RESPONSES.unrelatedRedirect);
+  assert.equal(state.awaitingHumanConfirmation, false);
+
+  const vagueFollowUp = turn('Tell me more');
+  assert.equal(vagueFollowUp.faqId, 'unclear', 'redirect must not reuse an unrelated previous FAQ as context');
+  assert.equal(frames.at(-1).token, FAQ_RESPONSES.clarifyQuestion);
+  assert.equal(state.awaitingHumanConfirmation, false);
+
+  const unclear = turn('How much does it cost?');
+  assert.equal(unclear.faqId, 'unclear');
+  assert.equal(unclear.answer, FAQ_RESPONSES.clarifyQuestion);
+  assert.equal(frames.at(-1).token, FAQ_RESPONSES.clarifyQuestion);
+  assert.equal(state.awaitingHumanConfirmation, false);
+
+  assert.equal(turn('What services do you provide?').faqId, 'services', 'a company question still works after redirect and clarification');
+
+  const transferState = createFaqState('CAabcdef0123456789abcdef0123456789');
+  const pending = processFaqPrompt(transferState, 'What is TechnovaHub pricing?', {
+    transferAvailable: true,
+    matcher: (text) => recognize(text).faq,
+    classification: recognize('What is TechnovaHub pricing?').classification,
+    strictConfirmation: true
+  });
+  assert.equal(pending.answer, FAQ_RESPONSES.unknown);
+  assert.equal(transferState.awaitingHumanConfirmation, true);
+  assert.equal(processFaqPrompt(transferState, 'Yes', { transferAvailable: true }).action, 'transfer');
+});
+
 test('affirmative answers unrelated to a pending representative offer do not transfer', async () => {
   const { createFaqState, processFaqPrompt } = await importFaq();
   const state = createFaqState('CA0123456789abcdef0123456789abcdef');

@@ -94,6 +94,53 @@ test('uncertain input, pricing, negated or merely mentioned handoff requests fai
   assert.equal(conservativeHandoff.fallbackReason, 'low_confidence');
 });
 
+test('opt-in resolver separates known answers, missing company knowledge, curated unrelated topics and unclear input', async () => {
+  const { recognizeMultilingualIntent: recognize } = await loadIntent();
+  for (const [question, faqId] of [
+    ['What services do you provide?', 'services'],
+    ['What is AI automation?', 'ai_automation']
+  ]) {
+    const result = recognize(question);
+    assert.equal(result.faq?.id, faqId);
+    assert.equal(result.classification, 'known_faq');
+  }
+
+  for (const question of [
+    'What is TechnovaHub pricing?',
+    'What is your refund policy?',
+    'What are Nexion cancellation terms?'
+  ]) {
+    const result = recognize(question);
+    assert.equal(result.faq, null, question);
+    assert.equal(result.classification, 'company_unanswered', question);
+  }
+
+  for (const question of [
+    'latest cricket scores', 'Who won the cricket match?',
+    'recommend a movie', 'What movie should I watch?',
+    'tell me a trivia fact'
+  ]) {
+    const result = recognize(question);
+    assert.equal(result.faq, null, question);
+    assert.equal(result.classification, 'unrelated', question);
+  }
+
+  for (const question of ['How much does it cost?', 'Could you clarify?', 'What is payroll automation?']) {
+    const result = recognize(question);
+    assert.equal(result.faq, null, question);
+    assert.equal(result.classification, 'unclear', question);
+  }
+  const ambiguous = recognize('Nexion services offers', {
+    env: { CONVERSATION_RELAY_NLP_SEMANTIC_THRESHOLD: '0.5' }
+  });
+  assert.equal(ambiguous.reason, 'ambiguous');
+  assert.equal(ambiguous.fallbackReason, 'conflicting_intents');
+  assert.equal(ambiguous.classification, 'unclear');
+
+  const companyWins = recognize('TechnovaHub cricket scores');
+  assert.equal(companyWins.classification, 'company_unanswered');
+});
+
 test('new topic wins over context; supported follow-ups repeat only the last approved answer', async () => {
   const { FAQ_RESPONSES, createFaqState, processFaqPrompt } = await loadFaq();
   const state = createFaqState();

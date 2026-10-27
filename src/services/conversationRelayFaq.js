@@ -92,6 +92,8 @@ export const FAQ_ENTRIES = Object.freeze([
 
 export const FAQ_RESPONSES = Object.freeze({
   unknown: 'மன்னிக்கவும், அந்தத் தகவல் இப்போது என்னிடம் இல்லை. எங்கள் குழுவினருடன் பேச விரும்புகிறீர்களா?',
+  unrelatedRedirect: 'மன்னிக்கவும், நான் TechnovaHub பற்றிய கேள்விகளுக்கு உதவுகிறேன். அதன் சேவைகள் அல்லது நிறுவனத்தைப் பற்றி கேட்க விரும்புகிறீர்களா?',
+  clarifyQuestion: 'மன்னிக்கவும், உங்கள் கேள்வியைச் சரியாகப் புரிந்துகொள்ளவில்லை. தயவுசெய்து மீண்டும் சொல்ல முடியுமா?',
   noTransfer: 'பரவாயில்லை. வேறு எந்தக் கேள்விக்கு உதவலாம்?',
   clarifyTransfer: 'மன்னிக்கவும், புரியவில்லை. ஆம் அல்லது இல்லை என்று சொல்லுங்கள்; அல்லது உங்கள் கேள்வியை மீண்டும் கேளுங்கள்.',
   unavailable: 'மன்னிக்கவும், இப்போது எங்கள் குழுவினருடன் இணைக்க முடியவில்லை. வேறு எப்படியாவது உதவட்டுமா?',
@@ -274,7 +276,8 @@ const contextualFollowUp = (value) => {
 };
 
 export const processFaqPrompt = (state, prompt, {
-  transferAvailable, matcher = matchFaq, strictConfirmation = false, contextEnabled = strictConfirmation
+  transferAvailable, matcher = matchFaq, strictConfirmation = false, contextEnabled = strictConfirmation,
+  classification = null
 }) => {
   if (state.stage !== 'awaiting_question') return { action: 'ignored' };
   const text = String(prompt || '').trim().slice(0, 3000);
@@ -284,7 +287,8 @@ export const processFaqPrompt = (state, prompt, {
   const followUp = contextualFollowUp(text);
   const previousFaqIsFresh = state.lastFaqId && Number.isFinite(state.lastFaqAt)
     && Date.now() - state.lastFaqAt <= 5 * 60 * 1000;
-  if (contextEnabled && !faq && followUp && previousFaqIsFresh
+  if (contextEnabled && classification !== 'unrelated' && classification !== 'company_unanswered'
+    && !faq && followUp && previousFaqIsFresh
     && !state.awaitingHumanConfirmation && !state.awaitingAutomationConfirmation) {
     faq = FAQ_ENTRIES.find(({ id }) => id === state.lastFaqId) || null;
     if (faq) contextResolution = 'previous_approved_answer_repeated';
@@ -294,6 +298,10 @@ export const processFaqPrompt = (state, prompt, {
   // transfer. Keep plain affirmatives and negative replies on the existing path.
   const transferConfirmation = confirmation === 'yes' && ['services', 'ai_automation'].includes(faq?.id)
     ? 'unclear' : confirmation;
+  const clearFaqContext = () => {
+    state.lastFaqId = null;
+    state.lastFaqAt = null;
+  };
 
   if (state.awaitingAutomationConfirmation) {
     const confirmation = transferConfirmation;
@@ -325,11 +333,27 @@ export const processFaqPrompt = (state, prompt, {
       return { action: 'answer', answer: FAQ_RESPONSES.noTransfer, faqId: 'declined_transfer' };
     }
     // A new question takes precedence over an ambiguous yes/no reply.
+    if (!faq && classification === 'unrelated') {
+      clearFaqContext();
+      return { action: 'answer', answer: FAQ_RESPONSES.unrelatedRedirect, faqId: 'unrelated_redirect' };
+    }
+    if (!faq && classification === 'company_unanswered') {
+      clearFaqContext();
+      return { action: 'answer', answer: FAQ_RESPONSES.unknown, faqId: 'unknown' };
+    }
     if (!faq) return { action: 'answer', answer: FAQ_RESPONSES.clarifyTransfer, faqId: 'transfer_confirmation_unclear' };
     state.awaitingHumanConfirmation = false;
   }
 
   if (!faq) {
+    if (classification === 'unrelated') {
+      clearFaqContext();
+      return { action: 'answer', answer: FAQ_RESPONSES.unrelatedRedirect, faqId: 'unrelated_redirect' };
+    }
+    if (classification === 'unclear') {
+      return { action: 'answer', answer: FAQ_RESPONSES.clarifyQuestion, faqId: 'unclear' };
+    }
+    if (classification === 'company_unanswered') clearFaqContext();
     state.awaitingHumanConfirmation = true;
     return { action: 'answer', answer: FAQ_RESPONSES.unknown, faqId: 'unknown' };
   }
@@ -353,10 +377,10 @@ export const processFaqPrompt = (state, prompt, {
 
 // Shared by the authenticated live WebSocket handler and the route-level tests.
 export const processLiveConversationRelayFaqTurn = (state, prompt, {
-  transferAvailable, send, matcher, strictConfirmation, contextEnabled
+  transferAvailable, send, matcher, strictConfirmation, contextEnabled, classification
 }) => {
   const baseResult = processFaqPrompt(state, prompt, {
-    transferAvailable, matcher, strictConfirmation, contextEnabled
+    transferAvailable, matcher, strictConfirmation, contextEnabled, classification
   });
   const matchedIntent = FAQ_ENTRIES.find(({ id }) => id === baseResult.faqId)?.intent
     || String(baseResult.faqId || 'unknown').toUpperCase();

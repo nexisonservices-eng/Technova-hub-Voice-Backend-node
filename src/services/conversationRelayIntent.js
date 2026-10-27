@@ -85,6 +85,32 @@ const similarity = (left, right) => {
   return (2 * overlap) / (a.size + b.size);
 };
 
+// Out-of-scope recognition is limited to the clear example topics approved
+// for this agent. These phrase prototypes do not turn a failed FAQ match into
+// an unrelated classification.
+const unrelatedIntentPhrases = [
+  { id: 'cricket_scores', phrases: ['cricket score', 'latest cricket scores', 'who won the cricket match'] },
+  { id: 'movie_recommendation', phrases: ['recommend a movie', 'movie recommendations', 'what movie should i watch', 'suggest a film'] },
+  { id: 'general_trivia', phrases: ['general trivia', 'tell me a trivia fact', 'ask me a trivia question'] }
+].map(({ id, phrases }) => ({ id, phrases: phrases.map(canonicalize) }));
+const OFF_TOPIC_THRESHOLD = 0.78;
+const OFF_TOPIC_MARGIN = 0.15;
+const COMPANY_CONTEXT = /\b(?:technovahub|nexion|company|companies|business solutions?|services?|service|ai automation)\b/i;
+const OWNED_PRICING_OR_POLICY = /\b(?:your|our)\b.{0,24}\b(?:price|prices|pricing|cost|costs|quote|quotation|how much|policy|policies|refund|refunds|cancellation|cancellations|terms|warranty)\b/i;
+const UNSUPPORTED_COMPANY_TOPIC = /\b(?:price|prices|pricing|cost|costs|quote|quotation|how much|policy|policies|refund|refunds|cancellation|cancellations|terms|warranty)\b/i;
+
+const classifyUnmatchedQuestion = (text) => {
+  // Explicit organization/service context takes priority over off-topic cues.
+  if (COMPANY_CONTEXT.test(text) || OWNED_PRICING_OR_POLICY.test(text)) return 'company_unanswered';
+  const candidates = unrelatedIntentPhrases.map(({ id, phrases }) => ({
+    id, score: Math.max(...phrases.map((phrase) => similarity(text, phrase)), 0)
+  })).sort((left, right) => right.score - left.score);
+  const [best, next] = candidates;
+  if (best?.score >= OFF_TOPIC_THRESHOLD
+    && (!next || best.score - next.score >= OFF_TOPIC_MARGIN)) return 'unrelated';
+  return 'unclear';
+};
+
 export const recognizeMultilingualIntent = (value, { env = process.env, providerLanguage = null } = {}) => {
   const started = performance.now();
   const valid = typeof value === 'string';
@@ -94,8 +120,9 @@ export const recognizeMultilingualIntent = (value, { env = process.env, provider
   const language = detectTranscriptLanguage(source);
   const sttLanguageHint = typeof providerLanguage === 'string'
     && /^[a-z]{2}(?:-[A-Z]{2})?$/.test(providerLanguage) ? providerLanguage : null;
-  const result = (faq, confidence, reason, fallbackReason = null, strategy = 'rules', threshold = directThreshold(env)) => ({
+  const result = (faq, confidence, reason, fallbackReason = null, strategy = 'rules', threshold = directThreshold(env), classification = null) => ({
     faq, intent: faq?.intent || faq?.id?.toUpperCase() || null,
+    classification: faq ? 'known_faq' : classification || 'unclear',
     confidence, scoreMeaning: confidence === null ? null : 'heuristic rule or token similarity score; not a calibrated probability',
     strategy, threshold, knowledgeId: faq?.id || null,
     entities: [...new Set((canonicalize(normalizedText).match(/\b(?:technovahub|nexion|ai)\b/g) || []))],
@@ -108,8 +135,12 @@ export const recognizeMultilingualIntent = (value, { env = process.env, provider
   const text = canonicalize(normalizedText);
   const tokens = text.split(' ');
   if (tokens.length > 80) return result(null, 0, 'input_limit', 'too_many_tokens');
-  if (/(\bprice|pricing|cost|quote|quotation|how much\b|விலை|செலவு)/i.test(text)) {
-    return result(null, 0, 'unsupported_pricing', 'no_approved_pricing_knowledge');
+  const explicitHandoffRequest = isExplicitHumanHandoffRequest(source);
+  if (UNSUPPORTED_COMPANY_TOPIC.test(text) && !explicitHandoffRequest) {
+    const classification = classifyUnmatchedQuestion(text);
+    const reason = /\b(?:price|prices|pricing|cost|costs|quote|quotation|how much)\b/i.test(text)
+      ? 'unsupported_pricing' : 'unsupported_policy_or_company_detail';
+    return result(null, 0, reason, 'no_approved_company_knowledge', 'rules', directThreshold(env), classification);
   }
 
   const greeting = FAQ_ENTRIES.find(({ id }) => id === 'greeting');
@@ -117,7 +148,7 @@ export const recognizeMultilingualIntent = (value, { env = process.env, provider
     return result(greeting, 0.99, 'standalone_greeting', null, 'exact_phrase');
   }
 
-  if (isExplicitHumanHandoffRequest(source)) {
+  if (explicitHandoffRequest) {
     const faq = FAQ_ENTRIES.find(({ id }) => id === 'human_representative');
     const score = 0.99;
     const threshold = handoffThreshold(env);
@@ -188,9 +219,10 @@ export const recognizeMultilingualIntent = (value, { env = process.env, provider
   }
   const weakScore = best?.score > 0;
   const ambiguous = best?.score >= threshold;
+  const classification = ambiguous ? 'unclear' : classifyUnmatchedQuestion(text);
   return result(null, best?.score ? Number(best.score.toFixed(3)) : 0,
     ambiguous ? 'ambiguous' : weakScore ? 'low_confidence' : 'no_reliable_match',
-    ambiguous ? 'conflicting_intents' : weakScore ? 'low_confidence' : 'no_supported_phrase', 'none', threshold);
+    ambiguous ? 'conflicting_intents' : weakScore ? 'low_confidence' : 'no_supported_phrase', 'none', threshold, classification);
 };
 
 export const resolveConversationRelayIntent = (value, {
@@ -199,12 +231,17 @@ export const resolveConversationRelayIntent = (value, {
   if (!enabled) return { faq: matchFaq(value), reason: 'feature_disabled' };
   try { return recognizer(value, { providerLanguage }); }
   catch {
-    return { faq: matchFaq(value), confidence: null, reason: 'legacy_faq_fallback', fallbackReason: 'recognizer_error' };
+    const faq = matchFaq(value);
+    return {
+      faq, classification: faq ? 'known_faq' : 'unclear', confidence: null,
+      reason: 'legacy_faq_fallback', fallbackReason: 'recognizer_error'
+    };
   }
 };
 
 export const intentDiagnostic = (recognition) => ({
   processingStage: 'intent_recognition', strategy: recognition.strategy || null,
+  classification: recognition.classification || null,
   detectedLanguage: recognition.language || 'unknown', sttLanguageHint: recognition.sttLanguageHint || null,
   intent: recognition.intent || null,
   confidence: recognition.confidence ?? null, scoreMeaning: recognition.scoreMeaning || null,

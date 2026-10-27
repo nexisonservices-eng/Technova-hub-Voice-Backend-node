@@ -146,6 +146,76 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       }
     });
 
+    await t.test('enabled NLP sends the four classified text outcomes, preserves transfer flow and omits caller text', async () => {
+      const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      let socket;
+      try {
+        const { socket: activeSocket, prompt } = await session('What is TechnovaHub pricing for Kavitha 9876543210?');
+        socket = activeSocket;
+        const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
+        assert.equal(socket.sent.at(-1).type, 'text');
+        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+        assert.equal(logs.find((entry) => entry.event === 'relay_intent_recognized').classification, 'company_unanswered');
+        assert.equal(logs.find((entry) => entry.event === 'relay_faq_decision').selectedFaqId, 'unknown');
+        await prompt('No');
+        assert.equal(socket.sent.at(-1).type, 'text');
+
+        await prompt('latest cricket scores');
+        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unrelatedRedirect);
+        assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).classification, 'unrelated');
+        assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).stateAfter.awaitingHumanConfirmation, false);
+
+        await prompt('Tell me more');
+        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.clarifyQuestion);
+        assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).classification, 'unclear');
+        assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).stateAfter.awaitingHumanConfirmation, false);
+
+        await prompt('How much does it cost?');
+        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.clarifyQuestion);
+        assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).classification, 'unclear');
+        assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).stateAfter.awaitingHumanConfirmation, false);
+
+        await prompt('What services do you provide?');
+        assert.equal(socket.sent.at(-1).token, services);
+        await prompt('Can I speak to a human representative?');
+        assert.equal(socket.sent.at(-1).type, 'end');
+        assert.equal(JSON.parse(socket.sent.at(-1).handoffData).status, 'faq_transfer');
+
+        const serializedLogs = JSON.stringify(logs);
+        assert.equal(serializedLogs.includes('Kavitha'), false);
+        assert.equal(serializedLogs.includes('9876543210'), false);
+        assert.equal(serializedLogs.includes('What is TechnovaHub pricing'), false);
+      } finally {
+        socket?.close();
+        if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = oldFlag;
+      }
+    });
+
+    await t.test('feature-flag-off retains the legacy unknown answer and pending YES transfer behavior', async () => {
+      const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'false';
+      let socket;
+      try {
+        const active = await session('latest cricket scores');
+        socket = active.socket;
+        const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
+        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+        const decision = logs.find((entry) => entry.event === 'relay_faq_decision');
+        assert.equal(decision.classification, null);
+        assert.equal(decision.selectedFaqId, 'unknown');
+        assert.equal(decision.stateAfter.awaitingHumanConfirmation, true);
+        await active.prompt('Yes');
+        assert.equal(socket.sent.at(-1).type, 'end');
+        assert.equal(JSON.parse(socket.sent.at(-1).handoffData).status, 'faq_transfer');
+      } finally {
+        socket?.close();
+        if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = oldFlag;
+      }
+    });
+
     const variants = [
       ['Yeah, automationальна.', automation],
       ['AI automationальна na enna?', automation],

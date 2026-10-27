@@ -37,7 +37,11 @@ test('flag is explicit; errors use existing matcher and safe diagnostics omit cu
   assert.equal(resolve('what services', { enabled: false }).faq, matchFaq('what services'));
   const failed = resolve('what services', { enabled: true, recognizer: () => { throw Error('secret'); } });
   assert.equal(failed.faq.id, 'services');
+  assert.equal(failed.classification, 'known_faq');
   assert.equal(failed.fallbackReason, 'recognizer_error');
+  const failedUnknown = resolve('unlisted question', { enabled: true, recognizer: () => { throw Error('secret'); } });
+  assert.equal(failedUnknown.faq, null);
+  assert.equal(failedUnknown.classification, 'unclear');
   const safe = JSON.stringify(intentDiagnostic(recognize('my name is Kavitha email a@b.com password abc123 9876543210')));
   for (const privateText of ['kavitha', 'a@b', 'abc123', '9876543210']) assert.equal(safe.includes(privateText), false);
   assert.equal(detectTranscriptLanguage('என்ன சேவைகள்'), 'ta');
