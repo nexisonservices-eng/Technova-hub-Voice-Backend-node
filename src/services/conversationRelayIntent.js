@@ -10,7 +10,8 @@ const aliases = new Map([
   ['automtion', 'automation'], ['ஏஐ', 'ai'], ['ஏஐய', 'ai'], ['என்ன', 'enna'], ['என்னென்ன', 'enna'],
   ['என்றால்', 'na'], ['னா', 'na'], ['பற்றி', 'pathi'], ['பத்தி', 'pathi'],
   ['பண்றீங்க', 'pandringa'], ['செய்கிறீர்கள்', 'pandringa'], ['வழங்குகிறீர்கள்', 'pandringa'],
-  ['panringa', 'pandringa'], ['panreenga', 'pandringa'], ['pannreenga', 'pandringa']
+  ['panringa', 'pandringa'], ['panreenga', 'pandringa'], ['pannreenga', 'pandringa'],
+  ['pandreenga', 'pandringa']
 ]);
 
 const extraPatterns = {

@@ -11,6 +11,8 @@ test('labelled English, Tamil, Tanglish, mixed-script, paraphrase and FAQ-topic 
     ['What does your company actually do?', 'services'],
     ['How can you help my business?', 'services'],
     ['Enna services pandringa?', 'services'],
+    ['Neenga enna services pandreenga?', 'services'],
+    ['Neenga, enna services pandreenga!', 'services'],
     ['Neenga enna services offer panreenga?', 'services'],
     ['என்ன சேவைகள் செய்கிறீர்கள்?', 'services'],
     ['என்ன services பண்றீங்க?', 'services'],

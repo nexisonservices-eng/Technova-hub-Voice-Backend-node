@@ -146,6 +146,33 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       }
     });
 
+    await t.test('enabled NLP sends approved FAQ answer text frames for the four basic questions', async () => {
+      const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      try {
+        for (const [question, answer, faqId] of [
+          ['Neenga enna services pandreenga?', services, 'services'],
+          ['AI automation na enna?', automation, 'ai_automation'],
+          ['What services does TechnovaHub provide?', services, 'services'],
+          ['What is AI automation?', automation, 'ai_automation']
+        ]) {
+          const active = await session(question, { speechAfterSetup: true });
+          try {
+            assert.deepEqual(active.socket.sent, [{
+              type: 'text', token: answer, lang: 'ta-IN', last: true,
+              interruptible: true, preemptible: false
+            }], question);
+            const decision = logs.find((entry) => entry.event === 'relay_faq_decision');
+            assert.equal(decision.selectedFaqId, faqId, question);
+            assert.equal(decision.classification, 'known_faq', question);
+          } finally { active.socket.close(); }
+        }
+      } finally {
+        if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = oldFlag;
+      }
+    });
+
     await t.test('enabled NLP sends the four classified text outcomes, preserves transfer flow and omits caller text', async () => {
       const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
       process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
