@@ -115,7 +115,9 @@ class ConversationRelayService {
     let previousFinalAt = null;
     // Snapshot per call; changing the environment cannot alter an active call.
     const nlpEnabled = multilingualIntentEnabled();
-    const diagnosticText = (value) => nlpEnabled ? '[transcript omitted]' : redactFaqDiagnosticText(value);
+    // Transcripts can contain names and other personal information even after
+    // simple phone/email redaction. Keep diagnostics content-free in both modes.
+    const diagnosticText = () => '[transcript omitted]';
     // Per-connection keyed fingerprints compare repeated speech without adding
     // transcript content or reusable hashes of customer speech to diagnostics.
     const fingerprintKey = randomUUID();
@@ -317,10 +319,10 @@ class ConversationRelayService {
           });
           return;
         }
+        const normalizedFingerprint = promptDiagnostic.normalizedFingerprint;
         customerTurnNumber += 1;
         routeDecision('routed_to_faq');
         const stateBefore = snapshotFaqState(faqState);
-        const normalizedFingerprint = promptDiagnostic.normalizedFingerprint;
         trace('relay_faq_input', {
           ...promptDiagnostic, customerTurn: customerTurnNumber, stateBefore,
           confirmation: classifyConfirmation(promptText),
@@ -341,12 +343,15 @@ class ConversationRelayService {
         const transferDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
         const transferAvailable = data.transferOnCustomerRequest !== false
           && /^\+[1-9]\d{7,14}$/.test(String(transferDestination.destination || '').trim());
-        const recognition = resolveConversationRelayIntent(text, { enabled: nlpEnabled });
+        const recognition = resolveConversationRelayIntent(text, {
+          enabled: nlpEnabled, providerLanguage: message.lang
+        });
         if (nlpEnabled) trace('relay_intent_recognized', intentDiagnostic(recognition));
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
           transferAvailable,
           matcher: () => recognition.faq,
           strictConfirmation: nlpEnabled,
+          contextEnabled: nlpEnabled,
           send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
             customerTurn: customerTurnNumber })
         });
@@ -354,7 +359,8 @@ class ConversationRelayService {
           frameSequence: sequence, turn: currentTurn, customerTurn: customerTurnNumber,
           candidateFaqId: promptDiagnostic.candidateFaqId,
           selectedFaqId: result.faqId || null, action: result.action,
-          responseStatus: result.responseStatus, stateBefore, stateAfter: snapshotFaqState(faqState),
+          responseStatus: result.responseStatus, contextResolution: result.contextResolution || null,
+          stateBefore, stateAfter: snapshotFaqState(faqState),
           fallbackReason: result.faqId === 'unknown' ? 'no_faq_intent_match'
             : result.faqId === 'transfer_confirmation_unclear' ? 'transfer_confirmation_unclear' : null
         });
@@ -363,6 +369,7 @@ class ConversationRelayService {
           event: 'faq_match_result', connectionId, correlationId, turn: currentTurn,
           customerTurn: customerTurnNumber, faqId: result.faqId || null,
           matchedIntent, action: result.action, stage: faqState.stage,
+          contextResolution: result.contextResolution || null,
           awaitingHumanConfirmation: faqState.awaitingHumanConfirmation,
           awaitingAutomationConfirmation: faqState.awaitingAutomationConfirmation
         });

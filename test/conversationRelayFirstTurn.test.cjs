@@ -329,11 +329,11 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         assert.deepEqual(socket.sent.map((frame) => frame.token), [services]);
         const partial = logs.find((entry) => entry.event === 'prompt_received' && !entry.last);
         const final = logs.find((entry) => entry.event === 'prompt_received' && entry.last);
-        assert.equal(partial.receivedTranscription, question);
-        assert.equal(final.receivedTranscription, question);
+        assert.equal(partial.receivedTranscription, '[transcript omitted]');
+        assert.equal(final.receivedTranscription, '[transcript omitted]');
         assert.ok(partial.turn < final.turn);
         assert.equal(logs.find((entry) => entry.event === 'normalized_prompt' && entry.turn === final.turn)
-          .normalizedTranscription, 'enna services pandringa');
+          .normalizedTranscription, '[transcript omitted]');
         const matches = logs.filter((entry) => entry.event === 'faq_match_result');
         assert.equal(matches.length, 1, 'partial and interrupt events must not route a question');
         assert.equal(matches[0].turn, final.turn);

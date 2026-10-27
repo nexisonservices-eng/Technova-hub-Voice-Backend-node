@@ -134,7 +134,7 @@ test('invalid voice does not silently generate English agent TwiML', { skip: !ha
   const xml = await engine.executeNode(
     { id: 'agent1', type: 'ai_voice_agent', data: { ...baseConfig, voiceSelection: 'invalid' } },
     { callSid: 'CA123' },
-    { _id: 'wf123', createdBy: 'user123', nodes: [], edges: [], settings: {} },
+    { _id: 'wf123', createdBy: 'user123', provider: 'twilio', nodes: [], edges: [], settings: {} },
     'CA123'
   );
   assert.doesNotMatch(xml, /<ConversationRelay/);

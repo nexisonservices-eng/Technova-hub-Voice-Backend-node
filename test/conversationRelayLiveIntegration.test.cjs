@@ -9,7 +9,11 @@ const USER_ID = 'tenant-test';
 const WORKFLOW_ID = 'workflow-test';
 const NODE_ID = 'voice-agent';
 
-const query = (value) => ({ select() { return this; }, lean: async () => value });
+const query = (value) => ({
+  select() { return this; },
+  lean: async () => value,
+  then(resolve, reject) { return Promise.resolve(value).then(resolve, reject); }
+});
 const delay = () => new Promise((resolve) => setTimeout(resolve, 10));
 
 const makeWorkflow = () => ({
@@ -112,7 +116,7 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
       };
       await completionRoute({ body: { CallSid: CALL_SID, workflowId: WORKFLOW_ID, nodeId: NODE_ID,
         HandoffData: socket.sent.at(-1).handoffData }, query: {} }, res);
-      assert.match(res.xml, new RegExp(`<Number>${TEAM_B.replace('+', '\\+')}</Number>`));
+      assert.match(res.xml, new RegExp(`(?:<Number>${TEAM_B.replace('+', '\\+')}</Number>|<Dial\\b[^>]*>${TEAM_B.replace('+', '\\+')}</Dial>)`));
       assert.doesNotMatch(res.xml, new RegExp(CUSTOMER_A.replace('+', '\\+')));
 
       const transferRoute = router.default.stack.find((layer) => layer.route?.path === '/transfer/complete').route.stack[0].handle;

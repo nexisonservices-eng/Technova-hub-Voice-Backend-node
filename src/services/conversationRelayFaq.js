@@ -16,6 +16,12 @@ const TAMIL_NEXION_QUESTION_PATTERNS = [
 
 export const FAQ_ENTRIES = Object.freeze([
   {
+    id: 'greeting',
+    intent: 'GREETING',
+    answer: FAQ_WELCOME,
+    patterns: ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'வணக்கம்', 'vanakkam']
+  },
+  {
     id: 'ai_automation',
     intent: 'AI_AUTOMATION',
     answer: 'எங்களோட AI ஆட்டோமேஷன் சர்வீசஸ்க்கு சில ஸ்பெஷல் ஆஃபர்ஸ் இருக்கு. அதைப் பத்தி இன்னும் டீடெயிலா தெரிஞ்சிக்க உங்களை எங்க டீம் கூட கனெக்ட் பண்ணட்டுமா?',
@@ -233,19 +239,56 @@ export const matchFaq = (value) => {
   return null;
 };
 
+// Keep transfer selection tied to an affirmative request verb and a human
+// destination. Mentioning a person or representative alone is not consent.
+export const isExplicitHumanHandoffRequest = (value) => {
+  const text = normalizeFaqQuestion(value);
+  const englishRequest = /\b(?:speak|talk)\s+(?:to|with)\s+(?:(?:a|the)\s+)?(?:human|agent|representative|person|someone|team|live agent)\b/.test(text)
+    || /\b(?:connect|transfer)\s+(?:(?:me|us)\s+)?(?:to|with)\s+(?:(?:a|the)\s+)?(?:human|agent|representative|person|someone|team)\b/.test(text);
+  const tamilOrTanglishRequest = /\b(?:human|agent|representative|person|team)\s+kitta\s+(?:pesanum|pesanum|connect\s+pannunga)\b/.test(text)
+    || /(?:மனிதரிடம்|பிரதிநிதியிடம்)\s*பேச(?:வும்|ணும்|வேண்டும்)?/.test(text)
+    || /(?:மனிதர்|பிரதிநிதி).{0,24}(?:இணைக்கவும்|கனெக்ட்|பேசணும்|பேச வேண்டும்)/.test(text);
+  const requestsHandoff = englishRequest || tamilOrTanglishRequest;
+  const negatesRequest = /\b(don't|dont|do not|not|never|no|cannot|can't|cant|won't|wont|vendam|illa)\b/.test(text)
+    || /வேண்டாம்|இல்லை/.test(text);
+  return requestsHandoff && !negatesRequest;
+};
+
 export const createFaqState = (callSid = '') => ({
   callSid: String(callSid || ''),
   stage: 'awaiting_question',
   awaitingHumanConfirmation: false,
   awaitingAutomationConfirmation: false,
-  turns: 0
+  turns: 0,
+  // Per-call context stores only a FAQ identifier and timestamp, never caller text.
+  lastFaqId: null,
+  lastFaqAt: null
 });
 
-export const processFaqPrompt = (state, prompt, { transferAvailable, matcher = matchFaq, strictConfirmation = false }) => {
+const contextualFollowUp = (value) => {
+  const text = normalizeFaqQuestion(value);
+  if (/\b(repeat|again|say that again|tell me more|explain that|explain it|first one|second one|that one|the same|first services?|second services?)\b/.test(text)
+    || /\b(adhai|atha|idha|idhai|thirumba|mudhal|muthal|konjam explain)\b/.test(text)
+    || /மீண்டும்|அதை|அதற்கு|முதல் ஒன்றை|விளக்குங்கள்/.test(text)) return 'previous_answer';
+  return null;
+};
+
+export const processFaqPrompt = (state, prompt, {
+  transferAvailable, matcher = matchFaq, strictConfirmation = false, contextEnabled = strictConfirmation
+}) => {
   if (state.stage !== 'awaiting_question') return { action: 'ignored' };
   const text = String(prompt || '').trim().slice(0, 3000);
   state.turns += 1;
-  const faq = matcher(text);
+  let faq = matcher(text);
+  let contextResolution = null;
+  const followUp = contextualFollowUp(text);
+  const previousFaqIsFresh = state.lastFaqId && Number.isFinite(state.lastFaqAt)
+    && Date.now() - state.lastFaqAt <= 5 * 60 * 1000;
+  if (contextEnabled && !faq && followUp && previousFaqIsFresh
+    && !state.awaitingHumanConfirmation && !state.awaitingAutomationConfirmation) {
+    faq = FAQ_ENTRIES.find(({ id }) => id === state.lastFaqId) || null;
+    if (faq) contextResolution = 'previous_approved_answer_repeated';
+  }
   const confirmation = strictConfirmation && !isStandaloneConfirmation(text) ? 'unclear' : classifyConfirmation(text);
   // "Yeah, <recognized FAQ question>" must not be consumed as consent to
   // transfer. Keep plain affirmatives and negative replies on the existing path.
@@ -301,12 +344,20 @@ export const processFaqPrompt = (state, prompt, { transferAvailable, matcher = m
   }
   if (faq.id === 'ai_automation') state.awaitingAutomationConfirmation = true;
   if (faq.id === 'offers' || faq.id === 'unknown') state.awaitingHumanConfirmation = true;
-  return { action: 'answer', answer: faq.answer, faqId: faq.id };
+  if (faq.id !== 'human_representative') {
+    state.lastFaqId = faq.id;
+    state.lastFaqAt = Date.now();
+  }
+  return { action: 'answer', answer: faq.answer, faqId: faq.id, contextResolution };
 };
 
 // Shared by the authenticated live WebSocket handler and the route-level tests.
-export const processLiveConversationRelayFaqTurn = (state, prompt, { transferAvailable, send, matcher, strictConfirmation }) => {
-  const baseResult = processFaqPrompt(state, prompt, { transferAvailable, matcher, strictConfirmation });
+export const processLiveConversationRelayFaqTurn = (state, prompt, {
+  transferAvailable, send, matcher, strictConfirmation, contextEnabled
+}) => {
+  const baseResult = processFaqPrompt(state, prompt, {
+    transferAvailable, matcher, strictConfirmation, contextEnabled
+  });
   const matchedIntent = FAQ_ENTRIES.find(({ id }) => id === baseResult.faqId)?.intent
     || String(baseResult.faqId || 'unknown').toUpperCase();
   const result = { ...baseResult, matchedIntent };

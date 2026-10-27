@@ -135,9 +135,11 @@ test('discount YES handoff is distinct from discount NO completion', async () =>
     shouldTransfer: () => false, send: (payload) => { sent.push(payload); return true; }
   });
   assert.equal(yes.status, 'transfer');
-  assert.deepEqual(JSON.parse(sent[0].handoffData), { status: 'transfer', intent: 'discount_yes' });
+  assert.deepEqual(sent.map(({ type }) => type), ['text', 'end', 'end']);
+  assert.equal(sent[0].token, 'Connecting you now.');
+  assert.deepEqual(JSON.parse(sent[1].handoffData), { status: 'transfer', intent: 'discount_yes' });
   assert.equal(no.status, 'end');
-  assert.deepEqual(JSON.parse(sent[1].handoffData), { status: 'completed', reason: 'discount-declined' });
+  assert.deepEqual(JSON.parse(sent[2].handoffData), { status: 'completed', reason: 'discount-declined' });
 });
 
 test('AI Automation YES is spoken before the existing transfer handoff; NO keeps the turn open', async () => {

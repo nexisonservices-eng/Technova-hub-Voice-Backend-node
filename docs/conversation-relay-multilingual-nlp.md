@@ -1,116 +1,151 @@
-# Optional multilingual intent recognition
+# ConversationRelay multilingual NLP
 
-## Architecture and scope
+## What the pipeline does
 
-`conversationRelayFaq.js` already owns approved Tamil answers, NFKC normalization,
-Tamil mark preservation, Nexion aliases, a narrow Cyrillic STT repair, phrase
-matching, edit distance and the confirmation state machine. Those remain the
-source of truth. The new `conversationRelayIntent.js` reuses normalization,
-edit distance and FAQ entries. It returns the existing FAQ object, intent,
-rule confidence, language heuristic, reason and processing latency. It never
-generates an answer. Existing intent names remain `COMPANY_SERVICES` and
-`AI_AUTOMATION` for compatibility.
+`conversationRelayIntent.js` validates the transcript type and size, applies NFKC
+normalization and the existing conservative Tamil/Tanglish aliases, detects
+script hints, checks explicit workflow rules, reuses configured FAQ matching,
+and then scores the remaining FAQ patterns with a symmetric token Dice score.
+That score is a retrieval signal, not a probability. Semantic retrieval uses no
+network calls, embeddings, paid service, or new runtime dependency. Close or weak
+matches are rejected. The returned FAQ object is always the approved source for
+the spoken answer; the recognizer does not generate facts.
 
-The WebSocket handler injects the selected FAQ into the existing state machine.
-TwiML, approved answers, Tamil welcome, voice, transfer destination resolution,
-tenant authentication, workflow execution and outgoing protocol are unchanged.
-No dependencies, paid NLP API, Groq requests or remote calls were added. The
-recognizer function boundary permits a future adapter after separate review;
-such an adapter must return approved FAQ IDs, never arbitrary spoken answers.
+The enabled registry covers greetings, services/company information, AI
+automation, Nexion, Nexion benefits, repetitive tasks, supported businesses,
+offers, contact details, thanks, direct human requests, and goodbye. Pricing is
+not in the approved knowledge base and is deliberately rejected. Current answer
+content is Tamil; language detection of caller input does not translate or
+rewrite answers. The context helper stores only the last FAQ ID and its timestamp
+for five minutes. A recognized reference can repeat that approved answer; the
+system does not invent a deeper explanation or an example absent from the FAQ.
 
-## Activation and rollback
+High-impact handoff and goodbye decisions use bounded rules. A human mention
+alone, a negated request, or a plain acknowledgement without a pending explicit
+confirmation does not cause transfer. Transfer destination resolution, pending
+confirmation state, workflow execution, and handoff actions remain in the
+existing ConversationRelay / FAQ state machine. Partial frames are ignored,
+ordered queue handling processes each received frame once, and completed calls
+ignore later prompts. Twilio prompt frames do not expose a stable utterance ID
+in this integration, so identical consecutive final transcripts cannot be
+reliably distinguished from an intentional repeated question. The handler does
+not suppress them based only on matching text; this preserves legitimate
+repeated questions and avoids dropping a real transfer confirmation.
 
-Default: disabled. Only `CONVERSATION_RELAY_MULTILINGUAL_NLP=true` enables it.
-The setting is captured per connection. No environment file was changed.
-Disable/unset the flag and restart workers for rollback; active connections
-keep their original setting. Review and validate in staging before enabling.
+## Flag and thresholds
 
-Disabled mode uses the original matcher and confirmation behavior. Enabled mode
-uses explicit Tamil/Tanglish aliases and complete configured phrases for the two
-enhanced topics. Other topics use the existing FAQ matcher. Recognizer exceptions
-fall back to that matcher with `recognizer_error` diagnostics. A deliberate
-rejection of a services/automation phrase does not pass through the legacy fuzzy
-matcher, since that would bypass the new confidence safeguards.
+`CONVERSATION_RELAY_MULTILINGUAL_NLP` remains opt-in and is snapshotted for each
+connection. No production environment file was changed. When disabled, the
+original FAQ matcher remains the selection path for compatibility. When enabled,
+explicit transfer and goodbye boundaries are stricter. A recognizer exception
+falls back to the legacy matcher.
 
-Similarity is limited to one edit in one non-topic Latin word of a phrase with
-at least three tokens and equal token counts. Topic tokens must match explicit
-aliases. No global fuzzy topic matching, embeddings or inferred translations.
-Scores 0.99 (configured phrase), 0.9 (bounded similarity), and 0.8 (other legacy
-FAQ) are deterministic rule scores, not calibrated probabilities.
+Optional score thresholds are process environment settings:
 
-Enabled transfer consent requires a complete short confirmation. Plain YES/NO,
-Tamil confirmations and polite replies remain supported. Embedded affirmative
-words in unknown longer questions cannot transfer. This intentionally rejects
-some longer freeform confirmations that the original permissive matcher accepts.
+- `CONVERSATION_RELAY_NLP_DIRECT_THRESHOLD`: direct rule threshold, default
+  `0.9`, accepted range `0.5` to `1.0`.
+- `CONVERSATION_RELAY_NLP_SEMANTIC_THRESHOLD`: token retrieval threshold,
+  default `0.72`, accepted range `0.5` to `1.0`.
+- `CONVERSATION_RELAY_NLP_HANDOFF_THRESHOLD`: explicit handoff rule threshold,
+  default `0.98`, accepted range `0.9` to `1.0`.
 
-## Frames and privacy
+These are heuristic thresholds, not statistically calibrated probabilities.
+The included labelled corpus is regression coverage, not a representative call
+dataset. Calibrate with reviewed, consented staging utterances before rollout.
 
-Only authenticated nonempty prompts with `last === true` route to the state
-machine. Partial/invalid frames do not mutate state or produce output. Existing
-ordered processing sends one response per accepted turn and ignores prompts
-after transfer/end. Identical later questions receive answers: text/time-based
-deduplication would swallow legitimate repetition or transfer consent. Twilio's
-documented prompt frame has no unique turn ID, so a replayed identical final
-cannot reliably be distinguished from an intentional repeated question.
+## Speech recognition and speech output
 
-`relay_intent_recognized` includes heuristic language, allowlisted canonical
-normalized vocabulary (other tokens replaced by `[redacted]`), intent, confidence,
-reason, fallback reason and local processing milliseconds. It excludes customer
-prose and destinations. Enabled mode also suppresses transcript fields in the
-older logs, since regex phone/email redaction alone cannot remove names or
-addresses. Disabled mode retains existing logging. Existing keyed per-connection
-fingerprints remain. Language detection distinguishes Tamil script, mixed Tamil
-and Latin, likely Tanglish, and English-or-Latin; it is not an STT quality score.
+The live IVR path configures Twilio ConversationRelay with Deepgram as the
+transcription provider, `transcriptionLanguage="multi"`, ElevenLabs TTS, and
+the existing configured voice. Twilio documents that `multi` requires Deepgram
+for STT and ElevenLabs for TTS. Deepgram's current Nova-3 multilingual
+documentation lists Tamil, English, and mid-sentence code-switching. The code
+does not select a Deepgram speech model explicitly, so the exact account-side
+model, availability, and audio accuracy have not been verified in a live call.
+Provider support does not guarantee recognition accuracy for this call path.
 
-## Speech configuration review (2026-10-27)
+The separate Python audio transcription service uses Groq with the configured
+`distil-whisper-large-v3-en` model and defaults its request language to English.
+It is not the STT path used by the Twilio ConversationRelay FAQ handler.
 
-The live workflow in `ivrExecutionEngine.js` explicitly selects Deepgram STT,
-`transcriptionLanguage="multi"`, ElevenLabs TTS, the configured language/voice,
-the approved welcome, and bounded silence timeout. It does not explicitly select
-a speech model. The generic TwiML builder's Google default is overridden there.
+Sources: [Twilio ConversationRelay language settings](https://www.twilio.com/docs/voice/twiml/connect/conversationrelay),
+[Deepgram Nova-3 language prompting and code-switching](https://developers.deepgram.com/docs/nova-3-language-prompting),
+[Deepgram model and language overview](https://developers.deepgram.com/docs/models-languages-overview/).
 
-Twilio supports `multi` STT with Deepgram and automatic TTS with ElevenLabs:
-https://www.twilio.com/docs/voice/twiml/connect/conversationrelay
+Speech recognition produces the transcript; this NLP module only interprets
+that text. It cannot restore words missing from a poor transcript. TTS output
+does not establish STT accuracy. The separate Python TTS integration was not
+changed; its HTTP failures are not NLP failures.
 
-Deepgram currently lists Tamil `ta` as a Nova-3 single-language option, but its
-Nova-3 multilingual group lists ten languages and excludes Tamil. Thus the
-current `multi` setting must not be assumed to recognize Tamil reliably:
-https://developers.deepgram.com/docs/models-languages-overview/
+## Diagnostics and privacy
 
-For a separately approved staging trial, evaluate explicit Deepgram
-`nova-3-general` with Tamil STT (`ta`, after confirming Twilio accepts the code),
-and explicit English STT for English sessions. Twilio's nested Language elements
-and switch-language messages support selecting per-language settings; defining
-Language elements alone does not activate them. Verify the Twilio-supported
-provider/model/language combination with the account before changing production.
-Keep approved TTS and welcome. Test Tamil and English audio plus Tanglish
-code-switching: a Tamil-specific model does not guarantee mixed-language quality.
+Intent diagnostics include stage, selected strategy, text-derived language hint,
+the validated language hint reported by the STT provider,
+selected intent and knowledge ID, recognized approved product entities,
+heuristic score and threshold, fallback reason, and local processing latency.
+Caller transcript text is omitted from
+ConversationRelay logs in both feature-flag modes. Matching fingerprints use a
+random per-connection HMAC key and are not reusable across calls. Existing
+static FAQ response diagnostics remain content-redacted. No recordings,
+credentials, or caller names are added to diagnostics.
 
-## Validation and deployment risks
+## Test and local staging procedure
 
-Added regression corpus: all requested examples; mixed scripts; bounded typo
-repair; similar-word negatives; unknown questions; safe diagnostics; flag and
-exception fallback; repeated questions; transfer consent. Added an actual
-mocked WebSocket session case covering enabled first-turn Tamil, partial/final
-handling, repetition and single handoff. Existing ConversationRelay suites
-exercise TwiML, session association, queueing and connected Hand Off destinations.
+The repository tests use Node's built-in `node:test` API. `npm test` now invokes
+`node --test`; Node 18 or later is required by the test harness. Run focused NLP
+coverage with:
 
-Syntax checks for all five changed/new JavaScript/test files and `git diff
---check` passed. Runtime test attempt `node --test test/conversationRelay*.test.cjs`
-was blocked by sandbox `spawn EPERM`. The escalation request was rejected, so
-runtime pass counts and accuracy/latency benchmarks are unavailable. These tests
-must pass before rollout. The package's `npm test` uses Jest, whereas these
-existing `.cjs` tests use Node's built-in test runner; use the Node command above.
+```powershell
+node --test test/conversationRelayIntent.test.cjs test/conversationRelayFaq.test.cjs test/conversationRelayNlpPipeline.test.cjs test/conversationRelayProtocol.test.cjs
+```
 
-No production traffic/audio was used. Local intent latency is measured per call
-to the recognizer, excluding STT, WebSocket queueing, TTS and network time. No
-production latency or speech accuracy claim can be made from this corpus.
+The `conversationRelay.test.cjs` module imports the TTS client and needs a
+well-formed `PYTHON_TTS_BASE_URL`, but does not call the service. For a local
+suite run, set a test-only value in the shell (for example,
+`http://127.0.0.1:4000`), run `npm test`, then remove the shell variable:
 
-Conservative full-phrase rules can reject unfamiliar paraphrases, dialects,
-transpositions and severe STT errors. Other legacy intents retain their existing
-substring-matching limitations. New intents/aliases need reviewed examples and
-negative cases. Confidence is not a guarantee of intent correctness. The NLP
-layer cannot recover words absent from an incorrect transcript. Approved
-automation answers still offer transfer, even for definition questions; that
-business content is intentionally unchanged. Run staged audio trials and review
-fallback rates before enabling the flag. Nothing has been deployed or pushed.
+```powershell
+$env:PYTHON_TTS_BASE_URL = 'http://127.0.0.1:4000'
+npm test
+Remove-Item Env:PYTHON_TTS_BASE_URL
+```
+
+Do not write this test value to production configuration. Run `node --check` on changed
+JavaScript files and `git diff --check` before review. The labelled corpus reports
+recognition accuracy and observed local matcher latency when it runs. These
+measure text matching only and exclude STT, TTS, WebSocket queueing, and network
+time.
+
+For an isolated staging process, set the flag in that process environment only,
+for example `$env:CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true'`, and clear it
+after the process exits. Confirm the effective Twilio STT/TTS configuration and transfer destination,
+and exercise reviewed English, Tamil-script, Tanglish, code-switched, unknown,
+negated-transfer, and confirmation cases. Compare transcripts and outcomes with
+the expected labels; review fallback and false-transfer counts before any
+rollout. Unset the flag and restart the staging worker to return to legacy
+matching. Do not copy the flag into production configuration as part of this
+change.
+
+## Limits and rollout checklist
+
+- FAQ coverage is limited to the existing approved facts. Pricing and
+  unsupported service claims fall back instead of being generated.
+- With the flag disabled, the original legacy FAQ matcher is retained for
+  compatibility, including its broader substring handling. The stricter
+  transfer and goodbye guards apply in the opt-in NLP path.
+- Token similarity is explainable and fast but is not a full semantic model.
+  Unseen paraphrases, dialects, speech-recognition errors, and ambiguous
+  questions may fall back or request the existing clarification.
+- Follow-ups repeat the last approved answer where possible. Itemized service
+  details and custom examples are not available in the current knowledge base.
+- The labelled fixtures are authored regression examples. They do not establish
+  production precision, recall, false-transfer rate, or speech accuracy.
+- No new recurring cost or model API is introduced. Local matcher latency is
+  reported by tests; live end-to-end latency remains unmeasured.
+
+Before any separate rollout decision, verify the installed Twilio account's
+provider/model support, run the complete suite and syntax checks, evaluate
+consented staging audio, review false handoffs and fallbacks, confirm the
+connected Hand Off destination, and review `CONVERSATION_RELAY_NLP_*` thresholds.
+This code change does not enable the feature in production and has not been
+deployed or pushed.
