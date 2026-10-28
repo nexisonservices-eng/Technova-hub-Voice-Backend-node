@@ -250,6 +250,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       ['என்னென்ன service பண்றீங்க?', services],
       ['Enna services pandringa?', services],
       ['Enna service pandringa?', services], ['Enna service panreenga?', services],
+      ['Neenga enna services pandreenga?', services], ['Unga company enna pannum?', services],
       ['என்ன சர்வீசஸ் பண்றீங்க?', services], ['What services do you provide?', services],
       ['AI automation na enna?', automation], ['ஏஐ ஆட்டோமேஷன் என்ன?', automation],
       ['What is AI automation?', automation]

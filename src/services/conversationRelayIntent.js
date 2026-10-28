@@ -16,6 +16,8 @@ const aliases = new Map([
 
 const extraPatterns = {
   services: ['enna services pandringa', 'enna services', 'services enna', 'what services do you provide',
+    'enna service pandringa', 'neenga enna services pandreenga', 'neenga enna service pandreenga',
+    'neenga enna services panreenga', 'unga company enna pannum', 'unga company enna panum', 'company enna pannum',
     'can you tell me what services you provide', 'what are your services', 'tell me about your services',
     'what does your company actually do', 'what services can you provide to my business',
     'how can you help my business', 'neenga business ku enna help pannuveenga'],

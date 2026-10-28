@@ -6,7 +6,8 @@ test('multilingual intent corpus preserves configured answers and rejects near w
   const { recognizeMultilingualIntent: recognize } = await load();
   const { FAQ_ENTRIES } = await import('../src/services/conversationRelayFaq.js');
   const corpus = [
-    ['services', ['What services do you provide?', 'Enna services pandringa?',
+    ['services', ['What services do you provide?', 'What services do you offer?', 'Enna services pandringa?', 'Enna service pandringa?',
+      'Neenga enna services pandreenga?', 'Unga company enna pannum?',
       'என்ன சர்வீசஸ் பண்றீங்க?', 'என்ன சேவைகள் செய்கிறீர்கள்?', 'என்ன services பண்றீங்க?',
       'Yeah, what services do you provide?', 'What services do you provde?']],
     ['ai_automation', ['What is AI automation?', 'AI automation na enna?',
@@ -26,6 +27,39 @@ test('multilingual intent corpus preserves configured answers and rejects near w
     'unlisted question', '', '...']) assert.equal(recognize(text).faq, null, text);
   assert.equal(recognize('contact number').faq.id, 'contact');
   assert.equal(recognize('what services do you provde').reason, 'bounded_phrase_similarity');
+});
+
+test('Tanglish company questions use existing services answer with multilingual intent on or off', async () => {
+  const { FAQ_ENTRIES, FAQ_RESPONSES, createFaqState, processLiveConversationRelayFaqTurn } = await import('../src/services/conversationRelayFaq.js');
+  const { resolveConversationRelayIntent: resolve } = await load();
+  for (const enabled of [false, true]) {
+    for (const question of ['Enna service pandringa?', 'Neenga enna services pandreenga?', 'Unga company enna pannum?',
+      'AI automation na enna?', 'What services do you offer?']) {
+      const recognition = resolve(question, { enabled });
+      assert.ok(recognition.faq, `${question} (${enabled})`);
+      const frames = [];
+      const result = processLiveConversationRelayFaqTurn(createFaqState(), question, {
+        transferAvailable: false, matcher: () => recognition.faq,
+        strictConfirmation: enabled, contextEnabled: enabled,
+        classification: recognition.classification,
+        send: (frame) => { frames.push(frame); return true; }
+      });
+      const expectedId = question.toLowerCase().startsWith('ai automation') ? 'ai_automation' : 'services';
+      assert.equal(result.faqId, expectedId, question);
+      assert.equal(result.answer, FAQ_ENTRIES.find(({ id }) => id === expectedId).answer, question);
+      assert.equal(frames.at(-1).token, result.answer, question);
+    }
+  }
+
+  const unknown = resolve('What is your unpublished refund exception?', { enabled: true });
+  assert.equal(unknown.faq, null);
+  const state = createFaqState();
+  const result = processLiveConversationRelayFaqTurn(state, 'What is your unpublished refund exception?', {
+    transferAvailable: false, matcher: () => unknown.faq, classification: unknown.classification,
+    strictConfirmation: true, contextEnabled: true, send: () => true
+  });
+  assert.equal(result.faqId, 'unknown');
+  assert.equal(result.answer, FAQ_RESPONSES.unknown);
 });
 
 test('flag is explicit; errors use existing matcher and safe diagnostics omit customer prose', async () => {

@@ -173,7 +173,9 @@ const isCompanyServicesQuestion = (text) => {
   const hasActivity = tokens.some(isServiceActivityToken);
   const asksAboutWork = tokenSet.has('vela') && tamilOrTanglishQuestion && hasActivity;
   const asksWhat = ['enna', 'என்ன', 'என்னென்ன'].some((token) => tokenSet.has(token));
-  return (hasService && hasQuestionMarker && (hasActivity || englishQuestion || asksWhat)) || asksAboutWork;
+  const asksWhatCompanyDoes = tokenSet.has('company') && asksWhat
+    && ['pannum', 'panum', 'does', 'do'].some((token) => tokenSet.has(token));
+  return (hasService && hasQuestionMarker && (hasActivity || englishQuestion || asksWhat)) || asksAboutWork || asksWhatCompanyDoes;
 };
 
 const isAutomationToken = (token) => ['automation', 'automtion', 'ஆட்டோமேஷன்', 'ஆட்டோமேசன்'].includes(token);
