@@ -11,6 +11,7 @@ import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
 import { multilingualIntentEnabled, resolveConversationRelayIntent, intentDiagnostic } from './conversationRelayIntent.js';
 import {
   FAQ_ENTRIES,
+  FAQ_RESPONSES,
   createFaqState,
   extractConversationRelayTranscription,
   normalizeFaqQuestion,
@@ -36,6 +37,17 @@ const snapshotFaqState = (state) => ({
   awaitingHumanConfirmation: state?.awaitingHumanConfirmation === true,
   awaitingAutomationConfirmation: state?.awaitingAutomationConfirmation === true
 });
+const FAQ_DIAGNOSTIC_WORDS = new Set([
+  'enna', 'services', 'service', 'pandringa', 'panringa', 'pandreenga', 'panreenga', 'pannum', 'panum',
+  'neenga', 'unga', 'company', 'what', 'do', 'you', 'offer', 'ai', 'automation', 'na', 'meaning', 'is',
+  'என்ன', 'சர்வீசஸ்', 'சர்வீஸ்', 'பண்றீங்க', 'பண்ணுறீங்க', 'நீங்க', 'உங்க', 'நிறுவனம்', 'செய்யும்',
+  'ஏஐ', 'ஆட்டோமேஷன்'
+]);
+const safeFaqDiagnosticTranscript = (value) => {
+  const tokens = String(value || '').normalize('NFKC').match(/[\p{L}\p{M}\p{N}]+/gu) || [];
+  return tokens.map((token) => FAQ_DIAGNOSTIC_WORDS.has(token.toLowerCase()) ? token : '[redacted]')
+    .join(' ').slice(0, 180);
+};
 
 export const verifyRelayUpgrade = async (req) => {
   try {
@@ -115,9 +127,9 @@ class ConversationRelayService {
     let previousFinalAt = null;
     // Snapshot per call; changing the environment cannot alter an active call.
     const nlpEnabled = multilingualIntentEnabled();
-    // Transcripts can contain names and other personal information even after
-    // simple phone/email redaction. Keep diagnostics content-free in both modes.
-    const diagnosticText = () => '[transcript omitted]';
+    // Log only allowlisted FAQ vocabulary; names, numbers, and unrelated words
+    // are replaced before transcript diagnostics leave this handler.
+    const diagnosticText = safeFaqDiagnosticTranscript;
     // Per-connection keyed fingerprints compare repeated speech without adding
     // transcript content or reusable hashes of customer speech to diagnostics.
     const fingerprintKey = randomUUID();
@@ -128,7 +140,17 @@ class ConversationRelayService {
     });
     const sendFrame = (payload, context = {}) => {
       const outboundFrame = ++outboundSequence;
-      const fields = { ...context, outboundFrame, frameType: payload.type };
+      const answerKey = payload.type === 'text'
+        ? FAQ_ENTRIES.find(({ answer }) => answer === payload.token)?.id
+          || Object.entries(FAQ_RESPONSES).find(([, answer]) => answer === payload.token)?.[0]
+          || 'unmapped_text'
+        : null;
+      const fields = {
+        ...context, outboundFrame, frameType: payload.type,
+        ...(payload.type === 'text' ? {
+          answerKey, speechText: redactFaqDiagnosticText(payload.token)
+        } : {})
+      };
       // A write callback confirms a local WebSocket write, not audible playback.
       trace('relay_output_attempt', fields);
       const accepted = safeSend(socket, payload, (error) => trace('relay_output_write', {
@@ -387,7 +409,7 @@ class ConversationRelayService {
         });
         logger.info('ConversationRelay FAQ response selected', {
           event: 'response_selected', connectionId, correlationId, turn: currentTurn,
-          faqId: result.faqId || null, matchedIntent,
+          faqId: result.faqId || null, answerKey: result.faqId || 'unknown', matchedIntent,
           selectedResponse: redactFaqDiagnosticText(result.answer || ''),
           action: result.action
         });
@@ -472,6 +494,8 @@ class ConversationRelayService {
       const commit = String(process.env.RENDER_GIT_COMMIT || '');
       trace('relay_runtime_identity', {
         handler: 'node_predefined_faq_v1', processId: process.pid, faqConfigurationHash,
+        workingDirectory: process.cwd(), entryPoint: process.argv[1] || null,
+        multilingualIntentEnabled: nlpEnabled,
         deployedCommit: /^[a-f0-9]{40}$/i.test(commit) ? commit : null,
         messageListenerCount: socket.listenerCount('message')
       });

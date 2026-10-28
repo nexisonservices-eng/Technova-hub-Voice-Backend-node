@@ -278,6 +278,72 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
       } finally { socket.close(); }
     });
+    await t.test('both scoped FAQs return configured answers through the live handler with either intent mode', async () => {
+      const previousFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      const focusedQuestions = [
+        ['Enna service pandringa?', services, 'services'],
+        ['Enna services pandringa?', services, 'services'],
+        ['Neenga enna service pandreenga?', services, 'services'],
+        ['Neenga enna services pandreenga?', services, 'services'],
+        ['Unga company enna pannum?', services, 'services'],
+        ['What services do you offer?', services, 'services'],
+        ['AI automation enna?', automation, 'ai_automation'],
+        ['AI automation na enna?', automation, 'ai_automation'],
+        ['AI automation meaning enna?', automation, 'ai_automation'],
+        ['What is AI automation?', automation, 'ai_automation']
+      ];
+      try {
+        for (const flag of ['false', 'true']) {
+          process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = flag;
+          for (const [question, answer, faqId] of focusedQuestions) {
+            const { socket } = await session(question);
+            try {
+              assert.deepEqual(socket.sent.map((frame) => frame.token), [answer], `${flag}: ${question}`);
+              const runtime = logs.find((entry) => entry.event === 'relay_runtime_identity');
+              assert.equal(runtime?.handler, 'node_predefined_faq_v1');
+              assert.equal(runtime?.multilingualIntentEnabled, flag === 'true');
+              assert.ok(runtime?.faqConfigurationHash);
+              assert.equal(runtime?.workingDirectory, process.cwd());
+              const received = logs.find((entry) => entry.event === 'prompt_received');
+              const normalized = logs.find((entry) => entry.event === 'normalized_transcription');
+              const selected = logs.find((entry) => entry.event === 'response_selected');
+              const spoken = logs.find((entry) => entry.event === 'relay_output_attempt' && entry.frameType === 'text');
+              assert.ok(received.receivedTranscription.toLowerCase().includes(question.toLowerCase().replace(/[?!]/g, '')));
+              assert.ok(normalized.transcription.includes(question.toLowerCase().replace(/[?!]/g, '')));
+              assert.equal(selected.answerKey, faqId);
+              assert.equal(spoken.answerKey, faqId);
+              assert.equal(spoken.speechText, answer);
+              assert.equal(logs.some((entry) => entry.event === 'faq_fallback_reason'), false);
+            } finally { socket.close(); }
+          }
+        }
+      } finally {
+        if (previousFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = previousFlag;
+      }
+    });
+    await t.test('FAQ diagnostics redact caller identifiers and unsupported input still speaks the fixed fallback', async () => {
+      const previousFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      try {
+        const { socket } = await session('Kavitha, what is your unpublished refund exception? Call me +919876543210');
+        try {
+          const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
+          assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+          const transcriptLog = logs.find((entry) => entry.event === 'prompt_received');
+          assert.ok(transcriptLog.receivedTranscription.startsWith('[redacted] what is [redacted]'));
+          const serializedLogs = JSON.stringify(logs);
+          assert.equal(serializedLogs.includes('Kavitha'), false);
+          assert.equal(serializedLogs.includes('9876543210'), false);
+          const output = logs.find((entry) => entry.event === 'relay_output_attempt' && entry.frameType === 'text');
+          assert.equal(output.answerKey, 'unknown');
+          assert.equal(output.speechText, FAQ_RESPONSES.unknown);
+        } finally { socket.close(); }
+      } finally {
+        if (previousFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = previousFlag;
+      }
+    });
     await t.test('empty final event must not offer handoff before the first question', async () => {
       const { socket } = await session('Enna service pandringa?', { blankFinal: true });
       try { assert.deepEqual(socket.sent.map((frame) => frame.token), [services]); }
@@ -427,11 +493,11 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         assert.deepEqual(socket.sent.map((frame) => frame.token), [services]);
         const partial = logs.find((entry) => entry.event === 'prompt_received' && !entry.last);
         const final = logs.find((entry) => entry.event === 'prompt_received' && entry.last);
-        assert.equal(partial.receivedTranscription, '[transcript omitted]');
-        assert.equal(final.receivedTranscription, '[transcript omitted]');
+        assert.equal(partial.receivedTranscription, 'Enna services pandringa');
+        assert.equal(final.receivedTranscription, 'Enna services pandringa');
         assert.ok(partial.turn < final.turn);
         assert.equal(logs.find((entry) => entry.event === 'normalized_prompt' && entry.turn === final.turn)
-          .normalizedTranscription, '[transcript omitted]');
+          .normalizedTranscription, 'enna services pandringa');
         const matches = logs.filter((entry) => entry.event === 'faq_match_result');
         assert.equal(matches.length, 1, 'partial and interrupt events must not route a question');
         assert.equal(matches[0].turn, final.turn);
