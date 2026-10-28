@@ -68,6 +68,30 @@ The separate Python audio transcription service uses Groq with the configured
 `distil-whisper-large-v3-en` model and defaults its request language to English.
 It is not the STT path used by the Twilio ConversationRelay FAQ handler.
 
+## Optional Node-side Groq intent fallback
+
+The authenticated Node ConversationRelay handler can optionally make a
+classification-only Groq chat-completions request after its deterministic FAQ
+resolver returns no FAQ. It skips known FAQ matches, standalone confirmations,
+recognized unrelated topics, and unsupported pricing/policy questions. It sends
+only the current sanitized utterance; it does not send call identifiers,
+conversation history, or phone numbers. Groq can return only `services`,
+`ai_automation`, or `unknown`. A recognized intent selects the existing matching
+FAQ entry and answer; an unknown result or any API/JSON/validation failure keeps
+the existing fallback.
+
+This Node fallback is off unless `GROQ_NLP_ENABLED=true`. If enabled, configure
+`GROQ_API_KEY` in the Node service environment. Optional settings are
+`GROQ_NLP_MODEL` (defaults to `openai/gpt-oss-20b`),
+`GROQ_NLP_TIMEOUT_MS` (defaults to 1500; accepted range 250–10000), and
+`GROQ_NLP_CONFIDENCE_THRESHOLD` (defaults to 0.8; accepted range 0.5–1.0).
+Model availability and JSON-mode support can change; choose an active model that
+supports JSON Object Mode. Groq documents the chat-completions endpoint and
+`response_format: { type: "json_object" }` in its [API reference](https://console.groq.com/docs/api-reference),
+and currently lists JSON Object Mode for [OpenAI GPT-OSS 20B](https://console.groq.com/docs/model/openai/gpt-oss-20b).
+API usage, billing, and rate limits depend on the Groq account and selected
+model; no free-usage assumption is made. No API call is made in tests.
+
 Sources: [Twilio ConversationRelay language settings](https://www.twilio.com/docs/voice/twiml/connect/conversationrelay),
 [Deepgram Nova-3 language prompting and code-switching](https://developers.deepgram.com/docs/nova-3-language-prompting),
 [Deepgram model and language overview](https://developers.deepgram.com/docs/models-languages-overview/).
@@ -80,14 +104,14 @@ changed; its HTTP failures are not NLP failures.
 ## Diagnostics and privacy
 
 Intent diagnostics include stage, selected strategy, text-derived language hint,
-the validated language hint reported by the STT provider,
-selected intent and knowledge ID, recognized approved product entities,
-heuristic score and threshold, fallback reason, and local processing latency.
-Caller transcript text is omitted from
-ConversationRelay logs in both feature-flag modes. Matching fingerprints use a
-random per-connection HMAC key and are not reusable across calls. Existing
-static FAQ response diagnostics remain content-redacted. No recordings,
-credentials, or caller names are added to diagnostics.
+the validated language hint reported by the STT provider, deterministic and
+Groq intent outcomes, confidence, selected answer key, Groq attempt status,
+fallback reason, and local processing latency. Prompt diagnostics preserve only
+allowlisted FAQ vocabulary; other words are replaced with `[redacted]`. Outgoing
+text diagnostics contain only the configured response after content redaction.
+Matching fingerprints use a random per-connection HMAC key and are not reusable
+across calls. No API keys, auth tokens, phone numbers, or caller names are added
+to diagnostics.
 
 ## Test and local staging procedure
 

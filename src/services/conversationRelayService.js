@@ -9,6 +9,7 @@ import logger from '../utils/logger.js';
 import { validateAgentConfig, resolveCallProvider } from '../config/conversationRelay.js';
 import { createOrderedRelayFrameQueue } from './conversationRelayProtocol.js';
 import { multilingualIntentEnabled, resolveConversationRelayIntent, intentDiagnostic } from './conversationRelayIntent.js';
+import groqIntentService from './conversationRelayGroq.js';
 import {
   FAQ_ENTRIES,
   FAQ_RESPONSES,
@@ -365,10 +366,58 @@ class ConversationRelayService {
         const transferDestination = resolveConnectedHandoffDestination(workflowConfig, nodeId);
         const transferAvailable = data.transferOnCustomerRequest !== false
           && /^\+[1-9]\d{7,14}$/.test(String(transferDestination.destination || '').trim());
-        const recognition = resolveConversationRelayIntent(text, {
+        const deterministicRecognition = resolveConversationRelayIntent(text, {
           enabled: nlpEnabled, providerLanguage: message.lang
         });
-        if (nlpEnabled) trace('relay_intent_recognized', intentDiagnostic(recognition));
+        trace('relay_deterministic_intent', {
+          featureFlagEnabled: nlpEnabled,
+          faqId: deterministicRecognition.faq?.id || null,
+          intent: deterministicRecognition.intent || deterministicRecognition.faq?.intent || null,
+          classification: deterministicRecognition.classification || null,
+          confidence: deterministicRecognition.confidence ?? null,
+          strategy: deterministicRecognition.strategy || (deterministicRecognition.faq ? 'legacy_faq_match' : null),
+          reason: deterministicRecognition.reason
+        });
+        let groqRecognition;
+        try {
+          groqRecognition = await groqIntentService.classifyUnmatchedQuestionWithGroq(
+            text, deterministicRecognition
+          );
+        } catch {
+          // Keep the existing FAQ fallback safe if the optional classifier
+          // itself fails before it can convert a provider error to a status.
+          groqRecognition = {
+            attempted: true, status: 'request_failed', faq: null,
+            intent: null, confidence: null, model: null, failureKind: 'classifier_error'
+          };
+        }
+        trace('relay_groq_fallback', {
+          enabled: process.env.GROQ_NLP_ENABLED === 'true',
+          attempted: groqRecognition.attempted,
+          status: groqRecognition.status,
+          intent: groqRecognition.intent,
+          confidence: groqRecognition.confidence,
+          model: groqRecognition.model,
+          failureKind: groqRecognition.failureKind,
+          httpStatus: groqRecognition.httpStatus || null
+        });
+        const recognition = groqRecognition.faq
+          ? {
+            ...deterministicRecognition,
+            faq: groqRecognition.faq,
+            intent: groqRecognition.faq.intent,
+            classification: 'known_faq',
+            confidence: groqRecognition.confidence,
+            scoreMeaning: 'Groq-reported classification confidence; not a calibrated probability',
+            strategy: 'groq_fallback',
+            knowledgeId: groqRecognition.faq.id,
+            reason: 'groq_fallback',
+            fallbackReason: null
+          }
+          : deterministicRecognition;
+        if (nlpEnabled || groqRecognition.attempted) {
+          trace('relay_intent_recognized', intentDiagnostic(recognition));
+        }
         const result = processLiveConversationRelayFaqTurn(faqState, text, {
           transferAvailable,
           matcher: () => recognition.faq,

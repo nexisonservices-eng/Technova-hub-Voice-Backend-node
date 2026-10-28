@@ -19,9 +19,17 @@ const automation = 'எங்களோட AI ஆட்டோமேஷன் ச�
 
 test('real WebSocket first-turn flow waits for workflow and setup, then answers without repetition', async (t) => {
   const logs = [];
+  const groqCalls = [];
+  const groqService = {
+    async classifyUnmatchedQuestionWithGroq(prompt, deterministic) {
+      groqCalls.push({ prompt, deterministic });
+      return { attempted: false, faq: null, intent: null, confidence: null, model: null, status: 'disabled' };
+    }
+  };
   const fixtures = {
     twilio: {}, ws: { OPEN: 1 },
     Workflow: {}, Call: {}, ExecutionLog: {}, adminCredentialsService: {},
+    groqService,
     logger: Object.fromEntries(['info', 'warn', 'error'].map((level) =>
       [level, (message, fields) => logs.push({ message, ...fields })]))
   };
@@ -29,7 +37,8 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
   const mocks = {
     twilio: 'twilio', ws: 'ws', '../models/Workflow.js': 'Workflow',
     '../models/call.js': 'Call', '../models/ExecutionLog.js': 'ExecutionLog',
-    './adminCredentialsService.js': 'adminCredentialsService', '../utils/logger.js': 'logger'
+    './adminCredentialsService.js': 'adminCredentialsService', '../utils/logger.js': 'logger',
+    './conversationRelayGroq.js': 'groqService'
   };
   const hooks = registerHooks({
     resolve(specifier, context, next) {
@@ -342,6 +351,68 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       } finally {
         if (previousFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
         else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = previousFlag;
+      }
+    });
+    await t.test('optional Groq classification runs only after deterministic miss and selects the configured FAQ answer', async () => {
+      const previousGroqEnabled = process.env.GROQ_NLP_ENABLED;
+      const previousGroqKey = process.env.GROQ_API_KEY;
+      const previousIntentEnabled = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      const originalClassifier = groqService.classifyUnmatchedQuestionWithGroq;
+      const question = 'Could your team streamline the way our onboarding runs?';
+      process.env.GROQ_NLP_ENABLED = 'true';
+      process.env.GROQ_API_KEY = 'test-groq-secret';
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      const initialCalls = groqCalls.length;
+      groqService.classifyUnmatchedQuestionWithGroq = async (prompt, deterministic) => {
+        groqCalls.push({ prompt, deterministic });
+        return {
+          attempted: true, status: 'classified',
+          faq: (await import('../src/services/conversationRelayFaq.js')).FAQ_ENTRIES.find(({ id }) => id === 'services'),
+          intent: 'services', confidence: 0.94, model: 'test-model', failureKind: null
+        };
+      };
+      try {
+        const { socket } = await session(question);
+        try {
+          assert.deepEqual(groqCalls.slice(initialCalls).map(({ deterministic }) => deterministic.faq?.id || null), [null]);
+          assert.equal(groqCalls.at(-1).prompt, question);
+          assert.deepEqual(socket.sent.map((frame) => frame.token), [services]);
+          const groqLog = logs.find((entry) => entry.event === 'relay_groq_fallback');
+          assert.equal(groqLog.attempted, true);
+          assert.equal(groqLog.intent, 'services');
+          assert.equal(logs.find((entry) => entry.event === 'response_selected').answerKey, 'services');
+          assert.equal(logs.find((entry) => entry.event === 'relay_output_attempt' && entry.frameType === 'text').speechText, services);
+          assert.equal(JSON.stringify(logs).includes('test-groq-secret'), false);
+        } finally { socket.close(); }
+      } finally {
+        groqService.classifyUnmatchedQuestionWithGroq = originalClassifier;
+        if (previousGroqEnabled === undefined) delete process.env.GROQ_NLP_ENABLED;
+        else process.env.GROQ_NLP_ENABLED = previousGroqEnabled;
+        if (previousGroqKey === undefined) delete process.env.GROQ_API_KEY;
+        else process.env.GROQ_API_KEY = previousGroqKey;
+        if (previousIntentEnabled === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = previousIntentEnabled;
+      }
+    });
+    await t.test('unexpected Groq classifier rejection preserves the existing unknown fallback', async () => {
+      const previousGroqEnabled = process.env.GROQ_NLP_ENABLED;
+      const originalClassifier = groqService.classifyUnmatchedQuestionWithGroq;
+      process.env.GROQ_NLP_ENABLED = 'true';
+      groqService.classifyUnmatchedQuestionWithGroq = async () => { throw new Error('provider secret'); };
+      try {
+        const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
+        const { socket } = await session('Could you streamline our onboarding workflow?');
+        try {
+          assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+          const groqLog = logs.find((entry) => entry.event === 'relay_groq_fallback');
+          assert.equal(groqLog.status, 'request_failed');
+          assert.equal(groqLog.failureKind, 'classifier_error');
+          assert.equal(JSON.stringify(logs).includes('provider secret'), false);
+        } finally { socket.close(); }
+      } finally {
+        groqService.classifyUnmatchedQuestionWithGroq = originalClassifier;
+        if (previousGroqEnabled === undefined) delete process.env.GROQ_NLP_ENABLED;
+        else process.env.GROQ_NLP_ENABLED = previousGroqEnabled;
       }
     });
     await t.test('empty final event must not offer handoff before the first question', async () => {
