@@ -105,3 +105,4 @@ export const OPENAI_SPOKEN_FALLBACK = 'Sorry, I cannot answer that right now. Pl
 export const OPENAI_HISTORY_LIMIT = MAX_HISTORY_MESSAGES;
 
 export default { generateConversationAnswer };
+
