@@ -372,3 +372,35 @@ test('thank-you FAQ answer does not end the call or repeat the welcome', async (
   assert.equal(result.action, 'answer');
   assert.equal(state.stage, 'awaiting_question');
 });
+
+test('automation follow-up questions use the prior topic instead of being consumed as transfer confirmation', async () => {
+  const { createFaqState, processFaqPrompt } = await importFaq();
+  const state = createFaqState('CA0123456789abcdef0123456789abcdef');
+  const automation = processFaqPrompt(state, 'AI automation na enna?', { transferAvailable: true });
+  assert.equal(automation.faqId, 'ai_automation');
+  assert.equal(state.awaitingAutomationConfirmation, true);
+
+  const how = processFaqPrompt(state, 'Adhu epdi work aagum?', { transferAvailable: true, contextEnabled: true });
+  assert.equal(how.faqId, 'ai_automation_how_it_works');
+  assert.equal(how.contextResolution, 'ai_automation_follow_up');
+  assert.match(how.answer, /In general/);
+  assert.equal(state.awaitingAutomationConfirmation, false);
+
+  const benefits = processFaqPrompt(state, 'Idhu en business-ku enna benefits?', { transferAvailable: true, contextEnabled: true });
+  assert.equal(benefits.faqId, 'ai_automation_benefits');
+  assert.match(benefits.answer, /depend on your business workflow/);
+
+  const pricing = processFaqPrompt(state, 'Adhuku evlo cost aagum?', { transferAvailable: true, contextEnabled: true });
+  assert.equal(pricing.faqId, 'ai_automation_pricing');
+  assert.match(pricing.answer, /do not have an approved price/);
+  assert.equal(state.awaitingHumanConfirmation, true);
+});
+
+test('standalone yes transfers only when the automation offer is still pending', async () => {
+  const { createFaqState, processFaqPrompt } = await importFaq();
+  const state = createFaqState('CA0123456789abcdef0123456789abcdef');
+  processFaqPrompt(state, 'AI automation na enna?', { transferAvailable: true });
+  const result = processFaqPrompt(state, 'Yes, connect me', { transferAvailable: true });
+  assert.equal(result.action, 'transfer');
+  assert.equal(result.faqId, 'ai_automation');
+});

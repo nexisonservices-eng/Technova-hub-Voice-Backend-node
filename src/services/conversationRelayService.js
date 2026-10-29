@@ -423,7 +423,9 @@ class ConversationRelayService {
           matcher: () => recognition.faq,
           classification: nlpEnabled ? recognition.classification : null,
           strictConfirmation: nlpEnabled,
-          contextEnabled: nlpEnabled,
+          // Turn context is local, call-scoped FAQ state and is safe to use
+          // even when optional multilingual NLP classification is disabled.
+          contextEnabled: true,
           send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
             customerTurn: customerTurnNumber })
         });

@@ -277,6 +277,32 @@ const contextualFollowUp = (value) => {
   return null;
 };
 
+// Resolve common anaphoric follow-ups against the last approved topic. Keep
+// answers deliberately bounded: pricing is not present in the approved FAQ,
+// while workflow details depend on the caller's systems and requirements.
+const contextualAutomationFollowUp = (value) => {
+  const text = normalizeFaqQuestion(value);
+  if (/\b(?:price|pricing|cost|how much|evlo|selavu|vilai)\b/.test(text)) {
+    return {
+      faqId: 'ai_automation_pricing',
+      answer: 'AI automation pricing depends on the workflow and integrations, and I do not have an approved price to quote. Would you like me to connect you with our team?'
+    };
+  }
+  if (/\b(?:benefit|benefits|useful|usefulness|business ku|business-ku|advantage|value)\b/.test(text)) {
+    return {
+      faqId: 'ai_automation_benefits',
+      answer: 'In general, AI automation can reduce repetitive manual steps and make routine processes more consistent. The right benefits depend on your business workflow. Would you like to discuss your use case with our team?'
+    };
+  }
+  if (/\b(?:how|epdi|work|works|working|function|operate)\b/.test(text)) {
+    return {
+      faqId: 'ai_automation_how_it_works',
+      answer: 'In general, AI automation uses software and AI to handle routine steps in a workflow. The exact setup depends on the task and the systems involved. Would you like to discuss a specific process with our team?'
+    };
+  }
+  return null;
+};
+
 export const processFaqPrompt = (state, prompt, {
   transferAvailable, matcher = matchFaq, strictConfirmation = false, contextEnabled = strictConfirmation,
   classification = null
@@ -289,6 +315,17 @@ export const processFaqPrompt = (state, prompt, {
   const followUp = contextualFollowUp(text);
   const previousFaqIsFresh = state.lastFaqId && Number.isFinite(state.lastFaqAt)
     && Date.now() - state.lastFaqAt <= 5 * 60 * 1000;
+  if (contextEnabled && state.lastFaqId === 'ai_automation' && previousFaqIsFresh
+    && !isStandaloneConfirmation(text) && !isExplicitHumanHandoffRequest(text)) {
+    const contextualAnswer = contextualAutomationFollowUp(text);
+    if (contextualAnswer) {
+      state.awaitingAutomationConfirmation = false;
+      state.awaitingHumanConfirmation = true;
+      state.lastFaqId = 'ai_automation';
+      state.lastFaqAt = Date.now();
+      return { action: 'answer', ...contextualAnswer, contextResolution: 'ai_automation_follow_up' };
+    }
+  }
   if (contextEnabled && classification !== 'unrelated' && classification !== 'company_unanswered'
     && !faq && followUp && previousFaqIsFresh
     && !state.awaitingHumanConfirmation && !state.awaitingAutomationConfirmation) {
@@ -316,6 +353,11 @@ export const processFaqPrompt = (state, prompt, {
     if (confirmation === 'no') {
       state.awaitingAutomationConfirmation = false;
       return { action: 'answer', answer: 'சரி, பரவாயில்லை. வேற ஏதாவது ஹெல்ப் வேணுமா?', faqId: 'declined_automation_transfer' };
+    }
+    // A new question is not consent. Keep the offer pending only for a
+    // standalone ambiguous reply; recognized questions continue normally.
+    if (!faq && isStandaloneConfirmation(text)) {
+      return { action: 'answer', answer: FAQ_RESPONSES.clarifyTransfer, faqId: 'transfer_confirmation_unclear' };
     }
     state.awaitingAutomationConfirmation = false;
   }
