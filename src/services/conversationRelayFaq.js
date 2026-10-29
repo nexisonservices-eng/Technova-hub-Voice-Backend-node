@@ -218,6 +218,12 @@ export const isStandaloneConfirmation = (value) => {
     || ['ஆமாம்', 'ஆமா', 'சரி', 'வேண்டாம்', 'இல்லை', 'please', 'thanks', 'thank', 'you'].includes(word));
 };
 
+export const isClearTransferConfirmation = (value) => {
+  const text = normalizeFaqQuestion(value);
+  return isStandaloneConfirmation(text)
+    || /^(?:yes|yeah|yep|yup|sure|okay|ok|aama|aamam|sari)(?: please)?\s+(?:connect(?: me)?|transfer(?: me)?|put me through|team kitta connect pannunga|team kitta pesanum)$/i.test(text);
+};
+
 export const matchFaq = (value) => {
   const text = normalizeFaqQuestion(value);
   if (!text) return null;
@@ -332,7 +338,7 @@ export const processFaqPrompt = (state, prompt, {
     faq = FAQ_ENTRIES.find(({ id }) => id === state.lastFaqId) || null;
     if (faq) contextResolution = 'previous_approved_answer_repeated';
   }
-  const confirmation = strictConfirmation && !isStandaloneConfirmation(text) ? 'unclear' : classifyConfirmation(text);
+  const confirmation = strictConfirmation && !isClearTransferConfirmation(text) ? 'unclear' : classifyConfirmation(text);
   // "Yeah, <recognized FAQ question>" must not be consumed as consent to
   // transfer. Keep plain affirmatives and negative replies on the existing path.
   const transferConfirmation = confirmation === 'yes' && ['services', 'ai_automation'].includes(faq?.id)
@@ -378,6 +384,8 @@ export const processFaqPrompt = (state, prompt, {
     }
     // A new question takes precedence over an ambiguous yes/no reply.
     if (!faq && classification === 'unrelated') {
+      state.awaitingHumanConfirmation = false;
+      state.awaitingAutomationConfirmation = false;
       clearFaqContext();
       return { action: 'answer', answer: FAQ_RESPONSES.unrelatedRedirect, faqId: 'unrelated_redirect' };
     }
@@ -391,11 +399,17 @@ export const processFaqPrompt = (state, prompt, {
 
   if (!faq) {
     if (classification === 'unrelated') {
+      state.awaitingHumanConfirmation = false;
+      state.awaitingAutomationConfirmation = false;
       clearFaqContext();
       return { action: 'answer', answer: FAQ_RESPONSES.unrelatedRedirect, faqId: 'unrelated_redirect' };
     }
     if (classification === 'unclear') {
       return { action: 'answer', answer: FAQ_RESPONSES.clarifyQuestion, faqId: 'unclear' };
+    }
+    if (!state.awaitingHumanConfirmation && !state.awaitingAutomationConfirmation
+      && isClearTransferConfirmation(text)) {
+      return { action: 'answer', answer: FAQ_RESPONSES.clarifyQuestion, faqId: 'unprompted_confirmation' };
     }
     if (classification === 'company_unanswered') clearFaqContext();
     state.awaitingHumanConfirmation = true;
@@ -419,24 +433,20 @@ export const processFaqPrompt = (state, prompt, {
   return { action: 'answer', answer: faq.answer, faqId: faq.id, contextResolution };
 };
 
-// Shared by the authenticated live WebSocket handler and the route-level tests.
-export const processLiveConversationRelayFaqTurn = (state, prompt, {
-  transferAvailable, send, matcher, strictConfirmation, contextEnabled, classification
-}) => {
-  const baseResult = processFaqPrompt(state, prompt, {
-    transferAvailable, matcher, strictConfirmation, contextEnabled, classification
-  });
+// Keep decision state separate from frame delivery so the live handler can
+// replace only an unknown/context-only answer with a generated answer.
+export const deliverConversationRelayFaqResult = (baseResult, { send, language = 'ta-IN' } = {}) => {
   const matchedIntent = FAQ_ENTRIES.find(({ id }) => id === baseResult.faqId)?.intent
     || String(baseResult.faqId || 'unknown').toUpperCase();
   const result = { ...baseResult, matchedIntent };
   if (result.action === 'answer') {
-    const sent = send({ type: 'text', token: result.answer, lang: 'ta-IN', last: true, interruptible: true, preemptible: false });
+    const sent = send({ type: 'text', token: result.answer, lang: language, last: true, interruptible: true, preemptible: false });
     return { ...result, responseStatus: sent ? 'spoken' : 'send_failed' };
   }
   if (result.action === 'transfer') {
     let confirmationSent = true;
     if (result.faqId === 'ai_automation') {
-      confirmationSent = send({ type: 'text', token: result.answer, lang: 'ta-IN', last: true, interruptible: true, preemptible: false });
+      confirmationSent = send({ type: 'text', token: result.answer, lang: language, last: true, interruptible: true, preemptible: false });
     }
     const handoffSent = send({
       type: 'end',
@@ -449,6 +459,16 @@ export const processLiveConversationRelayFaqTurn = (state, prompt, {
     return { ...result, responseStatus: sent ? 'end_requested' : 'send_failed' };
   }
   return { ...result, responseStatus: 'no_response' };
+};
+
+// Shared by the authenticated live WebSocket handler and the route-level tests.
+export const processLiveConversationRelayFaqTurn = (state, prompt, {
+  transferAvailable, send, matcher, strictConfirmation, contextEnabled, classification, language
+}) => {
+  const baseResult = processFaqPrompt(state, prompt, {
+    transferAvailable, matcher, strictConfirmation, contextEnabled, classification
+  });
+  return deliverConversationRelayFaqResult(baseResult, { send, language });
 };
 
 export const buildFaqHandoffActions = (handoff, data = {}) => {

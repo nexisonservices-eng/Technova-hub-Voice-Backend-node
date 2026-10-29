@@ -18,9 +18,13 @@ import {
   normalizeFaqQuestion,
   matchFaq,
   classifyConfirmation,
-  processLiveConversationRelayFaqTurn,
+  processFaqPrompt,
+  deliverConversationRelayFaqResult,
+  isClearTransferConfirmation,
   redactFaqDiagnosticText
 } from './conversationRelayFaq.js';
+import conversationRelayOpenAI from './conversationRelayOpenAI.js';
+import { OPENAI_HISTORY_LIMIT, OPENAI_SPOKEN_FALLBACK } from './conversationRelayOpenAI.js';
 import { resolveConnectedHandoffDestination } from './conversationRelayTransfer.js';
 import {
   bindRelaySetupCallSid,
@@ -122,6 +126,8 @@ class ConversationRelayService {
     let timer = null;
     let setupStage = 'tenant_authorization';
     let faqState = null;
+    // Connection-local context: one WebSocket belongs to one authenticated call.
+    const conversationHistory = [];
     let frameSequence = 0;
     let outboundSequence = 0;
     let previousFinalFingerprint = null;
@@ -149,7 +155,9 @@ class ConversationRelayService {
       const fields = {
         ...context, outboundFrame, frameType: payload.type,
         ...(payload.type === 'text' ? {
-          answerKey, speechText: redactFaqDiagnosticText(payload.token)
+          answerKey, chars: String(payload.token || '').length,
+          ...(['openai', 'openai_fallback'].includes(context.responseSource)
+            ? {} : { speechText: redactFaqDiagnosticText(payload.token) })
         } : {})
       };
       // A write callback confirms a local WebSocket write, not audible playback.
@@ -160,9 +168,19 @@ class ConversationRelayService {
       trace('relay_output_enqueued', { ...fields, accepted });
       return accepted;
     };
+    const rememberTurn = (userText, assistantText) => {
+      conversationHistory.push(
+        { role: 'user', content: String(userText || '').slice(0, 3000) },
+        { role: 'assistant', content: String(assistantText || '').slice(0, 850) }
+      );
+      if (conversationHistory.length > OPENAI_HISTORY_LIMIT) {
+        conversationHistory.splice(0, conversationHistory.length - OPENAI_HISTORY_LIMIT);
+      }
+    };
 
     socket.on('close', (code, reason) => {
       clearTimeout(timer);
+      conversationHistory.length = 0;
       logger.info('ConversationRelay websocket closed', {
         event: 'websocket_closed', connectionId, correlationId, stage: 'websocket_close', code,
         closeKind: code === 1006 ? 'abnormal_network_or_peer_close' : 'normal_or_protocol_close',
@@ -418,25 +436,84 @@ class ConversationRelayService {
         if (nlpEnabled || groqRecognition.attempted) {
           trace('relay_intent_recognized', intentDiagnostic(recognition));
         }
-        const result = processLiveConversationRelayFaqTurn(faqState, text, {
+        const baseResult = processFaqPrompt(faqState, text, {
           transferAvailable,
           matcher: () => recognition.faq,
           classification: nlpEnabled ? recognition.classification : null,
-          strictConfirmation: nlpEnabled,
+          // Transfer consent remains deterministic in every classifier mode.
+          strictConfirmation: true,
           // Turn context is local, call-scoped FAQ state and is safe to use
           // even when optional multilingual NLP classification is disabled.
           contextEnabled: true,
+        });
+        let selectedResult = baseResult;
+        let responseSource = 'faq';
+        let openAIStatus = null;
+        const faqCannotAnswer = baseResult.faqId === 'unknown'
+          || (baseResult.faqId === 'unclear'
+            && /[?]|\b(?:what|how|why|when|where|which|who|price|pricing|cost|refund|exception|enna|epdi|evlo)\b/i.test(normalizedPrompt))
+          || (baseResult.faqId === 'transfer_confirmation_unclear'
+            && /[?]|\b(?:what|how|why|when|where|which|enna|epdi|evlo|benefit|cost|price|useful)\b/i.test(normalizedPrompt));
+        const useOpenAI = baseResult.action === 'answer'
+          && faqCannotAnswer
+          && recognition.classification !== 'unrelated'
+          && !isClearTransferConfirmation(text);
+
+        // Explicit transfers and pending yes/no confirmations are already
+        // resolved above by processFaqPrompt. OpenAI receives no control over
+        // transfer decisions, call state, or handoff data.
+        if (useOpenAI) {
+          const generated = await conversationRelayOpenAI.generateConversationAnswer({
+            transcript: text,
+            history: conversationHistory,
+            systemPrompt: data.systemPrompt,
+            knowledgeBase: data.knowledgeBase,
+            companyName: data.companyName,
+            language: data.language
+          });
+          openAIStatus = {
+            success: generated.success === true,
+            reason: generated.reason || null,
+            latencyMs: Number.isFinite(generated.latencyMs) ? Math.round(generated.latencyMs) : null,
+            outputChars: Number.isFinite(generated.outputChars) ? generated.outputChars : null,
+            httpStatus: generated.status || null,
+            requestId: generated.requestId || null,
+            historyMessages: conversationHistory.length
+          };
+          trace('relay_openai_answer', openAIStatus);
+          faqState.awaitingHumanConfirmation = false;
+          faqState.awaitingAutomationConfirmation = false;
+          faqState.lastFaqId = null;
+          faqState.lastFaqAt = null;
+          responseSource = generated.success ? 'openai' : 'openai_fallback';
+          selectedResult = {
+            ...baseResult,
+            faqId: generated.success ? 'openai_answer' : baseResult.faqId,
+            answer: generated.success ? generated.answer : OPENAI_SPOKEN_FALLBACK,
+            responseSource,
+            contextResolution: baseResult.contextResolution || (baseResult.faqId === 'unknown'
+              ? 'unmatched_question' : 'contextual_follow_up')
+          };
+          rememberTurn(text, selectedResult.answer);
+        } else if (baseResult.action === 'answer') {
+          rememberTurn(text, baseResult.answer);
+        }
+
+        const result = deliverConversationRelayFaqResult(selectedResult, {
+          language: data.language || message.lang || 'en-IN',
           send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
-            customerTurn: customerTurnNumber })
+            customerTurn: customerTurnNumber, responseSource })
         });
         trace('relay_faq_decision', {
           frameSequence: sequence, turn: currentTurn, customerTurn: customerTurnNumber,
           candidateFaqId: promptDiagnostic.candidateFaqId,
           selectedFaqId: result.faqId || null, action: result.action,
           classification: nlpEnabled ? recognition.classification : null,
+          responseSource, openAIStatus: openAIStatus?.reason || (openAIStatus ? 'success' : null),
           responseStatus: result.responseStatus, contextResolution: result.contextResolution || null,
           stateBefore, stateAfter: snapshotFaqState(faqState),
-          fallbackReason: result.faqId === 'unknown' ? 'no_faq_intent_match'
+          fallbackReason: responseSource === 'openai_fallback' ? openAIStatus?.reason
+            : result.faqId === 'unknown' ? 'no_faq_intent_match'
             : result.faqId === 'transfer_confirmation_unclear' ? 'transfer_confirmation_unclear' : null
         });
         const matchedIntent = result.matchedIntent;
@@ -461,7 +538,9 @@ class ConversationRelayService {
         logger.info('ConversationRelay FAQ response selected', {
           event: 'response_selected', connectionId, correlationId, turn: currentTurn,
           faqId: result.faqId || null, answerKey: result.faqId || 'unknown', matchedIntent,
-          selectedResponse: redactFaqDiagnosticText(result.answer || ''),
+          responseSource, responseChars: String(result.answer || '').length,
+          ...(responseSource === 'openai' || responseSource === 'openai_fallback'
+            ? {} : { selectedResponse: redactFaqDiagnosticText(result.answer || '') }),
           action: result.action
         });
         if (['unknown', 'transfer_confirmation_unclear'].includes(result.faqId)) {

@@ -324,7 +324,7 @@ test('affirmative answers unrelated to a pending representative offer do not tra
   const state = createFaqState('CA0123456789abcdef0123456789abcdef');
   const result = processFaqPrompt(state, 'yes', { transferAvailable: true });
   assert.equal(result.action, 'answer');
-  assert.equal(result.faqId, 'unknown');
+  assert.equal(result.faqId, 'unprompted_confirmation');
   assert.equal(state.stage, 'awaiting_question');
 });
 
@@ -403,4 +403,34 @@ test('standalone yes transfers only when the automation offer is still pending',
   const result = processFaqPrompt(state, 'Yes, connect me', { transferAvailable: true });
   assert.equal(result.action, 'transfer');
   assert.equal(result.faqId, 'ai_automation');
+});
+
+test('strict transfer confirmation accepts explicit connect wording but rejects affirmatives embedded in questions', async () => {
+  const { createFaqState, processFaqPrompt } = await importFaq();
+  const explicit = createFaqState('CA-explicit');
+  processFaqPrompt(explicit, 'AI automation na enna?', { transferAvailable: true });
+  assert.equal(processFaqPrompt(explicit, 'Yes, connect me', {
+    transferAvailable: true, strictConfirmation: true
+  }).action, 'transfer');
+
+  const embedded = createFaqState('CA-embedded');
+  processFaqPrompt(embedded, 'AI automation na enna?', { transferAvailable: true });
+  const result = processFaqPrompt(embedded, 'Yes, what does it cost?', {
+    transferAvailable: true, strictConfirmation: true
+  });
+  assert.notEqual(result.action, 'transfer');
+  assert.equal(embedded.stage, 'awaiting_question');
+});
+
+test('an unrelated topic cancels a stale transfer offer and a later yes cannot transfer', async () => {
+  const { createFaqState, processFaqPrompt } = await importFaq();
+  const state = createFaqState('CA-unrelated');
+  processFaqPrompt(state, 'What is your pricing?', { transferAvailable: true });
+  processFaqPrompt(state, 'latest cricket scores', {
+    transferAvailable: true, classification: 'unrelated'
+  });
+  assert.equal(state.awaitingHumanConfirmation, false);
+  const yes = processFaqPrompt(state, 'yes', { transferAvailable: true, strictConfirmation: true });
+  assert.notEqual(yes.action, 'transfer');
+  assert.equal(state.stage, 'awaiting_question');
 });

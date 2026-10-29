@@ -9,6 +9,15 @@ services:
         value: 5000
       - key: NODE_ENV
         value: production
+      - key: OPENAI_API_KEY
+        sync: false
+        description: OpenAI API key used only by the Node ConversationRelay answer service.
+      - key: OPENAI_MODEL
+        sync: false
+        description: OpenAI model identifier selected for live ConversationRelay answers.
+      - key: OPENAI_TIMEOUT_MS
+        value: 4500
+        description: Maximum wait for an OpenAI answer before speaking the fallback.
       - key: PYTHON_TTS_BASE_URL
         sync: false
         description: Required public base URL of the Python TTS service reachable by this Node backend; localhost is only for local development.

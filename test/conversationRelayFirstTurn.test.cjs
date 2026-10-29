@@ -20,16 +20,23 @@ const automation = 'எங்களோட AI ஆட்டோமேஷன் ச�
 test('real WebSocket first-turn flow waits for workflow and setup, then answers without repetition', async (t) => {
   const logs = [];
   const groqCalls = [];
+  const openAICalls = [];
   const groqService = {
     async classifyUnmatchedQuestionWithGroq(prompt, deterministic) {
       groqCalls.push({ prompt, deterministic });
       return { attempted: false, faq: null, intent: null, confidence: null, model: null, status: 'disabled' };
     }
   };
+  const openAIService = {
+    async generateConversationAnswer(input) {
+      openAICalls.push(input);
+      return { success: false, reason: 'missing_configuration', latencyMs: 0 };
+    }
+  };
   const fixtures = {
     twilio: {}, ws: { OPEN: 1 },
     Workflow: {}, Call: {}, ExecutionLog: {}, adminCredentialsService: {},
-    groqService,
+    groqService, openAIService,
     logger: Object.fromEntries(['info', 'warn', 'error'].map((level) =>
       [level, (message, fields) => logs.push({ message, ...fields })]))
   };
@@ -38,7 +45,8 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
     twilio: 'twilio', ws: 'ws', '../models/Workflow.js': 'Workflow',
     '../models/call.js': 'Call', '../models/ExecutionLog.js': 'ExecutionLog',
     './adminCredentialsService.js': 'adminCredentialsService', '../utils/logger.js': 'logger',
-    './conversationRelayGroq.js': 'groqService'
+    './conversationRelayGroq.js': 'groqService',
+    './conversationRelayOpenAI.js': 'openAIService'
   };
   const hooks = registerHooks({
     resolve(specifier, context, next) {
@@ -50,7 +58,9 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
     load(url, context, next) {
       if (url.startsWith('relay-first-turn:')) return {
         format: 'module', shortCircuit: true,
-        source: `export default globalThis.__relayFirstTurnFixtures[${JSON.stringify(url.split(':')[1])}];`
+        source: url.endsWith(':openAIService')
+          ? `export const OPENAI_HISTORY_LIMIT = 12; export const OPENAI_SPOKEN_FALLBACK = 'Sorry, I cannot answer that right now. Please try again.'; export default globalThis.__relayFirstTurnFixtures.openAIService;`
+          : `export default globalThis.__relayFirstTurnFixtures[${JSON.stringify(url.split(':')[1])}];`
       };
       return next(url, context);
     }
@@ -71,6 +81,8 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       const setupGate = deferred();
       const workflow = { nodes: [
         { id: 'agent', type: 'ai_voice_agent', data: {
+          companyName: 'TechnovaHub', systemPrompt: 'Act as a concise TechnovaHub receptionist.',
+          knowledgeBase: 'TechnovaHub offers IT Services and AI Automation.',
           language: 'ta-IN', voiceSelection: 'ZhJ5LanYnCmLKQUXvsV7', transferOnCustomerRequest: true
         } },
         { id: 'team', type: 'handoff', data: { destination: '+14155550222' } }
@@ -158,6 +170,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
     await t.test('enabled NLP sends approved FAQ answer text frames for the four basic questions', async () => {
       const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
       process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      const beforeOpenAI = openAICalls.length;
       try {
         for (const [question, answer, faqId] of [
           ['Neenga enna services pandreenga?', services, 'services'],
@@ -176,22 +189,23 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
             assert.equal(decision.classification, 'known_faq', question);
           } finally { active.socket.close(); }
         }
+        assert.equal(openAICalls.length, beforeOpenAI, 'approved FAQ answers must bypass OpenAI');
       } finally {
         if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
         else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = oldFlag;
       }
     });
 
-    await t.test('enabled NLP sends the four classified text outcomes, preserves transfer flow and omits caller text', async () => {
+    await t.test('enabled NLP answers company-knowledge misses via OpenAI fallback and preserves transfer flow', async () => {
       const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
       process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
       let socket;
       try {
-        const { socket: activeSocket, prompt } = await session('What is TechnovaHub pricing for Kavitha 9876543210?');
+        const { socket: activeSocket, prompt } = await session('What is your pricing? Kavitha 9876543210');
         socket = activeSocket;
         const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
         assert.equal(socket.sent.at(-1).type, 'text');
-        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+        assert.equal(socket.sent.at(-1).token, 'Sorry, I cannot answer that right now. Please try again.');
         assert.equal(logs.find((entry) => entry.event === 'relay_intent_recognized').classification, 'company_unanswered');
         assert.equal(logs.find((entry) => entry.event === 'relay_faq_decision').selectedFaqId, 'unknown');
         await prompt('No');
@@ -208,7 +222,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).stateAfter.awaitingHumanConfirmation, false);
 
         await prompt('How much does it cost?');
-        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.clarifyQuestion);
+        assert.equal(socket.sent.at(-1).token, 'Sorry, I cannot answer that right now. Please try again.');
         assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).classification, 'unclear');
         assert.equal(logs.filter((entry) => entry.event === 'relay_faq_decision').at(-1).stateAfter.awaitingHumanConfirmation, false);
 
@@ -221,7 +235,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         const serializedLogs = JSON.stringify(logs);
         assert.equal(serializedLogs.includes('Kavitha'), false);
         assert.equal(serializedLogs.includes('9876543210'), false);
-        assert.equal(serializedLogs.includes('What is TechnovaHub pricing'), false);
+        assert.equal(serializedLogs.includes('What is your pricing'), false);
       } finally {
         socket?.close();
         if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
@@ -229,7 +243,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       }
     });
 
-    await t.test('feature-flag-off retains the legacy unknown answer and pending YES transfer behavior', async () => {
+    await t.test('feature-flag-off answers unmatched speech safely and a yes without an offer cannot transfer', async () => {
       const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
       process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'false';
       let socket;
@@ -237,14 +251,13 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         const active = await session('latest cricket scores');
         socket = active.socket;
         const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
-        assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+        assert.equal(socket.sent.at(-1).token, 'Sorry, I cannot answer that right now. Please try again.');
         const decision = logs.find((entry) => entry.event === 'relay_faq_decision');
         assert.equal(decision.classification, null);
         assert.equal(decision.selectedFaqId, 'unknown');
-        assert.equal(decision.stateAfter.awaitingHumanConfirmation, true);
+        assert.equal(decision.stateAfter.awaitingHumanConfirmation, false);
         await active.prompt('Yes');
-        assert.equal(socket.sent.at(-1).type, 'end');
-        assert.equal(JSON.parse(socket.sent.at(-1).handoffData).status, 'faq_transfer');
+        assert.notEqual(socket.sent.at(-1).type, 'end');
       } finally {
         socket?.close();
         if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
@@ -289,6 +302,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
     });
     await t.test('both scoped FAQs return configured answers through the live handler with either intent mode', async () => {
       const previousFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      const beforeOpenAI = openAICalls.length;
       const focusedQuestions = [
         ['Enna service pandringa?', services, 'services'],
         ['Enna services pandringa?', services, 'services'],
@@ -326,9 +340,90 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
             } finally { socket.close(); }
           }
         }
+        assert.equal(openAICalls.length, beforeOpenAI, 'approved FAQ answers must bypass OpenAI');
       } finally {
         if (previousFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
         else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = previousFlag;
+      }
+    });
+
+    await t.test('contextual follow-up uses active workflow prompt and knowledge without granting transfer control', async () => {
+      const original = openAIService.generateConversationAnswer;
+      const snapshots = [];
+      const liveHistoryReferences = [];
+      openAIService.generateConversationAnswer = async (input) => {
+        snapshots.push({ ...input, history: input.history.map((item) => ({ ...item })) });
+        liveHistoryReferences.push(input.history);
+        return { success: true, answer: 'Automation can handle routine workflow steps.', latencyMs: 12, outputChars: 43 };
+      };
+      let socket;
+      try {
+        const active = await session('AI automation na enna?', { speechAfterSetup: true });
+        socket = active.socket;
+        await active.prompt('What about integrations?');
+        assert.deepEqual(socket.sent.map((frame) => frame.token), [automation, 'Automation can handle routine workflow steps.']);
+        assert.equal(snapshots.length, 1);
+        assert.equal(snapshots[0].companyName, 'TechnovaHub');
+        assert.equal(snapshots[0].systemPrompt, 'Act as a concise TechnovaHub receptionist.');
+        assert.equal(snapshots[0].knowledgeBase, 'TechnovaHub offers IT Services and AI Automation.');
+        assert.equal(snapshots[0].language, 'ta-IN');
+        assert.ok(snapshots[0].history.some(({ content }) => content === 'AI automation na enna?'));
+        assert.ok(snapshots[0].history.some(({ content }) => content === automation));
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false, 'model answer cannot initiate a transfer');
+        const serializedLogs = JSON.stringify(logs);
+        assert.equal(serializedLogs.includes('Automation can handle routine workflow steps.'), false);
+        assert.equal(serializedLogs.includes('Adhu epdi work aagum?'), false);
+        const firstCallHistory = liveHistoryReferences[0];
+        socket.close();
+        assert.equal(firstCallHistory.length, 0, 'socket close clears that call history');
+        socket = null;
+
+        const second = await session('What services do you provide?', { speechAfterSetup: true });
+        socket = second.socket;
+        await second.prompt('What about integrations?');
+        assert.ok(snapshots.at(-1).history.some(({ content }) => content === 'What services do you provide?'));
+        assert.equal(snapshots.at(-1).history.some(({ content }) => content === 'AI automation na enna?'), false,
+          'a later call must not receive the prior call history');
+      } finally {
+        socket?.close();
+        openAIService.generateConversationAnswer = original;
+      }
+    });
+
+    await t.test('OpenAI failure speaks a short fallback and ambiguous yes does not transfer', async () => {
+      const original = openAIService.generateConversationAnswer;
+      openAIService.generateConversationAnswer = async (input) => {
+        openAICalls.push(input);
+        return { success: false, reason: 'timeout', latencyMs: 4500 };
+      };
+      let socket;
+      try {
+        const active = await session('What is your pricing?');
+        socket = active.socket;
+        assert.equal(socket.sent.at(-1).token, 'Sorry, I cannot answer that right now. Please try again.');
+        assert.equal(logs.find((entry) => entry.event === 'relay_openai_answer').reason, 'timeout');
+        assert.equal(logs.find((entry) => entry.event === 'relay_faq_decision').stateAfter.awaitingHumanConfirmation, false);
+        await active.prompt('Yes');
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
+      } finally {
+        socket?.close();
+        openAIService.generateConversationAnswer = original;
+      }
+    });
+
+    await t.test('a yes after an unrelated redirect does not transfer', async () => {
+      const oldFlag = process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+      process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = 'true';
+      let socket;
+      try {
+        const active = await session('latest cricket scores');
+        socket = active.socket;
+        await active.prompt('yes');
+        assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
+      } finally {
+        socket?.close();
+        if (oldFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
+        else process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP = oldFlag;
       }
     });
     await t.test('FAQ diagnostics redact caller identifiers and unsupported input still speaks the fixed fallback', async () => {
@@ -338,15 +433,15 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         const { socket } = await session('Kavitha, what is your unpublished refund exception? Call me +919876543210');
         try {
           const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
-          assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+          assert.equal(socket.sent.at(-1).token, 'Sorry, I cannot answer that right now. Please try again.');
           const transcriptLog = logs.find((entry) => entry.event === 'prompt_received');
           assert.ok(transcriptLog.receivedTranscription.startsWith('[redacted] what is [redacted]'));
           const serializedLogs = JSON.stringify(logs);
           assert.equal(serializedLogs.includes('Kavitha'), false);
           assert.equal(serializedLogs.includes('9876543210'), false);
           const output = logs.find((entry) => entry.event === 'relay_output_attempt' && entry.frameType === 'text');
-          assert.equal(output.answerKey, 'unknown');
-          assert.equal(output.speechText, FAQ_RESPONSES.unknown);
+          assert.equal(output.answerKey, 'unmapped_text');
+          assert.equal(output.speechText, undefined);
         } finally { socket.close(); }
       } finally {
         if (previousFlag === undefined) delete process.env.CONVERSATION_RELAY_MULTILINGUAL_NLP;
@@ -403,7 +498,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         const { FAQ_RESPONSES } = await import('../src/services/conversationRelayFaq.js');
         const { socket } = await session('Could you streamline our onboarding workflow?');
         try {
-          assert.equal(socket.sent.at(-1).token, FAQ_RESPONSES.unknown);
+          assert.equal(socket.sent.at(-1).token, 'Sorry, I cannot answer that right now. Please try again.');
           const groqLog = logs.find((entry) => entry.event === 'relay_groq_fallback');
           assert.equal(groqLog.status, 'request_failed');
           assert.equal(groqLog.failureKind, 'classifier_error');
@@ -442,21 +537,21 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         assert.equal(socket.sent.filter((frame) => frame.type === 'end').length, 1);
       } finally { socket.close(); }
     });
-    await t.test('human-transfer NO continues and a later plain Yeah accepts only the pending human offer', async () => {
-      const { socket, prompt } = await session('unlisted question');
+    await t.test('NO declines an automation offer and YES confirms only a later automation offer', async () => {
+      const { socket, prompt } = await session('AI automation na enna?');
       try {
         await prompt('No');
         await prompt('Enna services pandringa?');
         assert.equal(socket.sent.at(-1).token, services);
         assert.equal(socket.sent.some((frame) => frame.type === 'end'), false);
-        await prompt('unlisted question');
+        await prompt('AI automation na enna?');
         const beforePartial = socket.sent.length;
-        await prompt('Yeah', false);
+        await prompt('Yes', false);
         assert.equal(socket.sent.length, beforePartial);
-        await prompt('Yeah');
+        await prompt('Yes');
         assert.equal(socket.sent.filter((frame) => frame.type === 'end').length, 1);
         assert.deepEqual(JSON.parse(socket.sent.at(-1).handoffData), {
-          status: 'faq_transfer', faqId: 'human_representative'
+          status: 'faq_transfer', faqId: 'ai_automation'
         });
       } finally { socket.close(); }
     });
@@ -538,18 +633,18 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
         assert.equal(socket.sent.length, 2);
       } finally { socket.close(); }
     });
-    await t.test('runtime trace shows fallback creates pending offer, NO clears it, and services recovers', async () => {
+    await t.test('OpenAI fallback does not leave transfer pending; services recovers after an unprompted NO', async () => {
       const { socket, prompt } = await session('Enna services pandringa?');
       try {
         await prompt('unlisted question');
         await prompt('No');
         await prompt('Enna services pandringa?');
         const decisions = logs.filter((entry) => entry.event === 'relay_faq_decision');
-        assert.deepEqual(decisions.map((entry) => entry.selectedFaqId), ['services', 'unknown', 'declined_transfer', 'services']);
-        assert.equal(decisions[1].fallbackReason, 'no_faq_intent_match');
+        assert.deepEqual(decisions.map((entry) => entry.selectedFaqId), ['services', 'unknown', 'unprompted_confirmation', 'services']);
+        assert.equal(decisions[1].fallbackReason, 'missing_configuration');
         assert.equal(decisions[1].stateBefore.awaitingHumanConfirmation, false);
-        assert.equal(decisions[1].stateAfter.awaitingHumanConfirmation, true);
-        assert.equal(decisions[2].stateBefore.awaitingHumanConfirmation, true);
+        assert.equal(decisions[1].stateAfter.awaitingHumanConfirmation, false);
+        assert.equal(decisions[2].stateBefore.awaitingHumanConfirmation, false);
         assert.equal(decisions[2].stateAfter.awaitingHumanConfirmation, false);
         assert.equal(socket.sent.length, 4);
         assert.equal(socket.sent.at(-1).token, services);

@@ -41,21 +41,42 @@ const sendFrame = async (socket, frame) => {
 };
 
 test('live ConversationRelay prompt flow and completion callback transfer to Hand Off Team B for inbound/outbound calls', async () => {
-  const [{ default: relayService }, Workflow, Call, ExecutionLog, WorkflowExecution,
-    twilioIntegrationService, router, twilio] = await Promise.all([
-    import('../src/services/conversationRelayService.js'),
-    import('../src/models/Workflow.js'), import('../src/models/call.js'),
-    import('../src/models/ExecutionLog.js'), import('../src/models/WorkflowExecution.js'),
-    import('../src/services/twilioIntegrationService.js'), import('../src/routes/twilioWebhookRoutes.js'),
-    import('twilio')
-  ]);
-
-  const originals = {
-    workflow: Workflow.default.findOne, call: Call.default.findOne,
-    execution: ExecutionLog.default.findOne, legacy: WorkflowExecution.default.findOne,
-    transferComplete: twilioIntegrationService.default.handleTransferComplete
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalSetInterval = globalThis.setInterval;
+  const importIntervals = new Set();
+  const sockets = new Set();
+  process.env.NODE_ENV = 'test';
+  globalThis.setInterval = (callback, interval, ...args) => {
+    // callbackService polls MongoDB every minute. This integration path uses
+    // in-memory fixtures and must not start that unrelated database job.
+    if (interval === 60000) return { unref() { return this; } };
+    const timer = originalSetInterval(callback, interval, ...args);
+    timer.unref?.();
+    importIntervals.add(timer);
+    return timer;
   };
+
+  let restoreMockedMethods = () => {};
   try {
+    const [{ default: relayService }, Workflow, Call, ExecutionLog, WorkflowExecution,
+      twilioIntegrationService, router] = await Promise.all([
+      import('../src/services/conversationRelayService.js'),
+      import('../src/models/Workflow.js'), import('../src/models/call.js'),
+      import('../src/models/ExecutionLog.js'), import('../src/models/WorkflowExecution.js'),
+      import('../src/services/twilioIntegrationService.js'), import('../src/routes/twilioWebhookRoutes.js')
+    ]);
+    const originals = {
+      workflow: Workflow.default.findOne, call: Call.default.findOne,
+      execution: ExecutionLog.default.findOne, legacy: WorkflowExecution.default.findOne,
+      transferComplete: twilioIntegrationService.default.handleTransferComplete
+    };
+    restoreMockedMethods = () => {
+      Workflow.default.findOne = originals.workflow;
+      Call.default.findOne = originals.call;
+      ExecutionLog.default.findOne = originals.execution;
+      WorkflowExecution.default.findOne = originals.legacy;
+      twilioIntegrationService.default.handleTransferComplete = originals.transferComplete;
+    };
     const questions = [
       ['Enna services pandringa?', 'AI automation na enna?'],
       ['Enna service panreenga?', 'AI automation na enna?'],
@@ -82,7 +103,12 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
       socket.readyState = 1;
       socket.sent = [];
       socket.send = (frame, callback) => { socket.sent.push(JSON.parse(frame)); callback?.(); };
-      socket.close = () => {};
+      socket.close = (code = 1000, reason = '') => {
+        if (socket.closed) return;
+        socket.closed = true;
+        socket.emit('close', code, Buffer.from(String(reason)));
+      };
+      sockets.add(socket);
       const request = { url: `/ws/conversation-relay?userId=${USER_ID}&workflowId=${WORKFLOW_ID}&nodeId=${NODE_ID}` };
       await relayService.handleConnection(socket, request);
       await sendFrame(socket, { type: 'setup', callSid: CALL_SID, from: CUSTOMER_A });
@@ -127,13 +153,14 @@ test('live ConversationRelay prompt flow and completion callback transfer to Han
       assert.match(transferRes.xml, /\/webhook\/twilio\/workflow\/workflow-test\/node\/end/);
       assert.equal(transferCompletions.length, 1, 'existing transfer completion function is invoked');
       assert.equal(transferCompletions[0].callSid, CALL_SID);
-      socket.emit('close', 1000, Buffer.from('test complete'));
+      socket.close(1000, 'test complete');
     }
   } finally {
-    Workflow.default.findOne = originals.workflow;
-    Call.default.findOne = originals.call;
-    ExecutionLog.default.findOne = originals.execution;
-    WorkflowExecution.default.findOne = originals.legacy;
-    twilioIntegrationService.default.handleTransferComplete = originals.transferComplete;
+    restoreMockedMethods();
+    sockets.forEach((socket) => socket.close(1000, 'test cleanup'));
+    globalThis.setInterval = originalSetInterval;
+    importIntervals.forEach((timer) => clearInterval(timer));
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
   }
 });
