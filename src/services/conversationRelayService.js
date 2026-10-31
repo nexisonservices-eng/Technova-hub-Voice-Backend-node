@@ -1,6 +1,7 @@
 import twilio from 'twilio';
 import WebSocket from 'ws';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import Workflow from '../models/Workflow.js';
 import Call from '../models/call.js';
 import ExecutionLog from '../models/ExecutionLog.js';
@@ -297,6 +298,7 @@ class ConversationRelayService {
           return;
         }
         const currentTurn = ++turnNumber;
+        const turnStartedAt = performance.now();
         const promptText = extractConversationRelayTranscription(message);
         logger.info('ConversationRelay prompt received', {
           event: 'prompt_received', connectionId, correlationId, turn: currentTurn,
@@ -397,6 +399,7 @@ class ConversationRelayService {
           reason: deterministicRecognition.reason
         });
         let groqRecognition;
+        const classifierStartedAt = performance.now();
         try {
           groqRecognition = await groqIntentService.classifyUnmatchedQuestionWithGroq(
             text, deterministicRecognition
@@ -409,6 +412,7 @@ class ConversationRelayService {
             intent: null, confidence: null, model: null, failureKind: 'classifier_error'
           };
         }
+        const classifierLatencyMs = Math.round(performance.now() - classifierStartedAt);
         trace('relay_groq_fallback', {
           enabled: process.env.GROQ_NLP_ENABLED === 'true',
           attempted: groqRecognition.attempted,
@@ -436,6 +440,7 @@ class ConversationRelayService {
         if (nlpEnabled || groqRecognition.attempted) {
           trace('relay_intent_recognized', intentDiagnostic(recognition));
         }
+        const faqLookupStartedAt = performance.now();
         const baseResult = processFaqPrompt(faqState, text, {
           transferAvailable,
           matcher: () => recognition.faq,
@@ -446,6 +451,7 @@ class ConversationRelayService {
           // even when optional multilingual NLP classification is disabled.
           contextEnabled: true,
         });
+        const faqLookupLatencyMs = Math.round(performance.now() - faqLookupStartedAt);
         let selectedResult = baseResult;
         let responseSource = 'faq';
         let openAIStatus = null;
@@ -477,6 +483,7 @@ class ConversationRelayService {
             latencyMs: Number.isFinite(generated.latencyMs) ? Math.round(generated.latencyMs) : null,
             outputChars: Number.isFinite(generated.outputChars) ? generated.outputChars : null,
             httpStatus: generated.status || null,
+            model: generated.model || (process.env.OPENAI_MODEL ? String(process.env.OPENAI_MODEL).slice(0, 120) : null),
             requestId: generated.requestId || null,
             historyMessages: conversationHistory.length
           };
@@ -499,10 +506,24 @@ class ConversationRelayService {
           rememberTurn(text, baseResult.answer);
         }
 
+        const answerReadyAt = performance.now();
         const result = deliverConversationRelayFaqResult(selectedResult, {
           language: data.language || message.lang || 'en-IN',
           send: (payload) => sendFrame(payload, { frameSequence: sequence, turn: currentTurn,
             customerTurn: customerTurnNumber, responseSource })
+        });
+        const responseSentAt = performance.now();
+        trace('relay_turn_latency', {
+          frameSequence: sequence, turn: currentTurn, customerTurn: customerTurnNumber,
+          responseSource, faqLookupMs: faqLookupLatencyMs,
+          classifierMs: classifierLatencyMs,
+          openAIRequestMs: openAIStatus?.latencyMs ?? null,
+          answerReadyMs: Math.round(answerReadyAt - turnStartedAt),
+          responseEnqueueMs: Math.round(responseSentAt - answerReadyAt),
+          totalProcessingMs: Date.now() - receivedAt,
+          openAIStatus: openAIStatus?.reason || (openAIStatus ? 'success' : null),
+          httpStatus: openAIStatus?.httpStatus ?? null,
+          model: openAIStatus?.model || null
         });
         trace('relay_faq_decision', {
           frameSequence: sequence, turn: currentTurn, customerTurn: customerTurnNumber,

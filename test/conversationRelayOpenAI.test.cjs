@@ -29,6 +29,7 @@ test('Responses API sends approved context and returns bounded answer text witho
   assert.equal(captured[0], 'https://api.openai.com/v1/responses');
   assert.equal(captured[1].store, false);
   assert.equal(captured[1].model, 'test-model');
+  assert.equal(captured[2].httpsAgent.options.keepAlive, true);
   assert.equal(captured[1].input.at(-1).content, validRequest.transcript);
   assert.ok(captured[1].instructions.includes(validRequest.knowledgeBase));
   assert.ok(captured[1].instructions.includes('ta-IN'));
@@ -89,4 +90,21 @@ test('separate call histories remain isolated in API input', async () => {
   await generateConversationAnswer({ ...validRequest, history: secondCallHistory, post });
   assert.equal(requests[0].input.some(({ content }) => content.includes('Second caller')), false);
   assert.equal(requests[1].input.some(({ content }) => content.includes('First caller')), false);
+});
+
+test('OpenAI input keeps only the most recent two exchanges', async () => {
+  const { generateConversationAnswer, OPENAI_HISTORY_LIMIT } = await loadService();
+  let body;
+  await generateConversationAnswer({
+    ...validRequest,
+    history: Array.from({ length: 10 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user', content: `turn ${index}`
+    })),
+    post: async (_url, requestBody) => {
+      body = requestBody;
+      return { status: 200, data: { status: 'completed', output_text: 'Brief answer.' } };
+    }
+  });
+  assert.equal(OPENAI_HISTORY_LIMIT, 4);
+  assert.deepEqual(body.input.slice(0, 4).map(({ content }) => content), ['turn 6', 'turn 7', 'turn 8', 'turn 9']);
 });

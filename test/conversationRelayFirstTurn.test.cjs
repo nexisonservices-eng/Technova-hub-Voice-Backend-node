@@ -59,7 +59,7 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
       if (url.startsWith('relay-first-turn:')) return {
         format: 'module', shortCircuit: true,
         source: url.endsWith(':openAIService')
-          ? `export const OPENAI_HISTORY_LIMIT = 12; export const OPENAI_SPOKEN_FALLBACK = 'Sorry, I cannot answer that right now. Please try again.'; export default globalThis.__relayFirstTurnFixtures.openAIService;`
+          ? `export const OPENAI_HISTORY_LIMIT = 4; export const OPENAI_SPOKEN_FALLBACK = 'Sorry, I cannot answer that right now. Please try again.'; export default globalThis.__relayFirstTurnFixtures.openAIService;`
           : `export default globalThis.__relayFirstTurnFixtures[${JSON.stringify(url.split(':')[1])}];`
       };
       return next(url, context);
@@ -331,11 +331,18 @@ test('real WebSocket first-turn flow waits for workflow and setup, then answers 
               const normalized = logs.find((entry) => entry.event === 'normalized_transcription');
               const selected = logs.find((entry) => entry.event === 'response_selected');
               const spoken = logs.find((entry) => entry.event === 'relay_output_attempt' && entry.frameType === 'text');
+              const latency = logs.find((entry) => entry.event === 'relay_turn_latency');
               assert.ok(received.receivedTranscription.toLowerCase().includes(question.toLowerCase().replace(/[?!]/g, '')));
               assert.ok(normalized.transcription.includes(question.toLowerCase().replace(/[?!]/g, '')));
               assert.equal(selected.answerKey, faqId);
               assert.equal(spoken.answerKey, faqId);
               assert.equal(spoken.speechText, answer);
+              assert.equal(latency.correlationId, CALL);
+              assert.equal(latency.responseSource, 'faq');
+              assert.equal(typeof latency.faqLookupMs, 'number');
+              assert.equal(typeof latency.answerReadyMs, 'number');
+              assert.equal(typeof latency.totalProcessingMs, 'number');
+              assert.equal(latency.openAIRequestMs, null);
               assert.equal(logs.some((entry) => entry.event === 'faq_fallback_reason'), false);
             } finally { socket.close(); }
           }
