@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { createMissingWorkflowEntryError, hasWorkflowEntryNode } from '../utils/workflowEntryValidation.js';
 
 const WorkflowSchema = new mongoose.Schema({
   // System identifier (required, unique for API calls and routing)
@@ -179,24 +180,17 @@ WorkflowSchema.methods.duplicate = function (newPromptKey, newDisplayName) {
 WorkflowSchema.pre('save', function (next) {
   // Only validate entry node requirement when activating the workflow
   // Allow draft workflows to be saved without entry nodes for flexibility
-  if (this.isModified('status') && this.status === 'active' && this.nodes.length > 0) {
+  if (this.isModified('status') && this.status === 'active') {
     // Auto-validate workflow structure when activating
     // Supporting legacy audio/greeting nodes and booking-capable entry nodes.
-    const hasEntryNode = this.nodes.some((node) =>
-      ['greeting', 'audio', 'availability_check', 'slot_offer', 'booking_confirm'].includes(String(node?.type || '').toLowerCase())
-    );
-
-    if (!hasEntryNode) {
-      const nextErr = new Error('Workflow must have at least one greeting, audio, or booking entry node to be activated');
-      return next(nextErr);
+    if (!hasWorkflowEntryNode(this.nodes)) {
+      return next(createMissingWorkflowEntryError());
     }
   }
   
   // Log node modifications for debugging
   if (this.isModified('nodes')) {
-    const entryNodes = this.nodes.filter((node) =>
-      ['greeting', 'audio', 'availability_check', 'slot_offer', 'booking_confirm'].includes(String(node?.type || '').toLowerCase())
-    );
+    const entryNodes = this.nodes.filter((node) => hasWorkflowEntryNode([node]));
     console.log(`📝 Workflow ${this.promptKey} nodes modified: ${this.nodes.length} total, ${entryNodes.length} entry nodes`);
   }
   

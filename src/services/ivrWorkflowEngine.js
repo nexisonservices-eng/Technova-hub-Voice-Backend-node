@@ -1,5 +1,6 @@
 ﻿﻿import Workflow from '../models/Workflow.js';
 import ExecutionLog from '../models/ExecutionLog.js';
+import Call from '../models/call.js';
 import logger from '../utils/logger.js';
 import twilio from 'twilio';
 import EventEmitter from 'events';
@@ -9,6 +10,7 @@ import appointmentBookingService from './appointmentBookingService.js';
 import { emitIVRWorkflowUpdate, emitIVRWorkflowError, emitIVRWorkflowStats } from '../sockets/unifiedSocket.js';
 import { deleteFromCloudinary } from '../utils/cloudinaryUtils.js';
 import { deleteVoiceAudioAssets } from '../utils/voiceAssetCleanup.js';
+import { resolveCallProvider } from '../config/conversationRelay.js';
 
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -921,13 +923,17 @@ class IVRWorkflowEngine extends EventEmitter {
 
             // Delegate to Execution Engine
             logger.info(`Delegating execution for node ${nodeForExecution.type} (${nodeId})`);
+            const callProvider = callSid
+                ? (await Call.findOne({ $or: [{ callSid }, { exotelCallSid: callSid }] }).select('provider').lean())?.provider || ''
+                : '';
             const workflowConfig = {
                 nodes: workflow?.nodes || [],
                 edges: workflow?.edges || [],
                 settings: workflow?.config || {},
                 createdBy: workflow?.createdBy || null,
                 _id: workflow._id,
-                workflowId: workflow._id
+                workflowId: workflow._id,
+                provider: resolveCallProvider(callProvider ? { provider: callProvider } : {})
             };
             return await ivrExecutionEngine.executeNode(nodeForExecution, context, workflowConfig, callSid);
 

@@ -10,12 +10,16 @@ import twilioIntegrationService from '../services/twilioIntegrationService.js';
 import inboundCallService from '../services/inboundCallService.js';
 import WorkflowExecution from '../models/WorkflowExecution.js';
 import Call from '../models/call.js';
+import ExecutionLog from '../models/ExecutionLog.js';
 import IVRController from '../controllers/ivrController.js';
 import ivrWorkflowEngine from '../services/ivrWorkflowEngine.js';
 import Workflow from '../models/Workflow.js';
 import twilio from 'twilio';
 import { verifyTwilioRequest } from '../middleware/twilioAuth.js';
 import adminCredentialsService from '../services/adminCredentialsService.js';
+import { resolveCallOwnerFromRecords } from '../services/conversationRelaySession.js';
+import { buildFaqHandoffActions } from '../services/conversationRelayFaq.js';
+import { resolveAIVoiceTransferContinuation, resolveConnectedHandoffDestination } from '../services/conversationRelayTransfer.js';
 import outboundCampaignService from '../services/outboundCampaignService.js';
 import { emitOutboundCallUpdate, emitQueueUpdate } from '../sockets/unifiedSocket.js';
 
@@ -60,19 +64,28 @@ const resolveWebhookUserId = async (req) => {
 };
 
 const resolveWebhookUserIdForCall = async (req, callSid) => {
+  if (callSid) {
+    const [call, executionLog, legacyExecution] = await Promise.all([
+      Call.findOne({ callSid }).select('callSid user provider providerData').lean(),
+      ExecutionLog.findOne({ callSid }).select('callSid userId workflowId').lean(),
+      WorkflowExecution.findOne({ callSid }).select('callSid userId workflowId').lean()
+    ]);
+    const execution = executionLog || legacyExecution;
+    if (call || execution) {
+      const association = resolveCallOwnerFromRecords({
+        callSid,
+        tenantUserId: req.tenantContext?.adminId || '',
+        queryUserId: req.query?.userId || req.body?.userId || '',
+        workflowId: req.query?.workflowId || req.body?.workflowId || '',
+        call,
+        execution
+      });
+      return association.valid ? association.userId : null;
+    }
+  }
+
   const fromNumber = await resolveWebhookUserId(req);
-  if (fromNumber) return fromNumber;
-  if (!callSid) return null;
-
-  const execution = await WorkflowExecution.findOne({ callSid }).select('userId').lean();
-  if (!execution?.userId) return null;
-
-  req.tenantContext = {
-    ...(req.tenantContext || {}),
-    adminId: String(execution.userId),
-  };
-
-  return String(execution.userId);
+  return fromNumber || null;
 };
 
 const TERMINAL_OUTBOUND_STATUSES = new Set(['completed', 'failed', 'busy', 'no-answer', 'cancelled', 'canceled']);
@@ -540,7 +553,7 @@ router.post('/transfer/complete', async (req, res) => {
     const transferData = req.body;
     const DialCallStatus = transferData.DialCallStatus || req.query.DialCallStatus;
     const DialCallDuration = transferData.DialCallDuration || req.query.DialCallDuration;
-    const callSid = transferData.CallSid || transferData.callSid || req.query.callSid;
+    const callSid = transferData.CallSid || transferData.callSid || req.query.CallSid || req.query.callSid;
     const workflowId = transferData.workflowId || req.query.workflowId;
     const nodeId = transferData.nodeId || req.query.nodeId;
     const webhookUserId = await resolveWebhookUserIdForCall(req, callSid);
@@ -568,15 +581,17 @@ router.post('/transfer/complete', async (req, res) => {
     if (workflow) {
       const sourceNode = workflow.nodes.find((node) => node.id === nodeId);
       const succeeded = ['answered', 'completed', 'in-progress'].includes(String(DialCallStatus || '').toLowerCase());
-      const handle = sourceNode?.type === 'ai_voice_agent'
-        ? (succeeded ? 'transferred' : 'error')
-        : (succeeded ? 'answered' : 'failed');
-      const edge = workflow.edges.find(e => 
-        e.source === nodeId && e.sourceHandle === handle
-      );
+      const aiVoiceContinuation = sourceNode?.type === 'ai_voice_agent'
+        ? resolveAIVoiceTransferContinuation(workflow, nodeId, succeeded)
+        : '';
+      const handle = succeeded ? 'answered' : 'failed';
+      const edge = sourceNode?.type === 'ai_voice_agent'
+        ? null
+        : workflow.edges.find((candidate) => candidate.source === nodeId && candidate.sourceHandle === handle);
       
-      if (edge) {
-        response.redirect(`/webhook/twilio/workflow/${workflowId}/node/${edge.target}`);
+      const continuationNodeId = sourceNode?.type === 'ai_voice_agent' ? aiVoiceContinuation : edge?.target;
+      if (continuationNodeId) {
+        response.redirect(`/webhook/twilio/workflow/${workflowId}/node/${continuationNodeId}`);
       } else {
         response.say('Thank you for calling. Goodbye.');
         response.hangup();
@@ -599,11 +614,17 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const response = new VoiceResponse();
   try {
-    const callSid = req.body.CallSid || req.body.callSid || req.query.callSid;
+    const callSid = req.body.CallSid || req.body.callSid || req.query.CallSid || req.query.callSid;
     const workflowId = String(req.body.workflowId || req.query.workflowId || '').trim();
     const nodeId = String(req.body.nodeId || req.query.nodeId || '').trim();
     const userId = await resolveWebhookUserIdForCall(req, callSid);
-    if (!userId || !workflowId || !nodeId) return res.sendStatus(403);
+    if (!userId || !workflowId || !nodeId) {
+      logger.warn('ConversationRelay completion callback rejected', {
+        callSid: String(callSid || '').slice(0, 40), workflowPresent: Boolean(workflowId),
+        nodePresent: Boolean(nodeId), identityResolved: Boolean(userId), stage: 'callback_identity'
+      });
+      return res.sendStatus(403);
+    }
     const workflow = await Workflow.findOne({ _id: workflowId, createdBy: userId }).lean();
     const node = workflow?.nodes?.find((entry) => entry.id === nodeId && entry.type === 'ai_voice_agent');
     if (!node) return res.sendStatus(404);
@@ -613,12 +634,49 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       try { handoff = JSON.parse(rawHandoff); } catch { handoff = {}; }
     } else if (rawHandoff && typeof rawHandoff === 'object') handoff = rawHandoff;
 
-    if (handoff.status === 'transfer') {
+    const configuredHandoff = ['faq_transfer', 'transfer'].includes(handoff.status)
+      ? resolveConnectedHandoffDestination(workflow, nodeId)
+      : { destination: '', handoffNodeId: '', reason: '' };
+    const transferConfig = {
+      ...(node.data || {}),
+      humanAgentPhoneNumber: configuredHandoff.destination
+    };
+    if (['faq_transfer', 'transfer'].includes(handoff.status)) {
+      logger.info('ConversationRelay workflow handoff destination resolved', {
+        workflowId, nodeId, handoffNodeId: configuredHandoff.handoffNodeId || null,
+        destinationValid: Boolean(configuredHandoff.destination), reason: configuredHandoff.reason || null
+      });
+    }
+    const faqActions = buildFaqHandoffActions(handoff, transferConfig);
+    if (faqActions) {
+      for (const action of faqActions) {
+        if (action.type === 'say') response.say({ language: 'ta-IN' }, action.text);
+        if (action.type === 'hangup') response.hangup();
+        if (action.type === 'dial') {
+          logger.info('ConversationRelay dialing configured human agent', { workflowId, nodeId, callSid });
+          const base = String(process.env.PUBLIC_WEBHOOK_BASE_URL || process.env.BASE_URL || '').replace(/\/$/, '');
+          const callback = new URLSearchParams({ callSid: String(callSid), workflowId, nodeId, userId });
+          response.dial({
+            timeout: 30,
+            action: `${base}/webhook/twilio/transfer/complete?${callback}`,
+            method: 'POST'
+          }, action.destination);
+        }
+      }
+      const spokenAction = faqActions.find((action) => action.type === 'say');
+      if (spokenAction) {
+        logger.info('ConversationRelay FAQ handoff response prepared', {
+          event: 'response_sent', workflowId, nodeId, callSid,
+          faqId: handoff.status === 'faq_goodbye' ? 'goodbye' : 'human_representative',
+          chars: spokenAction.text.length
+        });
+      }
+    } else if (handoff.status === 'transfer') {
       const config = node.data || {};
       const permitted = handoff.intent === 'human_transfer'
         ? config.transferOnCustomerRequest !== false
         : handoff.intent === 'discount_yes' && config.transferOnDiscountInterest !== false;
-      const destination = String(config.humanAgentPhoneNumber || '').trim();
+      const destination = configuredHandoff.destination;
       if (!permitted || !/^\+[1-9]\d{7,14}$/.test(destination)) {
         logger.warn('ConversationRelay transfer rejected by node configuration', { workflowId, nodeId, callSid });
         response.say('A representative is unavailable right now. Goodbye.');
@@ -640,8 +698,14 @@ router.post('/ai-voice-agent/complete', async (req, res) => {
       else { response.say('Thank you for calling. Goodbye.'); response.hangup(); }
     }
     logger.info('ConversationRelay session ended', {
-      workflowId, nodeId, callSid, status: handoff.status || 'completed', reason: handoff.reason || null
+      event: 'session_end', workflowId, nodeId, callSid,
+      status: handoff.status || 'completed', reason: handoff.reason || null
     });
+    if (handoff.status === 'faq_goodbye') {
+      logger.info('ConversationRelay caller ended the FAQ call', {
+        event: 'call_ended', workflowId, nodeId, callSid, reason: 'caller-goodbye'
+      });
+    }
     return res.type('text/xml').send(response.toString());
   } catch (error) {
     logger.error('ConversationRelay completion callback failed', { message: error.message });

@@ -5,7 +5,8 @@ import ivrWorkflowEngine from './ivrWorkflowEngine.js';
 import emailService from './emailService.js';
 import appointmentBookingService from './appointmentBookingService.js';
 import whatsappNotificationBridge from './whatsappNotificationBridge.js';
-import { RELAY_VOICES } from '../config/conversationRelay.js';
+import { RELAY_VOICES, buildConversationRelayTwiML, buildUnsupportedProviderTwiML, resolveCallProvider } from '../config/conversationRelay.js';
+import { FAQ_WELCOME } from './conversationRelayFaq.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -422,6 +423,12 @@ class IVRExecutionEngine {
 
   async _handleAIVoiceAgent(response, node, config, callSid) {
     const data = node.data || {};
+    if (resolveCallProvider(config) !== 'twilio') {
+      logger.warn('AI Voice Agent is unavailable for the active call provider', {
+        workflowId: String(config._id || ''), nodeId: node.id, provider: config.provider || 'unknown'
+      });
+      return buildUnsupportedProviderTwiML();
+    }
     if (!RELAY_VOICES[data.voiceSelection] || RELAY_VOICES[data.voiceSelection] !== data.language) {
       logger.error('AI Voice Agent has an unsupported voice/language combination', {
         workflowId: String(config._id || ''), nodeId: node.id, language: data.language
@@ -448,21 +455,32 @@ class IVRExecutionEngine {
     });
     const wsUrl = publicBase.replace(/^https:/i, 'wss:') + `/ws/conversation-relay?${query}`;
     const actionUrl = `${publicBase}/webhook/twilio/ai-voice-agent/complete?${query}`;
+    const requestedSpeechTimeout = Number(data.silenceTimeout || 2) * 1000;
+    const speechTimeout = Math.min(5000, Math.max(600, Math.round(
+      Number.isFinite(requestedSpeechTimeout) ? requestedSpeechTimeout : 2000
+    )));
     logger.info('Starting Twilio ConversationRelay', {
-      workflowId: String(config._id), nodeId: node.id, language: data.language, voice: data.voiceSelection
+      callSid: String(callSid), workflowId: String(config._id), nodeId: node.id,
+      language: data.language, voice: data.voiceSelection,
+      relayWelcomeConfigured: true, stage: 'relay_twiml_generated',
+      transcriptionProvider: 'Deepgram', transcriptionLanguage: 'multi',
+      ttsProvider: 'ElevenLabs', welcomeGreetingInterruptible: 'none',
+      reportInputDuringAgentSpeech: 'none', speechTimeout
     });
-    response.connect({ action: actionUrl, method: 'POST' }).conversationRelay({
+    return buildConversationRelayTwiML({
       url: wsUrl,
-      welcomeGreeting: String(data.welcomeMessage || '').trim(),
+      action: actionUrl,
+      welcomeGreeting: FAQ_WELCOME,
+      welcomeGreetingInterruptible: 'none',
       language: data.language,
       voice: data.voiceSelection,
       ttsProvider: 'ElevenLabs',
-      transcriptionProvider: 'Google',
-      speechTimeout: Number(data.silenceTimeout || 2) * 1000,
-      interruptible: 'any',
-      reportInputDuringAgentSpeech: 'speech'
+      transcriptionProvider: 'Deepgram',
+      transcriptionLanguage: 'multi',
+      reportInputDuringAgentSpeech: 'none',
+      speechTimeout,
+      interruptible: 'any'
     });
-    return response.toString();
   }
 
   async _handleVoicemail(response, node, config) {
