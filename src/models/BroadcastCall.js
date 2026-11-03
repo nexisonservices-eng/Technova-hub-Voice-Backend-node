@@ -117,12 +117,32 @@ broadcastCallSchema.index({ userId: 1, broadcast: 1, status: 1, createdAt: -1 })
 
 // Instance methods
 broadcastCallSchema.methods.markCalling = async function (callSid) {
-  this.callSid = callSid;
-  this.status = 'calling';
-  this.claimedAt = undefined;
-  this.startTime = new Date();
-  this.attempts += 1;
-  await this.save();
+  // Twilio may send a status callback before calls.create() resolves. The
+  // callback can already have completed this document, so do not save this
+  // stale in-memory instance over its terminal status.
+  const now = new Date();
+  await this.constructor.updateOne(
+    { _id: this._id },
+    {
+      $set: { callSid, startTime: now },
+      $inc: { attempts: 1 },
+      $unset: { claimedAt: '' }
+    }
+  );
+  await this.constructor.updateOne(
+    { _id: this._id, status: { $in: ['claiming', 'queued'] } },
+    { $set: { status: 'calling' } }
+  );
+  const latest = await this.constructor.findById(this._id).lean();
+  if (latest) {
+    this.status = latest.status;
+    this.callSid = latest.callSid;
+    this.attempts = latest.attempts;
+    this.startTime = latest.startTime;
+    this.endTime = latest.endTime;
+    this.duration = latest.duration;
+    this.twilioError = latest.twilioError;
+  }
 };
 
 broadcastCallSchema.methods.markCompleted = async function (duration) {
